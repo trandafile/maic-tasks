@@ -51,11 +51,6 @@ if errorlevel 1 (
 )
 if errorlevel 1 goto ERRORE
 
-REM Assicura branch main
-echo [*] Checkout branch %BRANCH%...
-git checkout -B %BRANCH%
-if errorlevel 1 goto ERRORE
-
 REM Assicura esclusione permanente di hipa
 if not exist ".gitignore" (
     > .gitignore echo # Esclusioni progetto
@@ -82,6 +77,17 @@ if errorlevel 1 (
     )
 )
 if errorlevel 1 goto ERRORE
+
+REM Assicura branch main (DOPO lo staging per evitare "untracked would be overwritten")
+set "CURR_BRANCH="
+for /f "delims=" %%B in ('git branch --show-current 2^>nul') do set "CURR_BRANCH=%%B"
+if /i not "%CURR_BRANCH%"=="%BRANCH%" (
+    echo [*] Checkout branch %BRANCH%...
+    git checkout -B %BRANCH%
+    if errorlevel 1 goto ERRORE
+) else (
+    echo [*] Branch corrente: %BRANCH%
+)
 
 REM Commit message
 set "COMMIT_MSG="

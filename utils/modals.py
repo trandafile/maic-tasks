@@ -169,17 +169,13 @@ def _fetch_subtask_ctx(subtask: dict):
     return parent, proj, deliv, user_map
 
 
-def _breadcrumb_and_persons_html(
+def _breadcrumb_html(
     seq_id: str,
-    name: str,
     proj: dict,
     deliv: dict,
-    user_map: dict,
-    owner_email: str | None,
-    sup_email: str | None,
     parent_task: dict | None = None,
 ) -> str:
-    """Build the breadcrumb line + person pills HTML block for a modal header."""
+    """Build breadcrumb HTML for a modal header (hierarchy only, no item name)."""
     acronym = proj.get("acronym") or proj.get("name", "")
     proj_name = proj.get("name", "")
 
@@ -194,32 +190,44 @@ def _breadcrumb_and_persons_html(
             parts.append(pt_name)
 
     prefix = " &rsaquo; ".join(parts)
-    current = f"{seq_id} — {name}"
+    current = f"{seq_id}"
 
     if prefix:
-        bc = (
+        return (
             f"<div style='font-size:11px;color:#888;margin-bottom:6px;line-height:1.7;'>"
             f"{prefix} &rsaquo; "
             f"<span style='color:#1a73e8;font-weight:500;'>{current}</span></div>"
         )
-    else:
-        bc = (
-            f"<div style='font-size:11px;color:#1a73e8;font-weight:500;"
-            f"margin-bottom:6px;'>{current}</div>"
-        )
+    return (
+        f"<div style='font-size:11px;color:#1a73e8;font-weight:500;"
+        f"margin-bottom:6px;'>{current}</div>"
+    )
 
+
+def _persons_pills_html(
+    user_map: dict,
+    owner_email: str | None,
+    sup_email: str | None,
+) -> str:
+    """Build owner/supervisor pills HTML block."""
     pills = ""
     if owner_email:
         u = user_map.get(owner_email, {"name": owner_email, "avatar_color": "#888888"})
-        pills += person_pill_html(u.get("name", owner_email), u.get("avatar_color", "#888888"),
-                                  role="owner", compact=False)
+        pills += person_pill_html(
+            u.get("name", owner_email),
+            u.get("avatar_color", "#888888"),
+            role="owner",
+            compact=False,
+        )
     if sup_email and sup_email != owner_email:
         u = user_map.get(sup_email, {"name": sup_email, "avatar_color": "#888888"})
-        pills += person_pill_html(u.get("name", sup_email), u.get("avatar_color", "#888888"),
-                                  role="sup", compact=False)
-
-    pills_div = f"<div style='margin-bottom:4px;'>{pills}</div>" if pills else ""
-    return bc + pills_div
+        pills += person_pill_html(
+            u.get("name", sup_email),
+            u.get("avatar_color", "#888888"),
+            role="sup",
+            compact=False,
+        )
+    return f"<div style='margin-bottom:4px;'>{pills}</div>" if pills else ""
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -259,19 +267,29 @@ def _parse_date(value: str | None) -> datetime.date | None:
 
 @st.dialog("Task Detail", width="large")
 def task_details_modal(task, can_edit, deliverables=None):
-    # ── Breadcrumb + persons header ───────────────────────────────────────────
+    # ── Header: breadcrumb → name → persons ──────────────────────────────────
     proj, deliv, user_map = _fetch_task_ctx(task)
     seq_id = task.get("sequence_id") or f"T-{task.get('id')}"
-    header_html = _breadcrumb_and_persons_html(
-        seq_id=seq_id,
-        name=task.get("name", ""),
-        proj=proj,
-        deliv=deliv,
-        user_map=user_map,
-        owner_email=task.get("owner_email"),
-        sup_email=task.get("supervisor_email"),
+    st.html(_breadcrumb_html(seq_id=seq_id, proj=proj, deliv=deliv))
+
+    curr_name = task.get("name", "") or ""
+    if can_edit:
+        new_name = st.text_input(
+            "Task name",
+            value=curr_name,
+            key=f"task_name_{task.get('id')}",
+        )
+    else:
+        st.html(f"<div style='font-size:1.15rem;font-weight:700;margin-bottom:4px'>{curr_name}</div>")
+        new_name = curr_name
+
+    st.html(
+        _persons_pills_html(
+            user_map=user_map,
+            owner_email=task.get("owner_email"),
+            sup_email=task.get("supervisor_email"),
+        )
     )
-    st.html(header_html)
     st.markdown("---")
 
     status_map = get_status_color_map()
@@ -359,7 +377,11 @@ def task_details_modal(task, can_edit, deliverables=None):
         with c_save:
             if st.button("💾 Save Changes", type="primary", use_container_width=True):
                 try:
+                    if not (new_name or "").strip():
+                        st.error("Task name is required.")
+                        return
                     update_data = {
+                        "name":             (new_name or "").strip(),
                         "notes":            new_notes,
                         "status":           new_status,
                         "priority":         new_priority,
@@ -412,20 +434,29 @@ def task_details_modal(task, can_edit, deliverables=None):
 
 @st.dialog("Subtask Detail", width="large")
 def subtask_details_modal(subtask, can_edit):
-    # ── Breadcrumb + persons header ───────────────────────────────────────────
+    # ── Header: breadcrumb → name → persons ──────────────────────────────────
     parent, proj, deliv, user_map = _fetch_subtask_ctx(subtask)
     seq_id = subtask.get("sequence_id") or f"S-{subtask.get('id')}"
-    header_html = _breadcrumb_and_persons_html(
-        seq_id=seq_id,
-        name=subtask.get("name", ""),
-        proj=proj,
-        deliv=deliv,
-        user_map=user_map,
-        owner_email=subtask.get("owner_email"),
-        sup_email=subtask.get("supervisor_email"),
-        parent_task=parent or None,
+    st.html(_breadcrumb_html(seq_id=seq_id, proj=proj, deliv=deliv, parent_task=parent or None))
+
+    curr_name = subtask.get("name", "") or ""
+    if can_edit:
+        new_name = st.text_input(
+            "Subtask name",
+            value=curr_name,
+            key=f"subtask_name_{subtask.get('id')}",
+        )
+    else:
+        st.html(f"<div style='font-size:1.15rem;font-weight:700;margin-bottom:4px'>{curr_name}</div>")
+        new_name = curr_name
+
+    st.html(
+        _persons_pills_html(
+            user_map=user_map,
+            owner_email=subtask.get("owner_email"),
+            sup_email=subtask.get("supervisor_email"),
+        )
     )
-    st.html(header_html)
     st.markdown("---")
 
     status_map = get_status_color_map()
@@ -484,7 +515,11 @@ def subtask_details_modal(subtask, can_edit):
         with c_save:
             if st.button("💾 Save Changes", key="save_st", type="primary", use_container_width=True):
                 try:
+                    if not (new_name or "").strip():
+                        st.error("Subtask name is required.")
+                        return
                     update_data = {
+                        "name":             (new_name or "").strip(),
                         "notes":            new_notes,
                         "status":           new_status,
                         "owner_email":      new_owner_email,
