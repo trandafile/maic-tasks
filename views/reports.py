@@ -251,6 +251,19 @@ def _render_main_report():
     users_dict = {u["email"]: u.get("name", u["email"]) for u in users}
     users_meta = {u["email"]: u for u in users}
 
+    # Scoped CSS to align deliverable containers with Active Tasks view
+    st.markdown(
+        """
+        <style>
+        .deliverable-box [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid #9FD9C8 !important;
+            border-radius: 0.5rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     with st.expander("⚙️ Filters", expanded=False):
         fc1, fc2, fc3 = st.columns(3)
         with fc1:
@@ -358,49 +371,49 @@ def _render_main_report():
                 d_status = d.get("status", "Not started")
                 d_sl_fg, d_sl_bg = STATUS_COLOURS.get(d_status, ("#888", "#f0f0f0"))
 
-                with st.container():
-                    d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), users_meta)
-                    d_deadline_txt = fmt_date(d.get("deadline"))
+                # Wrap deliverable header, progress and tasks in a single bordered container
+                d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), users_meta)
+                d_deadline_txt = fmt_date(d.get("deadline"))
 
-                    # Teal deliverable block (same visual language as Active Tasks)
-                    st.html(
-                        f"""
-                        <div style='border:2px solid #9FD9C8;border-radius:8px;overflow:hidden;
-                                    margin-top:8px;margin-bottom:6px;'>
-                          <div style='background:#E6F7F3;padding:6px 10px;
-                                      display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>
-                            <span style='font-size:13px;font-weight:600;color:#0F5943;'>
-                              {d.get('name','')}
-                            </span>
-                            <span style='font-size:11px;color:#2E8B6E;'>
-                              {d.get('type','')} · deadline {d_deadline_txt}
-                            </span>
-                            <span style='margin-left:auto;display:flex;align-items:center;gap:10px;'>
-                              <span style='font-size:11px;color:#2E8B6E;font-weight:600;white-space:nowrap;'>
-                                {done}/{total} tasks completed
-                              </span>
-                              {_badge(d_status, d_sl_fg, d_sl_bg)}
-                            </span>
-                          </div>
-                          <div style='background:#F5FDFB;padding:4px 10px;
-                                      display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>
-                            {d_people if d_people else "<span style='color:#2E8B6E;font-size:11px'>Owner/Supervisor: —</span>"}
-                          </div>
-                        </div>
-                        """
-                    )
-
-                    # Progress + compact Details button row
-                    ph1, ph2 = st.columns([8.5, 1.5])
-                    with ph1:
-                        st.progress(progress)
-                    with ph2:
+                st.markdown("<div class='deliverable-box'>", unsafe_allow_html=True)
+                with st.container(border=True):
+                    # Deliverable header (aligned with Active Tasks style)
+                    h1, h2 = st.columns([8, 2])
+                    with h1:
+                        st.html(
+                            f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;"
+                            f"margin-bottom:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>"
+                            f"<span style='font-size:13px;font-weight:600;color:#0F5943;'>"
+                            f"{d.get('name','')}"
+                            f"</span>"
+                            f"<span style='font-size:11px;color:#2E8B6E;'>"
+                            f"{d.get('type','')} · deadline {d_deadline_txt}"
+                            f"</span>"
+                            f"<span style='margin-left:auto;display:flex;align-items:center;gap:10px;'>"
+                            f"<span style='font-size:11px;color:#2E8B6E;font-weight:600;white-space:nowrap;'>"
+                            f"{done}/{total} tasks completed"
+                            f"</span>"
+                            f"{_badge(d_status, d_sl_fg, d_sl_bg)}"
+                            f"</span>"
+                            f"</div>"
+                        )
+                        st.html(
+                            d_people
+                            if d_people
+                            else "<span style='color:#2E8B6E;font-size:11px'>Owner/Supervisor: —</span>"
+                        )
+                    with h2:
                         if st.button("Details", key=f"rp_dd_{did}", use_container_width=True):
                             deliverable_details_modal(
                                 d,
                                 can_edit=is_admin,
                                 breadcrumb=f"Reports / {proj.get('name', '-') } / Deliverable",
                             )
+
+                    # Progress bar directly under header
+                    st.progress(progress)
+
+                    # Tasks and subtasks inside the same bordered box
                     if d_tasks:
                         for t in d_tasks:
                             can_edit_t = is_admin or (
@@ -418,9 +431,15 @@ def _render_main_report():
                                     s.get("owner_email") == user_email
                                     or s.get("supervisor_email") == user_email
                                 )
-                                _render_subtask_row(s, users_meta, can_edit=can_edit_s, key_prefix=f"rp_s_{did}_{t.get('id')}")
+                                _render_subtask_row(
+                                    s,
+                                    users_meta,
+                                    can_edit=can_edit_s,
+                                    key_prefix=f"rp_s_{did}_{t.get('id')}",
+                                )
                     else:
                         st.caption("No tasks matching the filters.")
+                st.markdown("</div>", unsafe_allow_html=True)
 
         unassigned = [
             t for t in tasks

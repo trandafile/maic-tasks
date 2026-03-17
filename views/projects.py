@@ -580,6 +580,11 @@ def show_projects():
             margin-top: 0.05rem !important;
             margin-bottom: 0.05rem !important;
         }
+        /* deliverable box custom green border */
+        .deliverable-box [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid #9FD9C8 !important;
+            border-radius: 0.5rem !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -673,6 +678,8 @@ def show_projects():
                 deliv_tasks = [t for t in tasks if t.get("deliverable_id") == d_id]
                 deliv_tasks = sort_tasks_by_deadline(deliv_tasks)
 
+                # Wrap each deliverable block so we can scope a custom border colour
+                st.markdown("<div class='deliverable-box'>", unsafe_allow_html=True)
                 with st.container(border=True):
                     # Deliverable header
                     h1, h_det, h_arch = st.columns([6.5, 1.2, 0.8])
@@ -717,6 +724,7 @@ def show_projects():
                     if st.button(f"➕ New Task in «{d_name}»", key=f"add_dt_{d_id}",
                                  use_container_width=True):
                         add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=d_id)
+                st.markdown("</div>", unsafe_allow_html=True)
 
             # ── Unassigned tasks section ──────────────────────────────────────
             unassigned = [
