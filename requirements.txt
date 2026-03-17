@@ -1,4 +1,5 @@
 streamlit
+streamlit-calendar
 supabase
 google-auth-oauthlib
 google-api-python-client

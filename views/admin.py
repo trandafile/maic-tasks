@@ -563,6 +563,14 @@ def _tab_settings():
         ok, err = save_settings(updates)
         if ok:
             st.success("Configuration saved.")
+            if err:
+                st.warning(err)
+                with st.expander("🔧 Required SQL Migration", expanded=False):
+                    st.caption(
+                        "Some settings columns are missing in Supabase. "
+                        "Run this SQL in Supabase → SQL Editor to enable all fields:"
+                    )
+                    st.code(SETTINGS_MIGRATION_SQL, language="sql")
         else:
             st.error(f"Save error: {err}")
             with st.expander("🔧 Required SQL Migration", expanded=True):

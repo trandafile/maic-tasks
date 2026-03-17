@@ -297,14 +297,14 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
             pills += person_pill_html(
                 u.get("name", owner_e),
                 u.get("avatar_color", "#534AB7"),
-                role="owner", compact=False
+                role="owner", compact=True
             )
         if sup_e and sup_e != owner_e:
             u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
             pills += person_pill_html(
                 u.get("name", sup_e),
                 u.get("avatar_color", "#BA7517"),
-                role="sup", compact=False
+                role="sup", compact=True
             )
         if pills:
             st.html(f"<div style='opacity:{opacity}'>{pills}</div>")
@@ -418,6 +418,24 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
 
 def show_projects():
     st.title("Projects & Workspace")
+
+    # Compact row rhythm for dense task/subtask tables in this page.
+    st.markdown(
+        """
+        <style>
+        div[data-testid='stButton'] > button {
+            min-height: 1.75rem;
+            padding: 0.15rem 0.5rem;
+            font-size: 0.78rem;
+        }
+        div[data-testid='stHorizontalBlock'] {
+            padding-top: 3px !important;
+            padding-bottom: 3px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     col_tools, c_arch = st.columns([1, 3])
     with col_tools:

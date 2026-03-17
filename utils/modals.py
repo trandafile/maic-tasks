@@ -47,7 +47,7 @@ def person_pill_html(name: str, color: str, role: str = "owner",
 
     role: "owner" → violet pill
           "sup"   → amber pill
-    compact: True → avatar only, no name (for dashboard/subtask)
+    compact: True  → compact spacing but still shows full name
     """
     parts = (name or "").split()
     if len(parts) >= 2:
@@ -74,32 +74,37 @@ def person_pill_html(name: str, color: str, role: str = "owner",
         name_col = "#633806"
         lbl_text = "sup"
 
+    av_size = 16 if compact else 20
+    av_fs   = 8 if compact else 9
     av_html = (
         f"<span style='background:{av_bg};color:{av_fg};border-radius:50%;"
-        f"width:20px;height:20px;display:inline-flex;align-items:center;"
-        f"justify-content:center;font-size:9px;font-weight:700;"
+        f"width:{av_size}px;height:{av_size}px;display:inline-flex;align-items:center;"
+        f"justify-content:center;font-size:{av_fs}px;font-weight:700;"
         f"flex-shrink:0;'>{initials}</span>"
     )
 
     if compact:
         return (
-            f"<span style='display:inline-flex;align-items:center;"
-            f"padding:2px 4px;border-radius:99px;"
-            f"background:{bg_pill};border:1px solid {border};"
-            f"margin-right:4px;' title='{role}: {name}'>{av_html}</span>"
-        )
-    else:
-        return (
             f"<span style='display:inline-flex;align-items:center;gap:4px;"
-            f"padding:3px 8px 3px 4px;border-radius:99px;"
+            f"padding:1px 6px 1px 3px;border-radius:99px;"
             f"background:{bg_pill};border:1px solid {border};"
-            f"margin-right:6px;'>"
+            f"margin-right:4px;' title='{role}: {name}'>"
             f"{av_html}"
-            f"<span style='font-size:10px;font-weight:700;color:{lbl_col};"
-            f"margin:0 1px;'>{lbl_text}</span>"
-            f"<span style='font-size:12px;color:{name_col};'>{name}</span>"
+            f"<span style='font-size:10px;color:{name_col};line-height:1.1'>{name}</span>"
             f"</span>"
         )
+
+    return (
+        f"<span style='display:inline-flex;align-items:center;gap:4px;"
+        f"padding:3px 8px 3px 4px;border-radius:99px;"
+        f"background:{bg_pill};border:1px solid {border};"
+        f"margin-right:6px;'>"
+        f"{av_html}"
+        f"<span style='font-size:10px;font-weight:700;color:{lbl_col};"
+        f"margin:0 1px;'>{lbl_text}</span>"
+        f"<span style='font-size:12px;color:{name_col};'>{name}</span>"
+        f"</span>"
+    )
 
 
 # ── Context fetchers for modals ───────────────────────────────────────────────

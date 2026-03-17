@@ -65,12 +65,9 @@ def init_session_state():
 # Import views
 from views.dashboard import show_dashboard
 from views.projects import show_projects
+from views.calendar import show_calendar
 from views.reports import show_reports
 from views.admin import show_admin
-
-def dummy_page_calendar():
-    st.title("Calendar")
-    st.write("This is the Calendar view. (To be implemented)")
 
 def _run_scheduler_once():
     """Run deadline check once per session (avoid repeated calls on rerender)."""
@@ -126,7 +123,7 @@ def main():
     elif page == "Projects":
         show_projects()
     elif page == "Calendar":
-        dummy_page_calendar()
+        show_calendar()
     elif page == "Reports":
         show_reports()
     elif page == "Admin Panel":

@@ -131,15 +131,55 @@ def get_settings() -> dict:
 
 
 def save_settings(updates: dict) -> tuple[bool, str]:
-    """Upsert settings row. Returns (success, error_message)."""
-    try:
+    """Upsert settings row. Returns (success, error_message).
+
+    If Supabase schema is partially migrated, retry by dropping missing columns
+    found in the error payload so basic settings can still be saved.
+    """
+
+    def _upsert(payload: dict):
         existing = supabase.table("settings").select("id").eq("id", 1).execute().data
         if existing:
-            supabase.table("settings").update(updates).eq("id", 1).execute()
+            supabase.table("settings").update(payload).eq("id", 1).execute()
         else:
-            supabase.table("settings").insert({"id": 1, **updates}).execute()
+            supabase.table("settings").insert({"id": 1, **payload}).execute()
+
+    def _missing_column_from_error(err: Exception) -> str | None:
+        msg = str(err)
+        token = "Could not find the '"
+        if token in msg:
+            start = msg.find(token) + len(token)
+            end = msg.find("' column", start)
+            if end > start:
+                return msg[start:end]
+        return None
+
+    try:
+        _upsert(updates)
         return True, ""
     except Exception as e:
+        payload = dict(updates)
+        missing = _missing_column_from_error(e)
+        removed = []
+
+        while missing and missing in payload:
+            removed.append(missing)
+            payload.pop(missing, None)
+            if not payload:
+                return False, str(e)
+            try:
+                _upsert(payload)
+                warn = ""
+                if removed:
+                    warn = (
+                        "Saved with partial schema. Missing columns in Supabase: "
+                        + ", ".join(sorted(set(removed)))
+                    )
+                return True, warn
+            except Exception as e2:
+                missing = _missing_column_from_error(e2)
+                e = e2
+
         return False, str(e)
 
 

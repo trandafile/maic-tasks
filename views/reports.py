@@ -2,7 +2,7 @@ import streamlit as st
 import datetime
 from core.supabase_client import supabase
 from utils.pdf_generator import generate_report_pdf
-from utils.modals import person_pill_html
+from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
 from utils.helpers import fmt_date
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
@@ -120,30 +120,79 @@ def _fmt_date(d: str | None) -> str:
 
 # ─── Main report helpers ───────────────────────────────────────────────────────
 
-def _render_task_row(t: dict, users_dict: dict):
+def _render_people_pills(owner_email: str | None, sup_email: str | None, users_meta: dict) -> str:
+    pills = ""
+    if owner_email:
+        u = users_meta.get(owner_email, {"name": owner_email, "avatar_color": "#534AB7"})
+        pills += person_pill_html(
+            u.get("name", owner_email),
+            u.get("avatar_color", "#534AB7"),
+            role="owner",
+            compact=True,
+        )
+    if sup_email and sup_email != owner_email:
+        u = users_meta.get(sup_email, {"name": sup_email, "avatar_color": "#BA7517"})
+        pills += person_pill_html(
+            u.get("name", sup_email),
+            u.get("avatar_color", "#BA7517"),
+            role="sup",
+            compact=True,
+        )
+    return pills
+
+
+def _render_task_row(t: dict, users_meta: dict, key_prefix: str = "rp_t"):
     seq_id   = t.get("sequence_id") or f"T-{t['id']}"
     name     = t.get("name", "")
     status   = t.get("status", "Not started")
     priority = (t.get("priority") or "none").lower()
-    owner_n  = users_dict.get(t.get("owner_email"), t.get("owner_email") or "—")
     deadline = t.get("deadline")
 
-    s_fg, s_bg = STATUS_COLOURS.get(status,    ("#888", "#f0f0f0"))
+    s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
     p_fg, p_bg = PRIORITY_COLOURS.get(priority, ("#888", "#f0f0f0"))
 
-    c_id, c_name, c_status, c_prio, c_owner, c_dl = st.columns([1.2, 3.2, 1.4, 1.2, 2.2, 1.4])
+    c_id, c_name, c_status, c_prio, c_people, c_dl, c_action = st.columns([1.15, 2.8, 1.2, 1.05, 2.8, 1.2, 1.0])
     with c_id:
-        st.html(f"<span style='font-family:monospace;color:#888;font-size:0.82rem'>{seq_id}</span>")
+        st.html(f"<span style='font-family:monospace;color:#888;font-size:0.78rem'>{seq_id}</span>")
     with c_name:
-        st.write(f"**{name}**")
+        st.markdown(f"**{name}**")
     with c_status:
         st.html(_badge(status, s_fg, s_bg))
     with c_prio:
         st.html(_badge(priority, p_fg, p_bg))
-    with c_owner:
-        st.html(_avatar_html(owner_n))
+    with c_people:
+        pills = _render_people_pills(t.get("owner_email"), t.get("supervisor_email"), users_meta)
+        st.html(pills if pills else "<span style='color:#aaa'>—</span>")
     with c_dl:
         st.html(_deadline_html(deadline))
+    with c_action:
+        if st.button("Details", key=f"{key_prefix}_{t['id']}", use_container_width=True):
+            task_details_modal(t, can_edit=False)
+
+
+def _render_subtask_row(s: dict, users_meta: dict, key_prefix: str = "rp_s"):
+    s_name   = s.get("name", "")
+    s_status = s.get("status", "Not started")
+    s_dead   = s.get("deadline")
+    s_fg, s_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
+
+    c_pad, c_name, c_status, c_prio, c_people, c_dl, c_action = st.columns([1.15, 2.8, 1.2, 1.05, 2.8, 1.2, 1.0])
+    with c_pad:
+        st.html("<span style='color:#aaa;font-size:0.78rem'>↳ sub</span>")
+    with c_name:
+        st.markdown(f"<span style='font-size:0.9rem;color:#333'>{s_name}</span>", unsafe_allow_html=True)
+    with c_status:
+        st.html(_badge(s_status, s_fg, s_bg))
+    with c_prio:
+        st.html("<span style='color:#aaa'>—</span>")
+    with c_people:
+        pills = _render_people_pills(s.get("owner_email"), s.get("supervisor_email"), users_meta)
+        st.html(pills if pills else "<span style='color:#aaa'>—</span>")
+    with c_dl:
+        st.html(_deadline_html(s_dead))
+    with c_action:
+        if st.button("Details", key=f"{key_prefix}_{s['id']}", use_container_width=True):
+            subtask_details_modal(s, can_edit=False)
 
 def _fetch():
     try:
@@ -151,7 +200,7 @@ def _fetch():
         deliverables = supabase.table("deliverables").select("*").eq("is_archived", False).execute().data
         tasks        = supabase.table("tasks").select("*").order("sort_order", desc=False).execute().data
         subtasks     = supabase.table("subtasks").select("*").order("sort_order", desc=False).execute().data
-        users        = supabase.table("users").select("email, name").execute().data
+        users        = supabase.table("users").select("email, name, avatar_color").execute().data
         return projects, deliverables, tasks, subtasks, users
     except Exception as e:
         st.error(f"Error loading data: {e}")
@@ -169,7 +218,8 @@ def _render_main_report():
         st.info("No projects available.")
         return
 
-    users_dict = {u["email"]: u["name"] for u in users}
+    users_dict = {u["email"]: u.get("name", u["email"]) for u in users}
+    users_meta = {u["email"]: u for u in users}
 
     with st.expander("⚙️ Filters", expanded=False):
         fc1, fc2, fc3 = st.columns(3)
@@ -291,7 +341,14 @@ def _render_main_report():
                     st.divider()
                     if d_tasks:
                         for t in d_tasks:
-                            _render_task_row(t, users_dict)
+                            _render_task_row(t, users_meta, key_prefix=f"rp_t_{did}")
+                            t_subtasks = [
+                                s for s in subtasks
+                                if s.get("task_id") == t.get("id")
+                                and not s.get("is_archived", False)
+                            ]
+                            for s in t_subtasks:
+                                _render_subtask_row(s, users_meta, key_prefix=f"rp_s_{did}_{t.get('id')}")
                     else:
                         st.caption("No tasks matching the filters.")
 
@@ -308,7 +365,14 @@ def _render_main_report():
                 st.html("<p style='font-style:italic;color:#888;font-size:0.85rem;margin:0 0 8px 0'>"
                         "General tasks — not linked to a specific deliverable</p>")
                 for t in unassigned:
-                    _render_task_row(t, users_dict)
+                    _render_task_row(t, users_meta, key_prefix=f"rp_t_un_{pid}")
+                    t_subtasks = [
+                        s for s in subtasks
+                        if s.get("task_id") == t.get("id")
+                        and not s.get("is_archived", False)
+                    ]
+                    for s in t_subtasks:
+                        _render_subtask_row(s, users_meta, key_prefix=f"rp_s_un_{pid}_{t.get('id')}")
 
         st.divider()
 
