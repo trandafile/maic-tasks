@@ -1049,6 +1049,8 @@ def _render_detailed_report():
         did     = d["id"]
         d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
         total_d = len(d_tasks)
+        done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
+        prog    = done_d / total_d if total_d > 0 else 0.0
         dh1, dh_btn = st.columns([8, 1])
         with dh1:
             st.html(
@@ -1069,10 +1071,7 @@ def _render_detailed_report():
                 unsafe_allow_html=True,
             )
             st.markdown(d.get("description"))
-            st.markdown("</div>", unsafe_allow_html=True    f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
-            f"Deadline: {fmt_date(d.get('deadline'))}</span>"
-            f"</div>"
-        )
+            st.markdown("</div>", unsafe_allow_html=True)
         st.progress(prog)
         st.caption(f"{done_d} / {total_d} tasks completed")
 
