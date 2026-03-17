@@ -418,8 +418,8 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
                                line-height:1.3;'>{name}</span>
                   {s_badge}
                   {p_badge}
+                  {f"<span style='margin-left:8px;'>{dl_html}</span>" if dl_html else ""}
                 </div>
-                {f"<div style='margin-bottom:5px;'>{dl_html}</div>" if dl_html else ""}
                 {f"<div>{pills}</div>" if pills else ""}
               </div>
               <div></div>

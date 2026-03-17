@@ -142,55 +142,81 @@ def _render_people_pills(owner_email: str | None, sup_email: str | None, users_m
 
 
 def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_t"):
+    """Render a task row visually aligned with Active Tasks view."""
     seq_id   = t.get("sequence_id") or f"T-{t['id']}"
     name     = t.get("name", "")
     status   = t.get("status", "Not started")
     priority = (t.get("priority") or "none").lower()
-    deadline = t.get("deadline")
 
     s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
     p_fg, p_bg = PRIORITY_COLOURS.get(priority, ("#888", "#f0f0f0"))
+    s_badge = _badge(status, s_fg, s_bg)
+    p_badge = _badge(priority, p_fg, p_bg)
+    dl_html = _deadline_html(t.get("deadline"))
 
-    c_id, c_name, c_status, c_prio, c_people, c_dl, c_action = st.columns([1.15, 2.8, 1.2, 1.05, 2.8, 1.2, 1.0])
-    with c_id:
-        st.html(f"<span style='font-family:monospace;color:#888;font-size:0.78rem'>{seq_id}</span>")
-    with c_name:
-        st.markdown(f"**{name}**")
-    with c_status:
-        st.html(_badge(status, s_fg, s_bg))
-    with c_prio:
-        st.html(_badge(priority, p_fg, p_bg))
-    with c_people:
-        pills = _render_people_pills(t.get("owner_email"), t.get("supervisor_email"), users_meta)
-        st.html(pills if pills else "<span style='color:#aaa'>—</span>")
-    with c_dl:
-        st.html(_deadline_html(deadline))
-    with c_action:
+    pills = _render_people_pills(t.get("owner_email"), t.get("supervisor_email"), users_meta)
+
+    col_html, col_btns = st.columns([6, 4])
+    with col_html:
+        st.html(
+            f"""
+            <div style='display:grid;grid-template-columns:52px 1fr auto;
+                        gap:0;padding:5px 8px 5px 8px;align-items:start;'>
+              <span style='font-family:monospace;font-size:10px;
+                           color:#aaa;padding-top:3px;'>{seq_id}</span>
+              <div>
+                <div style='display:flex;align-items:center;gap:7px;
+                            flex-wrap:wrap;margin-bottom:5px;'>
+                  <span style='font-size:13px;font-weight:500;
+                               color:var(--color-text-primary,#111);
+                               line-height:1.3;'>{name}</span>
+                  {s_badge}
+                  {p_badge}
+                  <span style='margin-left:8px;'>{dl_html}</span>
+                </div>
+                <div>{pills}</div>
+              </div>
+              <div></div>
+            </div>
+            """
+        )
+    with col_btns:
         if st.button("Details", key=f"{key_prefix}_{t['id']}", use_container_width=True):
             task_details_modal(t, can_edit=can_edit)
 
 
 def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_s"):
+    """Render subtask row aligned with Active Tasks style."""
     s_name   = s.get("name", "")
     s_status = s.get("status", "Not started")
-    s_dead   = s.get("deadline")
     s_fg, s_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
+    s_badge = _badge(s_status, s_fg, s_bg)
+    s_dl_html = _deadline_html(s.get("deadline"))
+    s_pills = _render_people_pills(s.get("owner_email"), s.get("supervisor_email"), users_meta)
 
-    c_pad, c_name, c_status, c_prio, c_people, c_dl, c_action = st.columns([1.15, 2.8, 1.2, 1.05, 2.8, 1.2, 1.0])
-    with c_pad:
-        st.html("<span style='color:#aaa;font-size:0.78rem'>↳ sub</span>")
-    with c_name:
-        st.markdown(f"<span style='font-size:0.9rem;color:#333'>{s_name}</span>", unsafe_allow_html=True)
-    with c_status:
-        st.html(_badge(s_status, s_fg, s_bg))
-    with c_prio:
-        st.html("<span style='color:#aaa'>—</span>")
-    with c_people:
-        pills = _render_people_pills(s.get("owner_email"), s.get("supervisor_email"), users_meta)
-        st.html(pills if pills else "<span style='color:#aaa'>—</span>")
-    with c_dl:
-        st.html(_deadline_html(s_dead))
-    with c_action:
+    scol_html, scol_btns = st.columns([6, 4])
+    with scol_html:
+        st.html(
+            f"""
+            <div style='display:grid;grid-template-columns:52px 1fr auto;
+                        gap:0;padding:5px 8px 4px 8px;align-items:start;padding-left:24px;'>
+              <span></span>
+              <div>
+                <div style='display:flex;align-items:center;gap:7px;
+                            flex-wrap:wrap;margin-bottom:5px;'>
+                  <span style='font-size:12px;font-weight:400;
+                               color:var(--color-text-primary,#111);
+                               line-height:1.3;'>↳ 🖇️ {s_name}</span>
+                  {s_badge}
+                  <span style='margin-left:8px;'>{s_dl_html}</span>
+                </div>
+                <div>{s_pills}</div>
+              </div>
+              <div></div>
+            </div>
+            """
+        )
+    with scol_btns:
         if st.button("Details", key=f"{key_prefix}_{s['id']}", use_container_width=True):
             subtask_details_modal(s, can_edit=can_edit)
 
