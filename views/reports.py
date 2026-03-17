@@ -153,6 +153,9 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
     s_badge = _badge(status, s_fg, s_bg)
     p_badge = _badge(priority, p_fg, p_bg)
     dl_html = _deadline_html(t.get("deadline"))
+    compl_html = ""
+    if (t.get("status") == "Completed") and t.get("completion_date"):
+        compl_html = f"<span style='font-size:11px;color:#888;'>&nbsp;· ✅ {fmt_date(t.get('completion_date'))}</span>"
 
     pills = _render_people_pills(t.get("owner_email"), t.get("supervisor_email"), users_meta)
 
@@ -172,7 +175,7 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
                                line-height:1.3;'>{name}</span>
                   {s_badge}
                   {p_badge}
-                  <span style='margin-left:8px;'>{dl_html}</span>
+                  <span style='margin-left:8px;'>{dl_html}{compl_html}</span>
                 </div>
                 <div>{pills}</div>
               </div>
@@ -355,27 +358,49 @@ def _render_main_report():
                 d_status = d.get("status", "Not started")
                 d_sl_fg, d_sl_bg = STATUS_COLOURS.get(d_status, ("#888", "#f0f0f0"))
 
-                with st.container(border=True):
-                    h1, h2, h3, h4, h5 = st.columns([2.6, 1.8, 1.8, 1.2, 1.0])
-                    with h1:
-                        d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), users_meta)
-                        st.write(f"**{d.get('name')}**")
-                        st.caption(f"{d.get('type')} · deadline: {fmt_date(d.get('deadline'))}")
-                        st.html(d_people if d_people else "<span style='color:#aaa'>Owner/Supervisor: —</span>")
-                    with h2:
+                with st.container():
+                    d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), users_meta)
+                    d_deadline_txt = fmt_date(d.get("deadline"))
+
+                    # Teal deliverable block (same visual language as Active Tasks)
+                    st.html(
+                        f"""
+                        <div style='border:2px solid #9FD9C8;border-radius:8px;overflow:hidden;
+                                    margin-top:8px;margin-bottom:6px;'>
+                          <div style='background:#E6F7F3;padding:6px 10px;
+                                      display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>
+                            <span style='font-size:13px;font-weight:600;color:#0F5943;'>
+                              {d.get('name','')}
+                            </span>
+                            <span style='font-size:11px;color:#2E8B6E;'>
+                              {d.get('type','')} · deadline {d_deadline_txt}
+                            </span>
+                            <span style='margin-left:auto;display:flex;align-items:center;gap:10px;'>
+                              <span style='font-size:11px;color:#2E8B6E;font-weight:600;white-space:nowrap;'>
+                                {done}/{total} tasks completed
+                              </span>
+                              {_badge(d_status, d_sl_fg, d_sl_bg)}
+                            </span>
+                          </div>
+                          <div style='background:#F5FDFB;padding:4px 10px;
+                                      display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>
+                            {d_people if d_people else "<span style='color:#2E8B6E;font-size:11px'>Owner/Supervisor: —</span>"}
+                          </div>
+                        </div>
+                        """
+                    )
+
+                    # Progress + compact Details button row
+                    ph1, ph2 = st.columns([8.5, 1.5])
+                    with ph1:
                         st.progress(progress)
-                    with h3:
-                        st.caption(f"{done} / {total} tasks completed")
-                    with h4:
-                        st.html(_badge(d_status, d_sl_fg, d_sl_bg))
-                    with h5:
+                    with ph2:
                         if st.button("Details", key=f"rp_dd_{did}", use_container_width=True):
                             deliverable_details_modal(
                                 d,
-                                can_edit=False,
+                                can_edit=is_admin,
                                 breadcrumb=f"Reports / {proj.get('name', '-') } / Deliverable",
                             )
-                    st.divider()
                     if d_tasks:
                         for t in d_tasks:
                             can_edit_t = is_admin or (
@@ -404,12 +429,12 @@ def _render_main_report():
         unassigned = sort_tasks_by_deadline(unassigned)
         if unassigned:
             st.html(
-                "<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
-                "color:#666;margin-top:16px;display:block'>TASKS WITHOUT DELIVERABLE</span>"
+                "<div style='border:2px dashed #FAC775;border-radius:8px;"
+                "padding:10px 14px;margin:16px 0 8px 0;background:#FFF8F0;'>"
+                "<span style='font-weight:700;color:#854F0B;font-size:0.95rem'>"
+                "GENERIC TASKS (NO DELIVERABLE)</span></div>"
             )
-            with st.container(border=True):
-                st.html("<p style='font-style:italic;color:#888;font-size:0.85rem;margin:0 0 8px 0'>"
-                        "General tasks — not linked to a specific deliverable</p>")
+            with st.container():
                 for t in unassigned:
                     can_edit_t = is_admin or (
                         t.get("owner_email") == user_email
@@ -964,26 +989,29 @@ def _render_detailed_report():
         s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
         p_fg, p_bg = PRIORITY_COLOURS.get(prio, ("#888", "#f0f0f0"))
 
-        # a) Header row
-        h_left, h_right = st.columns([5, 2])
-        with h_left:
+        # a) Header row (Active Tasks style: name + badges + deadline)
+        line1_left, line1_right = st.columns([6, 2])
+        with line1_left:
+            dl_inline = _deadline_html(t.get("deadline"))
+            compl_inline = ""
+            if (status == "Completed") and t.get("completion_date"):
+                compl_inline = f"<span style='font-size:11px;color:#888;'>&nbsp;· ✅ {fmt_date(t.get('completion_date'))}</span>"
             st.html(
-                f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
+                f"<div style='display:flex;align-items:center;gap:7px;flex-wrap:wrap'>"
                 f"<span style='font-family:monospace;color:#aaa;font-size:0.8rem;flex-shrink:0'>{seq}</span>"
-                f"<span style='font-size:14px;font-weight:700;color:#1a1a1a'>{t.get('name','')}</span>"
+                f"<span style='font-size:13px;font-weight:500;color:#111'>{t.get('name','')}</span>"
+                f"<span style='background:{s_bg};color:{s_fg};border-radius:4px;padding:2px 8px;"
+                f"font-size:0.78rem;font-weight:600;white-space:nowrap'>{status}</span>"
+                f"<span style='background:{p_bg};color:{p_fg};border-radius:4px;padding:2px 8px;"
+                f"font-size:0.78rem;font-weight:600;white-space:nowrap'>{prio}</span>"
+                f"<span style='margin-left:8px;'>{dl_inline}{compl_inline}</span>"
                 f"</div>"
             )
-        with h_right:
-            st.html(
-                f"<div style='display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end'>"
-                f"<span style='background:{s_bg};color:{s_fg};border-radius:4px;"
-                f"padding:2px 8px;font-size:0.78rem;font-weight:600'>{status}</span>"
-                f"<span style='background:{p_bg};color:{p_fg};border-radius:4px;"
-                f"padding:2px 8px;font-size:0.78rem;font-weight:600'>{prio}</span>"
-                f"</div>"
-            )
+        with line1_right:
+            if st.button("Details", key=f"dr_t_{t['id']}", use_container_width=True):
+                task_details_modal(t, can_edit=can_edit)
 
-        # b) Metadata row
+        # b) People row
         owner_e = t.get("owner_email")
         sup_e   = t.get("supervisor_email")
         meta_pills = ""
@@ -995,15 +1023,11 @@ def _render_detailed_report():
             u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
             meta_pills += person_pill_html(u.get("name", sup_e), u.get("avatar_color", "#BA7517"),
                                            role="sup", compact=False)
-        deadline_txt = f"Deadline: {fmt_date(t.get('deadline'))}" if t.get("deadline") else ""
-        compl_txt    = f"Completed: {fmt_date(t.get('completion_date'))}" if t.get("completion_date") else ""
-        est_txt      = f"Est: {int(t['estimate_hours'])}h" if t.get("estimate_hours") else ""
-        meta_text    = "  ·  ".join(x for x in [deadline_txt, compl_txt, est_txt] if x)
-
+        est_txt = f"· Est: {int(t['estimate_hours'])}h" if t.get("estimate_hours") else ""
         st.html(
-            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0'>"
+            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 6px 0'>"
             f"{meta_pills}"
-            f"<span style='font-size:12px;color:#666'>{meta_text}</span>"
+            f"<span style='font-size:12px;color:#666'>{est_txt}</span>"
             f"</div>"
         )
 
@@ -1098,80 +1122,96 @@ def _render_detailed_report():
 
         st.divider()
 
-        is_admin = st.session_state.get("user_role") == "admin"
-        user_email = st.session_state.get("user_email")
+    # ── Render deliverables (teal style) ───────────────────────────────────────
+    is_admin = st.session_state.get("user_role") == "admin"
+    user_email = st.session_state.get("user_email")
 
-        for d in sorted_delivs:
-            did     = d["id"]
-            d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
-            d_tasks = sort_tasks_by_deadline(d_tasks)
-            total_d = len(d_tasks)
-            done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
-            prog    = done_d / total_d if total_d > 0 else 0.0
-            d_owner = d.get("owner_email")
-            d_sup   = d.get("supervisor_email")
-            d_pills = ""
-            if d_owner:
-                u = user_map.get(d_owner, {"name": d_owner, "avatar_color": "#534AB7"})
-                d_pills += person_pill_html(u.get("name", d_owner), u.get("avatar_color", "#534AB7"), role="owner", compact=True)
-            if d_sup and d_sup != d_owner:
-                u = user_map.get(d_sup, {"name": d_sup, "avatar_color": "#BA7517"})
-                d_pills += person_pill_html(u.get("name", d_sup), u.get("avatar_color", "#BA7517"), role="sup", compact=True)
+    for d in sorted_delivs:
+        did = d["id"]
+        d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
+        d_tasks = sort_tasks_by_deadline(d_tasks)
+        total_d = len(d_tasks)
+        done_d = len([t for t in d_tasks if t.get("status") == "Completed"])
+        prog = done_d / total_d if total_d > 0 else 0.0
 
-            dh1, dh_btn = st.columns([8, 1])
-            with dh1:
-                st.html(
-                    f"<div style='background:#F5F5F5;border-radius:6px;padding:10px 16px;margin:8px 0'>"
-                    f"<span style='font-weight:700;font-size:1.05rem'>{d.get('name','')}</span>"
-                    f"&nbsp;<span style='font-style:italic;color:#888;font-size:0.85rem'>{d.get('type','')}</span>"
-                    f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
-                    f"Deadline: {fmt_date(d.get('deadline'))}</span>"
-                    f"<div style='margin-top:4px'>{d_pills if d_pills else '<span style=\'color:#888;font-size:0.82rem\'>Owner/Supervisor: —</span>'}</div>"
-                    f"</div>"
-                )
-            with dh_btn:
-                if st.button("Details", key=f"dr_dd_{did}", use_container_width=True):
-                    deliverable_details_modal(
-                        d,
-                        can_edit=is_admin,
-                        breadcrumb=f"Reports / Detailed Report / {proj.get('name', '-') } / Deliverable",
-                    )
-            if d.get("description"):
-                st.markdown(
-                    "<div style='background:#FAFAFA;border-radius:4px;padding:10px 16px;"
-                    "margin:4px 0 8px 0;border-left:3px solid #ddd;font-size:0.92rem'>",
-                    unsafe_allow_html=True,
-                )
-                st.markdown(d.get("description"))
-                st.markdown("</div>", unsafe_allow_html=True)
+        d_status = d.get("status", "Not started")
+        d_sl_fg, d_sl_bg = STATUS_COLOURS.get(d_status, ("#888", "#f0f0f0"))
+        d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), user_map)
+        d_deadline_txt = fmt_date(d.get("deadline"))
+
+        st.html(
+            f"""
+            <div style='border:2px solid #9FD9C8;border-radius:8px;overflow:hidden;
+                        margin-top:12px;margin-bottom:6px;'>
+              <div style='background:#E6F7F3;padding:6px 10px;
+                          display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>
+                <span style='font-size:13px;font-weight:600;color:#0F5943;'>
+                  {d.get('name','')}
+                </span>
+                <span style='font-size:11px;color:#2E8B6E;'>
+                  {d.get('type','')} · deadline {d_deadline_txt}
+                </span>
+                <span style='margin-left:auto;display:flex;align-items:center;gap:10px;'>
+                  <span style='font-size:11px;color:#2E8B6E;font-weight:600;white-space:nowrap;'>
+                    {done_d}/{total_d} tasks completed
+                  </span>
+                  {_badge(d_status, d_sl_fg, d_sl_bg)}
+                </span>
+              </div>
+              <div style='background:#F5FDFB;padding:4px 10px;
+                          display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>
+                {d_people if d_people else "<span style='color:#2E8B6E;font-size:11px'>Owner/Supervisor: —</span>"}
+              </div>
+            </div>
+            """
+        )
+
+        ph1, ph2 = st.columns([8.5, 1.5])
+        with ph1:
             st.progress(prog)
-            st.caption(f"{done_d} / {total_d} tasks completed")
+        with ph2:
+            if st.button("Details", key=f"dr_dd_{did}", use_container_width=True):
+                deliverable_details_modal(
+                    d,
+                    can_edit=is_admin,
+                    breadcrumb=f"Reports / Detailed Report / {proj.get('name', '-') } / Deliverable",
+                )
 
-            if d_tasks:
-                for t in d_tasks:
-                    can_edit_t = is_admin or (
-                        t.get("owner_email") == user_email
-                        or t.get("supervisor_email") == user_email
-                    )
-                    _render_task_block(t, can_edit=can_edit_t)
-            else:
-                st.caption("No tasks in this deliverable.")
-
-        # ── Generic tasks (no deliverable) ─────────────────────────────────────
-        no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
-        no_deliv = sort_tasks_by_deadline(no_deliv)
-        if no_deliv:
-            st.html(
-                "<div style='border:2px dashed #cccccc;border-radius:6px;padding:10px 16px;margin:16px 0;'>"
-                "<span style='font-weight:700;color:#888;font-size:0.95rem'>"
-                "GENERIC TASKS (NO DELIVERABLE)</span></div>"
+        if d.get("description"):
+            st.markdown(
+                "<div style='background:#F5FDFB;border-radius:6px;padding:10px 14px;"
+                "margin:6px 0;border-left:3px solid #D4EFE8;font-size:0.92rem'>",
+                unsafe_allow_html=True,
             )
-            for t in no_deliv:
+            st.markdown(d.get("description"))
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        if d_tasks:
+            for t in d_tasks:
                 can_edit_t = is_admin or (
                     t.get("owner_email") == user_email
                     or t.get("supervisor_email") == user_email
                 )
                 _render_task_block(t, can_edit=can_edit_t)
+        else:
+            st.caption("No tasks in this deliverable.")
+
+    # ── Generic tasks (no deliverable) ─────────────────────────────────────────
+    no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
+    no_deliv = sort_tasks_by_deadline(no_deliv)
+    if no_deliv:
+        st.html(
+            "<div style='border:2px dashed #FAC775;border-radius:8px;"
+            "padding:10px 14px;margin:16px 0 8px 0;background:#FFF8F0;'>"
+            "<span style='font-weight:700;color:#854F0B;font-size:0.95rem'>"
+            "GENERIC TASKS (NO DELIVERABLE)</span></div>"
+        )
+        for t in no_deliv:
+            can_edit_t = is_admin or (
+                t.get("owner_email") == user_email
+                or t.get("supervisor_email") == user_email
+            )
+            _render_task_block(t, can_edit=can_edit_t)
 
 
 # ─── Main entry point ──────────────────────────────────────────────────────────
