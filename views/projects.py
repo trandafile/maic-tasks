@@ -151,9 +151,21 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
             try:
                 res   = supabase.table("tasks").insert(new_task).execute()
                 t_id  = res.data[0]['id']
-                p_res = supabase.table("projects").select("identifier").eq("id", project_id).execute()
+                p_res = supabase.table("projects").select("identifier, name").eq("id", project_id).execute()
                 ident = (p_res.data[0]['identifier'] if p_res.data and p_res.data[0]['identifier'] else "TSK")
-                supabase.table("tasks").update({"sequence_id": f"{ident}-{t_id}"}).eq("id", t_id).execute()
+                seq_id = f"{ident}-{t_id}"
+                supabase.table("tasks").update({"sequence_id": seq_id}).eq("id", t_id).execute()
+
+                # Notify owner and supervisor
+                assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
+                proj_name = p_res.data[0].get("name", "") if p_res.data else ""
+                enriched_task = {**new_task, "id": t_id, "sequence_id": seq_id, "project_name": proj_name}
+                owner_email = user_opts[owner]
+                sup_email   = user_opts[supervisor] if supervisor != "Nessuno" else None
+                send_task_assigned(enriched_task, owner_email, assigner)
+                if sup_email and sup_email != owner_email:
+                    send_task_assigned(enriched_task, sup_email, assigner)
+
                 st.success("Creato!")
                 st.rerun()
             except Exception as e:
@@ -180,15 +192,32 @@ def add_subtask_modal(task_id, users):
                 st.error("Titolo obbligatorio.")
                 return
             try:
-                supabase.table("subtasks").insert({
-                    "task_id":        task_id,
-                    "name":           name,
-                    "owner_email":    user_opts[owner],
-                    "supervisor_email": user_opts[supervisor] if supervisor != "Nessuno" else None,
-                    "status":         "Not started",
-                    "deadline":       str(deadline) if deadline else None,
-                    "sort_order":     999,
+                owner_email = user_opts[owner]
+                sup_email   = user_opts[supervisor] if supervisor != "Nessuno" else None
+                res = supabase.table("subtasks").insert({
+                    "task_id":          task_id,
+                    "name":             name,
+                    "owner_email":      owner_email,
+                    "supervisor_email": sup_email,
+                    "status":           "Not started",
+                    "deadline":         str(deadline) if deadline else None,
+                    "sort_order":       999,
                 }).execute()
+
+                # Notify owner and supervisor
+                assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
+                subtask_as_task = {
+                    "id": res.data[0]["id"] if res.data else 0,
+                    "sequence_id": f"SUB-{res.data[0]['id']}" if res.data else "",
+                    "name": name,
+                    "deadline": str(deadline) if deadline else None,
+                    "priority": "none",
+                    "project_name": "",
+                }
+                send_task_assigned(subtask_as_task, owner_email, assigner)
+                if sup_email and sup_email != owner_email:
+                    send_task_assigned(subtask_as_task, sup_email, assigner)
+
                 st.success("Creato!")
                 st.rerun()
             except Exception as e:

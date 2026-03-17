@@ -55,7 +55,8 @@ def init_session_state():
         'user_role': None,
         'user_given_name': None,
         'waiting_approval': False,
-        'current_page': 'Dashboard'
+        'current_page': 'Dashboard',
+        '_scheduler_done': False,
     }
     for k, v in keys_default.items():
         if k not in st.session_state:
@@ -65,15 +66,23 @@ def init_session_state():
 from views.dashboard import show_dashboard
 from views.projects import show_projects
 from views.reports import show_reports
+from views.admin import show_admin
 
 def dummy_page_calendar():
     st.title("Calendar")
     st.write("This is the Calendar view. (To be implemented)")
 
-def dummy_page_admin():
-    st.title("Admin Panel")
-    st.write("This is the Admin Panel. (To be implemented)")
-    st.warning("Area riservata agli amministratori per gestione utenti, labels e progetti globali.")
+def _run_scheduler_once():
+    """Run deadline check once per session (avoid repeated calls on rerender)."""
+    if st.session_state.get("_scheduler_done"):
+        return
+    st.session_state["_scheduler_done"] = True
+    try:
+        from utils.scheduler import check_and_send_deadline_reminders
+        check_and_send_deadline_reminders()
+    except Exception as e:
+        print(f"[app] Errore scheduler: {e}")
+
 
 def main():
     init_session_state()
@@ -82,6 +91,9 @@ def main():
     is_authenticated = check_login()
     if not is_authenticated:
         return
+
+    # Run daily deadline check (once per session after login)
+    _run_scheduler_once()
 
     # Costruzione della Sidebar
     with st.sidebar:
@@ -121,7 +133,7 @@ def main():
     elif page == "Reports":
         show_reports()
     elif page == "Admin Panel":
-        dummy_page_admin()
+        show_admin()
 
 if __name__ == "__main__":
     main()

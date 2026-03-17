@@ -101,18 +101,9 @@ def process_login(email: str, name: str):
                 st.session_state.user_email = email
                 st.rerun()
         else:
-            # First time user -> Add to waitlist
-            new_user = {
-                "email": email,
-                "name": name or email.split('@')[0],
-                "role": "user",
-                "is_approved": False,
-                "avatar_color": "#{:06x}".format(abs(hash(email)) % 0xFFFFFF)
-            }
-            supabase.table("users").insert(new_user).execute()
-            st.session_state.waiting_approval = True
+            # User not pre-approved by admin → access denied, no auto-registration
+            st.session_state.unauthorized = True
             st.session_state.user_given_name = name
-            st.session_state.user_email = email
             st.rerun()
             
     except Exception as e:
@@ -152,11 +143,18 @@ def check_login():
     st.write("Esegui l'accesso istituzionale per continuare.")
     
     handle_oauth_callback()
-    
+
+    if st.session_state.get('unauthorized'):
+        st.error("⛔ Accesso non autorizzato. Contatta l'amministratore del sistema.")
+        if st.button("Riprova / Esci", type="secondary"):
+            st.session_state.pop('unauthorized', None)
+            st.rerun()
+        return False
+
     if st.session_state.get('waiting_approval'):
          show_waiting_approval()
          return False
-         
+
     login_button()
     return False
 
@@ -170,7 +168,7 @@ def show_waiting_approval():
 
 def logout():
     """Effettua il logout pulendo lo stato."""
-    keys_to_clear = ['logged_in', 'user_email', 'user_name', 'user_role', 'waiting_approval', 'user_given_name']
+    keys_to_clear = ['logged_in', 'user_email', 'user_name', 'user_role', 'waiting_approval', 'user_given_name', 'unauthorized']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
