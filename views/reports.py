@@ -3,7 +3,7 @@ import datetime
 from core.supabase_client import supabase
 from utils.pdf_generator import generate_report_pdf
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
-from utils.helpers import fmt_date
+from utils.helpers import fmt_date, sort_tasks_by_deadline
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
 
@@ -321,6 +321,7 @@ def _render_main_report():
             for d in proj_deliverables:
                 did      = d["id"]
                 d_tasks  = [t for t in tasks if t.get("deliverable_id") == did and task_matches(t)]
+                d_tasks  = sort_tasks_by_deadline(d_tasks)
                 total    = len(d_tasks)
                 done     = len([t for t in d_tasks if t.get("status") == "Completed"])
                 progress = done / total if total > 0 else 0.0
@@ -365,6 +366,7 @@ def _render_main_report():
             t for t in tasks
             if t.get("project_id") == pid and not t.get("deliverable_id") and task_matches(t)
         ]
+        unassigned = sort_tasks_by_deadline(unassigned)
         if unassigned:
             st.html(
                 "<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
@@ -872,19 +874,21 @@ def _render_detailed_report():
         for d in sorted_delivs:
             did     = d["id"]
             d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
+            d_tasks = sort_tasks_by_deadline(d_tasks)
             total_d = len(d_tasks)
             done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
             md_lines.append(f"## {d.get('name')} ({d.get('type', '')} · deadline {fmt_date(d.get('deadline'))})")
             md_lines.append(f"Progress: {done_d}/{total_d} tasks")
             md_lines.append("")
-            for t in sorted(d_tasks, key=lambda t: t.get("sort_order") or 0):
+            for t in d_tasks:
                 md_lines.extend(_md_task_block(t))
 
         no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
+        no_deliv = sort_tasks_by_deadline(no_deliv)
         if no_deliv:
             md_lines.append("## Generic Tasks (No Deliverable)")
             md_lines.append("")
-            for t in sorted(no_deliv, key=lambda t: t.get("sort_order") or 0):
+            for t in no_deliv:
                 md_lines.extend(_md_task_block(t))
 
         md_content = "\n".join(md_lines)
@@ -1051,9 +1055,9 @@ def _render_detailed_report():
 
         st.divider()
 
-    for d in sorted_delivs:
-        did     = d["id"]
-        d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
+        for d in sorted_delivs:
+            did     = d["id"]
+            d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
         total_d = len(d_tasks)
         done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
         prog    = done_d / total_d if total_d > 0 else 0.0
@@ -1103,7 +1107,7 @@ def _render_detailed_report():
             st.caption("No tasks in this deliverable.")
 
     # ── Generic tasks (no deliverable) ────────────────────────────────────────
-    no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
+        no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
     if no_deliv:
         st.html(
             "<div style='border:2px dashed #cccccc;border-radius:6px;padding:10px 16px;margin:16px 0;'>"

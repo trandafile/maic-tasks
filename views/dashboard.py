@@ -10,6 +10,7 @@ import datetime
 import streamlit as st
 from core.supabase_client import supabase
 from utils.modals import task_details_modal, subtask_details_modal, person_pill_html
+from utils.helpers import PRIORITY_ORDER
 
 _STATUS_BADGE = {
     "Not started": ("⚪", "#888888"),
@@ -147,7 +148,27 @@ def _build_flat_list(email, mode, all_tasks, all_subtasks):
                 "parent_task": None,
                 "suggest_close": suggest_close,
             })
-    return result
+    return _sort_entries(result)
+
+
+def _sort_entries(entries: list) -> list:
+    today = datetime.date.today()
+
+    def key(e):
+        t = e["item"]
+        dl_str = t.get("deadline")
+        prio = PRIORITY_ORDER.get((t.get("priority") or "none").lower(), 4)
+        if not dl_str:
+            return (1, datetime.date(9999, 12, 31), prio)
+        try:
+            dl = datetime.date.fromisoformat(dl_str)
+        except Exception:
+            return (1, datetime.date(9999, 12, 31), prio)
+        # overdue or future — we only need consistent ASC by date;
+        # grouping (overdue vs future) is handled by the date itself
+        return (0, dl, prio)
+
+    return sorted(entries, key=key)
 
 
 def _deadline_group(deadline_str, today, threshold):

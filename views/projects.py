@@ -4,7 +4,7 @@ from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
 from db import delete_task_cascade
 from utils.notifications import send_task_assigned
-from utils.helpers import fmt_date
+from utils.helpers import fmt_date, sort_tasks_by_deadline
 from utils.md_editor import markdown_editor
 from db import get_settings
 
@@ -439,7 +439,7 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
                     st.rerun()
 
     # ── Nested subtasks ──────────────────────────────────────────────────────
-    t_subtasks = [s for s in subtasks if s.get("task_id") == t_id]
+    t_subtasks = sort_tasks_by_deadline([s for s in subtasks if s.get("task_id") == t_id])
     for s in t_subtasks:
         s_id        = s["id"]
         s_is_owner  = s.get("owner_email") == user_email
@@ -637,6 +637,7 @@ def show_projects():
                     )
 
                 deliv_tasks = [t for t in tasks if t.get("deliverable_id") == d_id]
+                deliv_tasks = sort_tasks_by_deadline(deliv_tasks)
 
                 with st.container(border=True):
                     # Deliverable header
@@ -689,6 +690,7 @@ def show_projects():
                 t for t in tasks
                 if t.get("project_id") == proj_id and not t.get("deliverable_id")
             ]
+            unassigned = sort_tasks_by_deadline(unassigned)
 
             if unassigned:
                 st.write("")
