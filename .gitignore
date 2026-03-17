@@ -1,0 +1,6 @@
+# Esclusioni progetto
+hipa/
+
+# Secrets and local credentials
+.streamlit/secrets.toml
+client_secret_*.apps.googleusercontent.com.json
