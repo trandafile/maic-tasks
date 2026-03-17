@@ -33,6 +33,7 @@ def init_db():
             acronym TEXT,
             identifier TEXT,
             funding_agency TEXT,
+            description TEXT,
             start_date DATE,
             end_date DATE,
             is_archived BOOLEAN DEFAULT 0
@@ -46,9 +47,11 @@ def init_db():
             status TEXT,
             deadline DATE,
             description TEXT,
+            owner_email TEXT,
             supervisor_email TEXT,
             is_archived BOOLEAN DEFAULT 0,
             FOREIGN KEY(project_id) REFERENCES projects(id),
+            FOREIGN KEY(owner_email) REFERENCES users(email),
             FOREIGN KEY(supervisor_email) REFERENCES users(email)
         );
 

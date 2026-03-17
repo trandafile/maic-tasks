@@ -330,8 +330,10 @@ def _render_main_report():
                 with st.container(border=True):
                     h1, h2, h3, h4, h5 = st.columns([2.6, 1.8, 1.8, 1.2, 1.0])
                     with h1:
+                        d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), users_meta)
                         st.write(f"**{d.get('name')}**")
                         st.caption(f"{d.get('type')} · deadline: {fmt_date(d.get('deadline'))}")
+                        st.html(d_people if d_people else "<span style='color:#aaa'>Owner/Supervisor: —</span>")
                     with h2:
                         st.progress(progress)
                     with h3:
@@ -340,7 +342,11 @@ def _render_main_report():
                         st.html(_badge(d_status, d_sl_fg, d_sl_bg))
                     with h5:
                         if st.button("Details", key=f"rp_dd_{did}", use_container_width=True):
-                            deliverable_details_modal(d, can_edit=False)
+                            deliverable_details_modal(
+                                d,
+                                can_edit=False,
+                                breadcrumb=f"Reports / {proj.get('name', '-') } / Deliverable",
+                            )
                     st.divider()
                     if d_tasks:
                         for t in d_tasks:
@@ -1051,6 +1057,16 @@ def _render_detailed_report():
         total_d = len(d_tasks)
         done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
         prog    = done_d / total_d if total_d > 0 else 0.0
+        d_owner = d.get("owner_email")
+        d_sup   = d.get("supervisor_email")
+        d_pills = ""
+        if d_owner:
+            u = user_map.get(d_owner, {"name": d_owner, "avatar_color": "#534AB7"})
+            d_pills += person_pill_html(u.get("name", d_owner), u.get("avatar_color", "#534AB7"), role="owner", compact=True)
+        if d_sup and d_sup != d_owner:
+            u = user_map.get(d_sup, {"name": d_sup, "avatar_color": "#BA7517"})
+            d_pills += person_pill_html(u.get("name", d_sup), u.get("avatar_color", "#BA7517"), role="sup", compact=True)
+
         dh1, dh_btn = st.columns([8, 1])
         with dh1:
             st.html(
@@ -1059,11 +1075,16 @@ def _render_detailed_report():
                 f"&nbsp;<span style='font-style:italic;color:#888;font-size:0.85rem'>{d.get('type','')}</span>"
                 f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
                 f"Deadline: {fmt_date(d.get('deadline'))}</span>"
+                f"<div style='margin-top:4px'>{d_pills if d_pills else '<span style=\'color:#888;font-size:0.82rem\'>Owner/Supervisor: —</span>'}</div>"
                 f"</div>"
             )
         with dh_btn:
             if st.button("Details", key=f"dr_dd_{did}", use_container_width=True):
-                deliverable_details_modal(d, can_edit=False)
+                deliverable_details_modal(
+                    d,
+                    can_edit=False,
+                    breadcrumb=f"Reports / Detailed Report / {proj.get('name', '-') } / Deliverable",
+                )
         if d.get("description"):
             st.markdown(
                 "<div style='background:#FAFAFA;border-radius:4px;padding:10px 16px;"

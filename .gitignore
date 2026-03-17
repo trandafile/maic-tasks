@@ -1,6 +1,12 @@
 # Esclusioni progetto
 hipa/
+__pycache__/
+*.pyc
 
 # Secrets and local credentials
 .streamlit/secrets.toml
 client_secret_*.apps.googleusercontent.com.json
+calendarintegration-*.json
+
+# Generated exports
+detailed_report_*.md

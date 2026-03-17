@@ -9,6 +9,7 @@ echo/
 
 set "REPO_URL=https://github.com/trandafile/maic-tasks.git"
 set "BRANCH=main"
+set "PUSH_LOG=%TEMP%\maic_git_push_%RANDOM%.log"
 
 REM Config Git identity (opzionale: commenta se gia configurata globalmente)
 git config user.email "lu.boccia@gmail.com"
@@ -97,22 +98,41 @@ if errorlevel 1 (
 REM Push: usa token se presente, altrimenti credential manager
 echo [*] Push su GitHub...
 if "%GITHUB_TOKEN%"=="" (
-    git push -u origin %BRANCH%
+    git push -u origin %BRANCH% > "%PUSH_LOG%" 2>&1
 ) else (
-    git push -u https://%GITHUB_TOKEN%@github.com/trandafile/maic-tasks.git %BRANCH%
+    git push -u https://%GITHUB_TOKEN%@github.com/trandafile/maic-tasks.git %BRANCH% > "%PUSH_LOG%" 2>&1
 )
+type "%PUSH_LOG%"
 if errorlevel 1 goto ERRORE
+
+echo [*] Verifica sincronizzazione branch...
+git status --short --branch
+findstr /C:"ahead" "%PUSH_LOG%" >nul 2>&1
 
 echo/
 echo ==========================================
 echo    SUCCESSO! UPLOAD COMPLETATO.
 echo ==========================================
+if exist "%PUSH_LOG%" del /f /q "%PUSH_LOG%" >nul 2>&1
 color 07
 pause
 exit /b 0
 
 :ERRORE
 color 0C
+if exist "%PUSH_LOG%" (
+    echo/
+    echo [*] Diagnostica push:
+    findstr /C:"GH013" /C:"Push cannot contain secrets" "%PUSH_LOG%" >nul 2>&1
+    if not errorlevel 1 (
+        echo [ERRORE] GitHub ha bloccato il push per un secret presente nei commit locali.
+        echo          Rimuovi il file sensibile dalla cronologia locale e riprova il push.
+    )
+    echo/
+    echo [*] Stato branch:
+    git status --short --branch
+    del /f /q "%PUSH_LOG%" >nul 2>&1
+)
 echo/
 echo ==========================================
 echo    ERRORE DURANTE LA PROCEDURA

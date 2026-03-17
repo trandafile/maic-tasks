@@ -12,6 +12,7 @@ from db import (
     get_archived_tasks, get_archived_subtasks,
     delete_task_cascade, delete_deliverable_cascade, delete_project_cascade,
     get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
+    PROJECTS_MIGRATION_SQL,
 )
 
 
@@ -43,6 +44,35 @@ def _projects_map() -> dict:
 def _deliverables_map() -> dict:
     rows = supabase.table("deliverables").select("id, name, project_id").execute().data
     return {r["id"]: r for r in rows}
+
+
+def _project_markdown_export(projects: list[dict]) -> str:
+    lines = ["# Project List", ""]
+    for proj in projects:
+        title = proj.get("name") or "Unnamed project"
+        acronym = proj.get("acronym")
+        if acronym:
+            title = f"{title} ({acronym})"
+        lines.append(f"## {title}")
+
+        details = []
+        if proj.get("identifier"):
+            details.append(f"- Identifier: {proj['identifier']}")
+        if proj.get("funding_agency"):
+            details.append(f"- Funding agency: {proj['funding_agency']}")
+        if proj.get("start_date"):
+            details.append(f"- Start date: {_fmt_date(proj['start_date'])}")
+        if proj.get("end_date"):
+            details.append(f"- End date: {_fmt_date(proj['end_date'])}")
+        if details:
+            lines.extend(details)
+
+        description = (proj.get("description") or "").strip()
+        if description:
+            lines.extend(["", description])
+
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
 
 
 # ─── TAB 1: Users ─────────────────────────────────────────────────────────────
@@ -235,6 +265,15 @@ def _tab_projects():
         st.error(f"Error loading projects: {e}")
         return
 
+    export_md = _project_markdown_export(projects)
+    st.download_button(
+        "⬇ Export project list (Markdown)",
+        data=export_md,
+        file_name="project_list.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+
     if not projects:
         st.info("No active projects found.")
     else:
@@ -263,6 +302,9 @@ def _tab_projects():
                         meta_parts.append(f"{_fmt_date(start_d)} → {_fmt_date(end_d)}")
                     if meta_parts:
                         st.caption("  ·  ".join(meta_parts))
+                    description = (proj.get("description") or "").strip()
+                    if description:
+                        st.markdown(description)
 
                 with ca:
                     if st.button("✏️ Edit", key=f"edit_proj_{pid}", use_container_width=True):
@@ -298,6 +340,12 @@ def _tab_projects():
                             format="DD/MM/YYYY",
                             key=f"p_end_{pid}",
                         )
+                    p_description = st.text_area(
+                        "Project Description (Markdown)",
+                        value=proj.get("description") or "",
+                        key=f"p_desc_{pid}",
+                        height=180,
+                    )
                     pb1, pb2 = st.columns(2)
                     with pb1:
                         if st.button("💾 Save", key=f"save_proj_{pid}",
@@ -313,6 +361,7 @@ def _tab_projects():
                                         "funding_agency": p_funding or None,
                                         "start_date":     p_start.isoformat() if p_start else None,
                                         "end_date":       p_end.isoformat()   if p_end   else None,
+                                        "description":    p_description.strip() or None,
                                     }).eq("id", pid).execute()
                                     st.session_state.pop(edit_key, None)
                                     st.success("Project updated.")
@@ -359,6 +408,7 @@ def _tab_projects():
             np_funding = st.text_input("Funding Agency")
             np_start   = st.date_input("Start Date", value=None, format="DD/MM/YYYY")
             np_end     = st.date_input("End Date",   value=None, format="DD/MM/YYYY")
+        np_description = st.text_area("Project Description (Markdown)", height=180)
 
         add_btn = st.form_submit_button("➕ Add Project", type="primary")
         if add_btn:
@@ -373,6 +423,7 @@ def _tab_projects():
                         "funding_agency": np_funding or None,
                         "start_date":     np_start.isoformat() if np_start else None,
                         "end_date":       np_end.isoformat()   if np_end   else None,
+                        "description":    np_description.strip() or None,
                         "is_archived":    False,
                     }).execute()
                     st.success(f"Project '{np_name}' created.")
@@ -613,6 +664,7 @@ def _tab_settings():
     with st.expander("Show required SQL for Supabase", expanded=False):
         st.code(SETTINGS_MIGRATION_SQL, language="sql")
         st.code(DELIVERABLES_MIGRATION_SQL, language="sql")
+        st.code(PROJECTS_MIGRATION_SQL, language="sql")
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────

@@ -65,11 +65,12 @@ def fetch_hierarchy(show_archived=False):
         subtasks = sq.execute().data
 
         users = supabase.table("users").select("email, name, avatar_color").eq("is_approved", True).execute().data
+        user_map = {u["email"]: u for u in (users or [])}
 
-        return projects, deliverables, tasks, subtasks, users
+        return projects, deliverables, tasks, subtasks, users, user_map
     except Exception as e:
         st.error(f"Errore nel caricamento dati: {e}")
-        return [], [], [], [], []
+        return [], [], [], [], [], {}
 
 
 # ─── Modals ─────────────────────────────────────────────────────────────────────
@@ -81,6 +82,12 @@ def add_deliverable_modal(project_id, users):
         type_val = st.selectbox("Type", ["paper", "layout", "prototype"])
         deadline = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
         user_opts = {f"{u['name']} ({u['email']})": u['email'] for u in users}
+        me = st.session_state.get('user_email')
+        owner = st.selectbox(
+            "Owner*",
+            list(user_opts.keys()),
+            index=list(user_opts.values()).index(me) if me in user_opts.values() else 0,
+        )
         supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
         description = st.text_area(
             "Description (Markdown)", height=120,
@@ -95,6 +102,7 @@ def add_deliverable_modal(project_id, users):
                     "project_id": project_id, "name": name, "type": type_val,
                     "status": "Not started",
                     "deadline": str(deadline) if deadline else None,
+                    "owner_email": user_opts[owner],
                     "supervisor_email": user_opts[supervisor] if supervisor != "None" else None,
                     "description": description or None,
                 }).execute()
@@ -246,6 +254,7 @@ def add_project_modal():
             start_date = st.date_input("Start Date", value=datetime.date.today(), format="DD/MM/YYYY")
             end_date   = st.date_input("Estimated End Date", value=None, format="DD/MM/YYYY")
         funding = st.text_input("Funding Agency")
+        description = st.text_area("Project Description (Markdown)", height=140)
 
         if st.form_submit_button("Create Project", type="primary"):
             if not name or not identifier:
@@ -257,6 +266,7 @@ def add_project_modal():
                     "acronym":         acronym,
                     "identifier":      identifier.upper(),
                     "funding_agency":  funding,
+                    "description":     description or None,
                     "start_date":      str(start_date) if start_date else None,
                     "end_date":        str(end_date) if end_date else None,
                     "is_archived":     False,
@@ -269,8 +279,7 @@ def add_project_modal():
 
 # ─── Task row renderer ──────────────────────────────────────────────────────────
 
-def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
-    user_map  = {u["email"]: u for u in users}
+def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix):
     t_id      = t["id"]
     is_owner  = t.get("owner_email") == user_email
     is_sup    = t.get("supervisor_email") == user_email
@@ -456,7 +465,7 @@ def show_projects():
 
     st.divider()
 
-    projects, deliverables, tasks, subtasks, users = fetch_hierarchy(show_archived)
+    projects, deliverables, tasks, subtasks, users, user_map = fetch_hierarchy(show_archived)
 
     if not projects:
         st.info("No projects found. Create a new project to get started.")
@@ -498,6 +507,27 @@ def show_projects():
                 d_type   = d.get("type", "")
                 d_status = d.get("status", "Not started")
                 arch_d   = " (archived)" if d.get("is_archived") else ""
+                owner_e  = d.get("owner_email")
+                sup_e    = d.get("supervisor_email")
+
+                user_map = {u["email"]: u for u in users}
+                d_people = ""
+                if owner_e:
+                    u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
+                    d_people += person_pill_html(
+                        u.get("name", owner_e),
+                        u.get("avatar_color", "#534AB7"),
+                        role="owner",
+                        compact=False,
+                    )
+                if sup_e and sup_e != owner_e:
+                    u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
+                    d_people += person_pill_html(
+                        u.get("name", sup_e),
+                        u.get("avatar_color", "#BA7517"),
+                        role="sup",
+                        compact=False,
+                    )
 
                 deliv_tasks = [t for t in tasks if t.get("deliverable_id") == d_id]
 
@@ -515,6 +545,7 @@ def show_projects():
                             f"<span style='float:right'>{_status_badge(d_status)}</span>"
                             f"</div>"
                         )
+                        st.html(d_people if d_people else "<span style='color:#888;font-size:0.82rem'>Owner/Supervisor: —</span>")
                     with h_det:
                         if st.button("Details", key=f"det_del_{d_id}", use_container_width=True):
                             deliverable_details_modal(d, can_edit=is_admin and not d.get("is_archived"))
@@ -529,7 +560,7 @@ def show_projects():
                         st.caption("    *No tasks for this deliverable.*")
                     else:
                         for t in deliv_tasks:
-                            _render_task_row(t, subtasks, users, user_email, is_admin,
+                            _render_task_row(t, subtasks, users, user_map, user_email, is_admin,
                                              key_prefix=f"d{d_id}")
                             st.divider()
 
@@ -556,6 +587,6 @@ def show_projects():
                         "General tasks — not linked to a specific deliverable</p>"
                     )
                     for t in unassigned:
-                        _render_task_row(t, subtasks, users, user_email, is_admin,
+                        _render_task_row(t, subtasks, users, user_map, user_email, is_admin,
                                          key_prefix=f"p{proj_id}_u")
                         st.divider()

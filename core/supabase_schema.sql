@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS projects (
     acronym TEXT,
     identifier TEXT,
     funding_agency TEXT,
+    description TEXT,
     start_date DATE,
     end_date DATE,
     is_archived BOOLEAN DEFAULT FALSE
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS deliverables (
     status TEXT,
     deadline DATE,
     description TEXT,
+    owner_email TEXT REFERENCES users(email),
     supervisor_email TEXT REFERENCES users(email),
     is_archived BOOLEAN DEFAULT FALSE
 );

@@ -526,7 +526,7 @@ def subtask_details_modal(subtask, can_edit):
 # ── Deliverable Details Modal ─────────────────────────────────────────────────
 
 @st.dialog("Deliverable Details", width="large")
-def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
+def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcrumb: str | None = None):
     """Show deliverable details with an optional edit form for admins."""
     from utils.md_editor import markdown_editor as _md_editor
 
@@ -536,6 +536,7 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
     d_status = deliverable.get("status", "Not started")
     d_dead   = deliverable.get("deadline")
     d_desc   = deliverable.get("description") or ""
+    d_owner  = deliverable.get("owner_email")
     d_sup    = deliverable.get("supervisor_email")
 
     users_rows = supabase.table("users").select("email, name").eq("is_approved", True).order("name").execute().data
@@ -553,8 +554,10 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
     s_fg, s_bg = _SC.get(d_status, ("#888", "#f0f0f0"))
 
     # ── Read-only header ──────────────────────────────────────────────────────
+    if breadcrumb:
+        st.caption(breadcrumb)
     st.html(f"<span style='font-size:1.2rem;font-weight:700'>{d_name}</span>")
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     with m1:
         st.caption("Status")
         st.html(
@@ -568,8 +571,37 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
         st.caption("Deadline")
         st.write(_fmt_date(d_dead))
     with m4:
+        st.caption("Owner")
+        st.write(users_map.get(d_owner, d_owner) if d_owner else "—")
+    with m5:
         st.caption("Supervisor")
         st.write(users_map.get(d_sup, d_sup) if d_sup else "—")
+
+    pills = ""
+    if d_owner:
+        u = next((u for u in (users_rows or []) if u.get("email") == d_owner), None) or {
+            "name": d_owner,
+            "avatar_color": "#534AB7",
+        }
+        pills += person_pill_html(
+            u.get("name", d_owner),
+            u.get("avatar_color", "#534AB7"),
+            role="owner",
+            compact=False,
+        )
+    if d_sup and d_sup != d_owner:
+        u = next((u for u in (users_rows or []) if u.get("email") == d_sup), None) or {
+            "name": d_sup,
+            "avatar_color": "#BA7517",
+        }
+        pills += person_pill_html(
+            u.get("name", d_sup),
+            u.get("avatar_color", "#BA7517"),
+            role="sup",
+            compact=False,
+        )
+    if pills:
+        st.html(f"<div style='margin:8px 0'>{pills}</div>")
 
     if d_desc and not can_edit:
         st.divider()
@@ -597,6 +629,17 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
                 index=STATUS_OPTS.index(d_status) if d_status in STATUS_OPTS else 0
             )
             e_dead = st.date_input("Deadline", value=_parse_date(d_dead), format="DD/MM/YYYY")
+
+        owner_opts = {f"{u.get('name', u['email'])} ({u['email']})": u["email"] for u in (users_rows or [])}
+        owner_labels = list(owner_opts.keys())
+        default_owner_idx = 0
+        if d_owner:
+            for i, lab in enumerate(owner_labels):
+                if owner_opts[lab] == d_owner:
+                    default_owner_idx = i
+                    break
+        e_owner_label = st.selectbox("Owner", owner_labels, index=default_owner_idx)
+
         sup_opts = {"None": None}
         sup_opts.update({f"{u.get('name', u['email'])} ({u['email']})": u["email"] for u in (users_rows or [])})
         sup_labels = list(sup_opts.keys())
@@ -623,6 +666,7 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
                     "type":        e_type,
                     "status":      e_status,
                     "deadline":    e_dead.isoformat() if e_dead else None,
+                    "owner_email": owner_opts[e_owner_label],
                     "supervisor_email": sup_opts[e_sup_label],
                     "description": e_desc or None,
                 }).eq("id", d_id).execute()

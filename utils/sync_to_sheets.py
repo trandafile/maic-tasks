@@ -1,4 +1,5 @@
 import gspread
+from gspread.exceptions import SpreadsheetNotFound, APIError
 from supabase import create_client, Client
 import streamlit as st
 
@@ -32,26 +33,45 @@ def backup_supabase_to_sheets():
 
         # 2. Connessione a Google Sheets tramite gspread
         # Presuppone credenziali service account in st.secrets["gcp_service_account"]
-        google_creds = {
-            "type": st.secrets["gcp_service_account"]["type"],
-            "project_id": st.secrets["gcp_service_account"]["project_id"],
-            "private_key_id": st.secrets["gcp_service_account"]["private_key_id"],
-            "private_key": st.secrets["gcp_service_account"]["private_key"],
-            "client_email": st.secrets["gcp_service_account"]["client_email"],
-            "client_id": st.secrets["gcp_service_account"]["client_id"],
-            "auth_uri": st.secrets["gcp_service_account"]["auth_uri"],
-            "token_uri": st.secrets["gcp_service_account"]["token_uri"],
-            "auth_provider_x509_cert_url": st.secrets["gcp_service_account"]["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": st.secrets["gcp_service_account"]["client_x509_cert_url"]
-        }
-        
-        gc = gspread.service_account_from_dict(google_creds)
+        gcp_sa = st.secrets["gcp_service_account"]
+        required = [
+            "type", "project_id", "private_key_id", "private_key",
+            "client_email", "client_id", "auth_uri", "token_uri",
+            "auth_provider_x509_cert_url", "client_x509_cert_url",
+        ]
+        missing = [k for k in required if not gcp_sa.get(k)]
+        if missing:
+            raise ValueError(f"Chiavi mancanti in gcp_service_account: {', '.join(missing)}")
+
+        google_creds = {k: gcp_sa[k] for k in required}
+
+        try:
+            gc = gspread.service_account_from_dict(google_creds)
+        except Exception as e:
+            return False, (
+                f"Errore autenticazione service account ({type(e).__name__}): {e}. "
+                "Controlla private_key e formato sezione [gcp_service_account]."
+            )
         
         sheet_id = st.secrets.get("GOOGLE_SHEET_BACKUP_ID", "").strip()
         if not sheet_id or sheet_id == "INSERISCI_QUI_IL_TUO_SHEET_ID":
             raise ValueError("GOOGLE_SHEET_BACKUP_ID mancante in .streamlit/secrets.toml")
 
-        spreadsheet = gc.open_by_key(sheet_id)
+        try:
+            spreadsheet = gc.open_by_key(sheet_id)
+        except SpreadsheetNotFound as e:
+            sa_email = google_creds.get("client_email", "service account")
+            return False, (
+                f"Google Sheet non trovato o non condiviso ({type(e).__name__}). "
+                f"Condividi il file con: {sa_email} (permesso Editor)."
+            )
+        except APIError as e:
+            return False, (
+                f"Errore API Google ({type(e).__name__}): {e}. "
+                "Verifica che Google Sheets API e Google Drive API siano abilitate nel progetto GCP."
+            )
+        except Exception as e:
+            return False, f"Errore apertura Google Sheet ({type(e).__name__}): {e}"
 
         # 3. Lista delle tabelle da esportare
         tables_to_sync = [
@@ -67,10 +87,14 @@ def backup_supabase_to_sheets():
             "settings",
         ]
 
+        synced = []
         for table_name in tables_to_sync:
             # Scarica i dati da Supabase
-            response = supabase.table(table_name).select("*").execute()
-            data = response.data
+            try:
+                response = supabase.table(table_name).select("*").execute()
+                data = response.data
+            except Exception as e:
+                return False, f"Errore lettura tabella '{table_name}' da Supabase ({type(e).__name__}): {e}"
             
             matrix = _normalize_rows(data)
 
@@ -84,11 +108,12 @@ def backup_supabase_to_sheets():
             worksheet.clear()
             if matrix:
                 worksheet.update(matrix)
+            synced.append(f"{table_name} ({max(len(matrix)-1, 0)} righe)")
 
-        return True, "Backup completato con successo su Google Sheets."
+        return True, "Backup completato con successo: " + ", ".join(synced)
 
     except Exception as e:
-        return False, f"Errore durante il backup: {str(e)}"
+        return False, f"Errore durante il backup ({type(e).__name__}): {e}"
 
 # Se vuoi testarlo localmente senza Streamlit, puoi usare python utils/sync_to_sheets.py
 if __name__ == "__main__":
