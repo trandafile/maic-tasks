@@ -536,6 +536,10 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
     d_status = deliverable.get("status", "Not started")
     d_dead   = deliverable.get("deadline")
     d_desc   = deliverable.get("description") or ""
+    d_sup    = deliverable.get("supervisor_email")
+
+    users_rows = supabase.table("users").select("email, name").eq("is_approved", True).order("name").execute().data
+    users_map = {u["email"]: u.get("name", u["email"]) for u in (users_rows or [])}
 
     STATUS_OPTS = ["Not started", "Working on", "Blocked", "Completed", "Cancelled"]
     TYPE_OPTS   = ["paper", "layout", "prototype"]
@@ -550,7 +554,7 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
 
     # ── Read-only header ──────────────────────────────────────────────────────
     st.html(f"<span style='font-size:1.2rem;font-weight:700'>{d_name}</span>")
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     with m1:
         st.caption("Status")
         st.html(
@@ -563,6 +567,9 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
     with m3:
         st.caption("Deadline")
         st.write(_fmt_date(d_dead))
+    with m4:
+        st.caption("Supervisor")
+        st.write(users_map.get(d_sup, d_sup) if d_sup else "—")
 
     if d_desc and not can_edit:
         st.divider()
@@ -590,6 +597,16 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
                 index=STATUS_OPTS.index(d_status) if d_status in STATUS_OPTS else 0
             )
             e_dead = st.date_input("Deadline", value=_parse_date(d_dead), format="DD/MM/YYYY")
+        sup_opts = {"None": None}
+        sup_opts.update({f"{u.get('name', u['email'])} ({u['email']})": u["email"] for u in (users_rows or [])})
+        sup_labels = list(sup_opts.keys())
+        default_sup_idx = 0
+        if d_sup:
+            for i, lab in enumerate(sup_labels):
+                if sup_opts[lab] == d_sup:
+                    default_sup_idx = i
+                    break
+        e_sup_label = st.selectbox("Supervisor", sup_labels, index=default_sup_idx)
         e_desc = _md_editor(
             value=d_desc,
             key=f"deliv_desc_{d_id}",
@@ -606,6 +623,7 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
                     "type":        e_type,
                     "status":      e_status,
                     "deadline":    e_dead.isoformat() if e_dead else None,
+                    "supervisor_email": sup_opts[e_sup_label],
                     "description": e_desc or None,
                 }).eq("id", d_id).execute()
                 st.success("Saved!")

@@ -75,11 +75,13 @@ def fetch_hierarchy(show_archived=False):
 # ─── Modals ─────────────────────────────────────────────────────────────────────
 
 @st.dialog("Add New Deliverable")
-def add_deliverable_modal(project_id):
+def add_deliverable_modal(project_id, users):
     with st.form("new_deliv_form"):
         name     = st.text_input("Deliverable Name*")
         type_val = st.selectbox("Type", ["paper", "layout", "prototype"])
         deadline = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
+        user_opts = {f"{u['name']} ({u['email']})": u['email'] for u in users}
+        supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
         description = st.text_area(
             "Description (Markdown)", height=120,
             placeholder="Describe the deliverable, acceptance criteria, references…"
@@ -93,6 +95,7 @@ def add_deliverable_modal(project_id):
                     "project_id": project_id, "name": name, "type": type_val,
                     "status": "Not started",
                     "deadline": str(deadline) if deadline else None,
+                    "supervisor_email": user_opts[supervisor] if supervisor != "None" else None,
                     "description": description or None,
                 }).execute()
                 st.success("Created!")
@@ -476,7 +479,7 @@ def show_projects():
             with tc1:
                 if is_admin:
                     if st.button("➕ Deliverable", key=f"add_del_{proj_id}", use_container_width=True):
-                        add_deliverable_modal(proj_id)
+                        add_deliverable_modal(proj_id, users)
             with tc2:
                 if st.button("➕ Generic Task", key=f"add_generic_t_{proj_id}", use_container_width=True):
                     add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=None)

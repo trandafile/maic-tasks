@@ -45,8 +45,11 @@ def init_db():
             type TEXT,
             status TEXT,
             deadline DATE,
+            description TEXT,
+            supervisor_email TEXT,
             is_archived BOOLEAN DEFAULT 0,
-            FOREIGN KEY(project_id) REFERENCES projects(id)
+            FOREIGN KEY(project_id) REFERENCES projects(id),
+            FOREIGN KEY(supervisor_email) REFERENCES users(email)
         );
 
         CREATE TABLE IF NOT EXISTS tasks (

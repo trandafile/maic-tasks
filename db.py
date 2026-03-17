@@ -118,9 +118,25 @@ ALTER TABLE subtasks
 
 
 DELIVERABLES_MIGRATION_SQL = """\
--- Run once in Supabase SQL Editor → add description field to deliverables
+-- Run once in Supabase SQL Editor → add missing deliverables fields
 ALTER TABLE deliverables
   ADD COLUMN IF NOT EXISTS description TEXT;
+
+ALTER TABLE deliverables
+    ADD COLUMN IF NOT EXISTS supervisor_email TEXT;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'deliverables_supervisor_email_fkey'
+    ) THEN
+        ALTER TABLE deliverables
+            ADD CONSTRAINT deliverables_supervisor_email_fkey
+            FOREIGN KEY (supervisor_email) REFERENCES users(email);
+    END IF;
+END $$;
 """
 
 

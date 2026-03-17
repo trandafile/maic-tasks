@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS deliverables (
     type TEXT,
     status TEXT,
     deadline DATE,
+    description TEXT,
+    supervisor_email TEXT REFERENCES users(email),
     is_archived BOOLEAN DEFAULT FALSE
 );
 

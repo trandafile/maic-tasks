@@ -11,7 +11,7 @@ from db import (
     get_archived_projects, get_archived_deliverables,
     get_archived_tasks, get_archived_subtasks,
     delete_task_cascade, delete_deliverable_cascade, delete_project_cascade,
-    get_settings, save_settings, SETTINGS_MIGRATION_SQL,
+    get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
 )
 
 
@@ -612,6 +612,7 @@ def _tab_settings():
     st.subheader("SQL Schema — Migrations")
     with st.expander("Show required SQL for Supabase", expanded=False):
         st.code(SETTINGS_MIGRATION_SQL, language="sql")
+        st.code(DELIVERABLES_MIGRATION_SQL, language="sql")
 
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
