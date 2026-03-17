@@ -1,10 +1,12 @@
 import streamlit as st
-import datetime
+import datetime as _dt
 from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
 from db import delete_task_cascade
 from utils.notifications import send_task_assigned
 from utils.helpers import fmt_date
+from utils.md_editor import markdown_editor
+from db import get_settings
 
 # ─── Status / Priority badge helpers ───────────────────────────────────────────
 STATUS_COLOURS = {
@@ -89,9 +91,11 @@ def add_deliverable_modal(project_id, users):
             index=list(user_opts.values()).index(me) if me in user_opts.values() else 0,
         )
         supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
-        description = st.text_area(
-            "Description (Markdown)", height=120,
-            placeholder="Describe the deliverable, acceptance criteria, references…"
+        description = markdown_editor(
+            value="",
+            key=f"new_deliv_notes_{project_id}",
+            height=220,
+            label="📝 Deliverable Description",
         )
         if st.form_submit_button("Create Deliverable", type="primary"):
             if not name:
@@ -106,6 +110,8 @@ def add_deliverable_modal(project_id, users):
                     "supervisor_email": user_opts[supervisor] if supervisor != "None" else None,
                     "description": description or None,
                 }).execute()
+                # reset editor state for next open
+                st.session_state.pop(f"__mde_new_deliv_notes_{project_id}", None)
                 st.success("Created!")
                 st.rerun()
             except Exception as e:
@@ -148,7 +154,12 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
             supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
             deadline   = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
 
-        notes = st.text_area("Notes/Description (Markdown)", height=120)
+        notes = markdown_editor(
+            value="",
+            key=f"new_task_notes_{project_id}",
+            height=280,
+            label="📝 Notes / Description",
+        )
 
         if st.form_submit_button("Create Task", type="primary"):
             if not name:
@@ -184,6 +195,8 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
                 if sup_email and sup_email != owner_email:
                     send_task_assigned(enriched_task, sup_email, assigner)
 
+                # clear task notes editor after successful creation
+                st.session_state.pop(f"__mde_new_task_notes_{project_id}", None)
                 st.success("Created!")
                 st.rerun()
             except Exception as e:
@@ -205,6 +218,13 @@ def add_subtask_modal(task_id, users):
             supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
         deadline = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
 
+        notes = markdown_editor(
+            value="",
+            key=f"new_subtask_notes_{task_id}",
+            height=280,
+            label="📝 Notes / Description",
+        )
+
         if st.form_submit_button("Create Subtask", type="primary"):
             if not name:
                 st.error("Title is required.")
@@ -219,6 +239,7 @@ def add_subtask_modal(task_id, users):
                     "supervisor_email": sup_email,
                     "status":           "Not started",
                     "deadline":         str(deadline) if deadline else None,
+                    "notes":            notes,
                     "sort_order":       999,
                 }).execute()
 
@@ -236,6 +257,8 @@ def add_subtask_modal(task_id, users):
                 if sup_email and sup_email != owner_email:
                     send_task_assigned(subtask_as_task, sup_email, assigner)
 
+                # clear subtask notes editor after successful creation
+                st.session_state.pop(f"__mde_new_subtask_notes_{task_id}", None)
                 st.success("Created!")
                 st.rerun()
             except Exception as e:
@@ -254,7 +277,12 @@ def add_project_modal():
             start_date = st.date_input("Start Date", value=datetime.date.today(), format="DD/MM/YYYY")
             end_date   = st.date_input("Estimated End Date", value=None, format="DD/MM/YYYY")
         funding = st.text_input("Funding Agency")
-        description = st.text_area("Project Description (Markdown)", height=140)
+        description = markdown_editor(
+            value="",
+            key="new_proj_notes",
+            height=220,
+            label="📝 Project Description (optional)",
+        )
 
         if st.form_submit_button("Create Project", type="primary"):
             if not name or not identifier:
@@ -271,6 +299,8 @@ def add_project_modal():
                     "end_date":        str(end_date) if end_date else None,
                     "is_archived":     False,
                 }).execute()
+                # clear project description editor after successful creation
+                st.session_state.pop("__mde_new_proj_notes", None)
                 st.success("Project created!")
                 st.rerun()
             except Exception as e:
@@ -279,7 +309,40 @@ def add_project_modal():
 
 # ─── Task row renderer ──────────────────────────────────────────────────────────
 
-def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix):
+def _deadline_html(deadline_str: str | None, status: str, threshold: int = 7) -> str:
+    if not deadline_str:
+        return ""
+    try:
+        dl = _dt.date.fromisoformat(deadline_str)
+        delta = (dl - _dt.date.today()).days
+        label = dl.strftime("%Y/%m/%d")
+    except Exception:
+        return ""
+
+    if status in ("Completed", "Cancelled"):
+        return (
+            f"<span style='font-size:11px;color:#888;'>"
+            f"📅 {label}</span>"
+        )
+    if delta < 0:
+        days = abs(delta)
+        return (
+            f"<span style='font-size:11px;color:#E24B4A;font-weight:500;'>📅 {label}</span>&nbsp;"
+            f"<span style='font-size:10px;background:#FCEBEB;color:#A32D2D;"
+            f"padding:1px 6px;border-radius:3px;font-weight:600;'>overdue {days}d</span>"
+        )
+    if delta <= threshold:
+        return (
+            f"<span style='font-size:11px;color:#BA7517;font-weight:500;'>📅 {label}</span>&nbsp;"
+            f"<span style='font-size:10px;background:#FAEEDA;color:#854F0B;"
+            f"padding:1px 6px;border-radius:3px;font-weight:600;'>due in {delta}d</span>"
+        )
+    return (
+        f"<span style='font-size:11px;color:#888;'>📅 {label}</span>"
+    )
+
+
+def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix, threshold: int):
     t_id      = t["id"]
     is_owner  = t.get("owner_email") == user_email
     is_sup    = t.get("supervisor_email") == user_email
@@ -288,58 +351,73 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
     seq_id    = t.get("sequence_id") or f"T-{t_id}"
     status    = t.get("status", "Not started")
     priority  = (t.get("priority") or "none").lower()
+    name      = t.get("name", "")
 
-    st.html(
-        f"<div style='margin-bottom:0;padding:2px 0;opacity:{opacity}'>"
-        f"  <span style='font-family:monospace;font-size:0.82rem;color:#888'>{seq_id}</span>"
-        f"</div>"
-    )
-
-    # columns: name | status | priority | owner+sup | action buttons | [delete]
-    c1, c2, c3, c4, c5, c_del = st.columns([3, 1.4, 1.2, 2.8, 2.2, 0.5])
-    with c1:
-        st.markdown(
-            f"<span style='opacity:{opacity};font-size:0.95rem'><b>{t.get('name')}</b></span>",
-            unsafe_allow_html=True
+    owner_e = t.get("owner_email")
+    sup_e   = t.get("supervisor_email")
+    pills   = ""
+    if owner_e:
+        u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
+        pills += person_pill_html(
+            u.get("name", owner_e),
+            u.get("avatar_color", "#534AB7"),
+            role="owner",
+            compact=False,
         )
-    with c2:
-        st.html(_status_badge(status))
-    with c3:
-        st.html(_priority_badge(priority))
-    with c4:
-        owner_e = t.get("owner_email")
-        sup_e   = t.get("supervisor_email")
-        pills   = ""
-        if owner_e:
-            u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
-            pills += person_pill_html(
-                u.get("name", owner_e),
-                u.get("avatar_color", "#534AB7"),
-                role="owner", compact=True
-            )
-        if sup_e and sup_e != owner_e:
-            u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
-            pills += person_pill_html(
-                u.get("name", sup_e),
-                u.get("avatar_color", "#BA7517"),
-                role="sup", compact=True
-            )
-        if pills:
-            st.html(f"<div style='opacity:{opacity}'>{pills}</div>")
-    with c5:
-        btn1, btn2 = st.columns(2)
-        with btn1:
-            if st.button("🔍 Detail", key=f"{key_prefix}_det_{t_id}"):
+    if sup_e and sup_e != owner_e:
+        u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
+        pills += person_pill_html(
+            u.get("name", sup_e),
+            u.get("avatar_color", "#BA7517"),
+            role="sup",
+            compact=False,
+        )
+
+    dl_html = _deadline_html(t.get("deadline"), status, threshold)
+    s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
+    p_fg, p_bg = PRIORITY_COLOURS.get(priority, ("#888", "#f0f0f0"))
+    s_badge = _badge(status, s_fg, s_bg)
+    p_badge = _badge(priority, p_fg, p_bg)
+
+    col_html, col_btns = st.columns([8, 2])
+    with col_html:
+        st.html(
+            f"""
+            <div style='display:grid;grid-template-columns:52px 1fr auto;
+                        gap:0;padding:8px 8px 6px 8px;align-items:start;
+                        opacity:{opacity};'>
+              <span style='font-family:monospace;font-size:10px;
+                           color:#aaa;padding-top:3px;'>{seq_id}</span>
+              <div>
+                <div style='display:flex;align-items:center;gap:7px;
+                            flex-wrap:wrap;margin-bottom:5px;'>
+                  <span style='font-size:13px;font-weight:500;
+                               color:var(--color-text-primary,#111);
+                               line-height:1.3;'>{name}</span>
+                  {s_badge}
+                  {p_badge}
+                </div>
+                {f"<div style='margin-bottom:5px;'>{dl_html}</div>" if dl_html else ""}
+                {f"<div>{pills}</div>" if pills else ""}
+              </div>
+              <div></div>
+            </div>
+            """
+        )
+    with col_btns:
+        b1, b2, b3 = st.columns([1, 1, 1])
+        with b1:
+            if st.button("Details", key=f"{key_prefix}_det_{t_id}"):
                 task_details_modal(t, can_edit)
-        with btn2:
-            if st.button("➕ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit):
+        with b2:
+            if st.button("+ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit):
                 add_subtask_modal(t_id, users)
-    with c_del:
-        if is_admin:
-            confirm_key = f"_confirm_del_t_{t_id}"
-            if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete"):
-                st.session_state[confirm_key] = True
-                st.rerun()
+        with b3:
+            if is_admin:
+                confirm_key = f"_confirm_del_t_{t_id}"
+                if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete"):
+                    st.session_state[confirm_key] = True
+                    st.rerun()
 
     # ── Delete confirmation (inline, full width) ─────────────────────────────
     confirm_key = f"_confirm_del_t_{t_id}"
@@ -368,49 +446,66 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
         s_can_edit  = is_admin or s_is_owner or (s.get("supervisor_email") == user_email)
         s_opacity   = "1" if s_can_edit else "0.45"
         s_status    = s.get("status", "Not started")
+        s_name      = s.get("name", "")
 
-        sc1, sc2, sc3, sc4, sc5, sc_del = st.columns([3, 1.4, 1.2, 2.8, 2.2, 0.5])
-        with sc1:
-            st.markdown(
-                f"<span style='opacity:{s_opacity};padding-left:28px;font-size:0.88rem'>"
-                f"↳ 🖇️ {s.get('name')}</span>",
-                unsafe_allow_html=True
+        s_owner_e = s.get("owner_email")
+        s_sup_e   = s.get("supervisor_email")
+        s_pills   = ""
+        if s_owner_e:
+            u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#534AB7"})
+            s_pills += person_pill_html(
+                u.get("name", s_owner_e),
+                u.get("avatar_color", "#534AB7"),
+                role="owner",
+                compact=False,
             )
-        with sc2:
-            st.html(_status_badge(s_status))
-        with sc3:
-            st.write("")  # no priority on subtasks
-        with sc4:
-            s_owner_e = s.get("owner_email")
-            s_sup_e   = s.get("supervisor_email")
-            s_pills   = ""
-            if s_owner_e:
-                u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#534AB7"})
-                s_pills += person_pill_html(
-                    u.get("name", s_owner_e),
-                    u.get("avatar_color", "#534AB7"),
-                    role="owner", compact=True
-                )
-            if s_sup_e and s_sup_e != s_owner_e:
-                u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#BA7517"})
-                s_pills += person_pill_html(
-                    u.get("name", s_sup_e),
-                    u.get("avatar_color", "#BA7517"),
-                    role="sup", compact=True
-                )
-            if s_pills:
-                st.html(f"<div style='opacity:{s_opacity}'>{s_pills}</div>")
-        with sc5:
-            stc1, _ = st.columns(2)
-            with stc1:
-                if st.button("🔍 View", key=f"{key_prefix}_vistaS_{s_id}"):
+        if s_sup_e and s_sup_e != s_owner_e:
+            u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#BA7517"})
+            s_pills += person_pill_html(
+                u.get("name", s_sup_e),
+                u.get("avatar_color", "#BA7517"),
+                role="sup",
+                compact=False,
+            )
+
+        s_dl_html = _deadline_html(s.get("deadline"), s_status, threshold)
+        ss_fg, ss_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
+        s_badge = _badge(s_status, ss_fg, ss_bg)
+
+        scol_html, scol_btns = st.columns([8, 2])
+        with scol_html:
+            st.html(
+                f"""
+                <div style='display:grid;grid-template-columns:52px 1fr auto;
+                            gap:0;padding:6px 8px 4px 8px;align-items:start;
+                            opacity:{s_opacity};padding-left:24px;'>
+                  <span></span>
+                  <div>
+                    <div style='display:flex;align-items:center;gap:7px;
+                                flex-wrap:wrap;margin-bottom:5px;'>
+                      <span style='font-size:12px;font-weight:400;
+                                   color:var(--color-text-primary,#111);
+                                   line-height:1.3;'>↳ 🖇️ {s_name}</span>
+                      {s_badge}
+                    </div>
+                    {f"<div style='margin-bottom:5px;'>{s_dl_html}</div>" if s_dl_html else ""}
+                    {f"<div>{s_pills}</div>" if s_pills else ""}
+                  </div>
+                  <div></div>
+                </div>
+                """
+            )
+        with scol_btns:
+            sb1, sb2 = st.columns([1, 1])
+            with sb1:
+                if st.button("Details", key=f"{key_prefix}_vistaS_{s_id}"):
                     subtask_details_modal(s, s_can_edit)
-        with sc_del:
-            if is_admin:
-                s_confirm_key = f"_confirm_del_s_{s_id}"
-                if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete"):
-                    st.session_state[s_confirm_key] = True
-                    st.rerun()
+            with sb2:
+                if is_admin:
+                    s_confirm_key = f"_confirm_del_s_{s_id}"
+                    if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete"):
+                        st.session_state[s_confirm_key] = True
+                        st.rerun()
 
         # subtask delete confirmation
         s_confirm_key = f"_confirm_del_s_{s_id}"
@@ -450,6 +545,11 @@ def show_projects():
             padding-top: 3px !important;
             padding-bottom: 3px !important;
         }
+        /* tighten vertical spacing between rows inside project view */
+        div[data-testid='stVerticalBlock'] > div:has(> div[data-testid='stHorizontalBlock']) {
+            margin-top: 0.05rem !important;
+            margin-bottom: 0.05rem !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -466,6 +566,13 @@ def show_projects():
     st.divider()
 
     projects, deliverables, tasks, subtasks, users, user_map = fetch_hierarchy(show_archived)
+
+    # deadline urgency threshold from settings
+    try:
+        settings = get_settings()
+        threshold = int(settings.get("expiring_threshold_days", 7))
+    except Exception:
+        threshold = 7
 
     if not projects:
         st.info("No projects found. Create a new project to get started.")
@@ -547,7 +654,7 @@ def show_projects():
                         )
                         st.html(d_people if d_people else "<span style='color:#888;font-size:0.82rem'>Owner/Supervisor: —</span>")
                     with h_det:
-                        if st.button("Details", key=f"det_del_{d_id}", use_container_width=True):
+                        if st.button("🔍", key=f"det_del_{d_id}", use_container_width=True):
                             deliverable_details_modal(d, can_edit=is_admin and not d.get("is_archived"))
                     with h_arch:
                         if is_admin and not d.get("is_archived"):
@@ -560,8 +667,16 @@ def show_projects():
                         st.caption("    *No tasks for this deliverable.*")
                     else:
                         for t in deliv_tasks:
-                            _render_task_row(t, subtasks, users, user_map, user_email, is_admin,
-                                             key_prefix=f"d{d_id}")
+                            _render_task_row(
+                                t,
+                                subtasks,
+                                users,
+                                user_map,
+                                user_email,
+                                is_admin,
+                                key_prefix=f"d{d_id}",
+                                threshold=threshold,
+                            )
                             st.divider()
 
                     # Per-deliverable "+ New Task" button
@@ -587,6 +702,14 @@ def show_projects():
                         "General tasks — not linked to a specific deliverable</p>"
                     )
                     for t in unassigned:
-                        _render_task_row(t, subtasks, users, user_map, user_email, is_admin,
-                                         key_prefix=f"p{proj_id}_u")
+                        _render_task_row(
+                            t,
+                            subtasks,
+                            users,
+                            user_map,
+                            user_email,
+                            is_admin,
+                            key_prefix=f"p{proj_id}_u",
+                            threshold=threshold,
+                        )
                         st.divider()

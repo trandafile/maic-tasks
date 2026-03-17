@@ -265,7 +265,7 @@ def _parse_date(value: str | None) -> datetime.date | None:
 
 # ── Modals ────────────────────────────────────────────────────────────────────
 
-@st.dialog("Task Detail", width="large")
+@st.dialog("Task Details", width="large")
 def task_details_modal(task, can_edit, deliverables=None):
     # ── Header: breadcrumb → name → persons ──────────────────────────────────
     proj, deliv, user_map = _fetch_task_ctx(task)
@@ -432,7 +432,7 @@ def task_details_modal(task, can_edit, deliverables=None):
         st.markdown(task.get("notes") or "*No notes provided.*")
 
 
-@st.dialog("Subtask Detail", width="large")
+@st.dialog("Subtask Details", width="large")
 def subtask_details_modal(subtask, can_edit):
     # ── Header: breadcrumb → name → persons ──────────────────────────────────
     parent, proj, deliv, user_map = _fetch_subtask_ctx(subtask)

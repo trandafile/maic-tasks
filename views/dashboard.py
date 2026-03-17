@@ -326,7 +326,7 @@ def _render_item(entry, projects, deliverables, mode, today, threshold, user_map
                     st.error(f"Error: {e}")
 
         can_edit = mode == "todo"
-        if st.button("🔍 Detail", key=f"det_{unique_key}", use_container_width=True):
+        if st.button("🔍 Details", key=f"det_{unique_key}", use_container_width=True):
             if kind == "task":
                 task_details_modal(item, can_edit=can_edit)
             else:

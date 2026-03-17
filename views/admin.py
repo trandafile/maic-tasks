@@ -14,6 +14,7 @@ from db import (
     get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
     PROJECTS_MIGRATION_SQL,
 )
+from utils.md_editor import markdown_editor
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -340,11 +341,11 @@ def _tab_projects():
                             format="DD/MM/YYYY",
                             key=f"p_end_{pid}",
                         )
-                    p_description = st.text_area(
-                        "Project Description (Markdown)",
+                    p_description = markdown_editor(
                         value=proj.get("description") or "",
-                        key=f"p_desc_{pid}",
-                        height=180,
+                        key=f"edit_proj_notes_{pid}",
+                        height=220,
+                        label="📝 Project Description (optional)",
                     )
                     pb1, pb2 = st.columns(2)
                     with pb1:
@@ -408,7 +409,12 @@ def _tab_projects():
             np_funding = st.text_input("Funding Agency")
             np_start   = st.date_input("Start Date", value=None, format="DD/MM/YYYY")
             np_end     = st.date_input("End Date",   value=None, format="DD/MM/YYYY")
-        np_description = st.text_area("Project Description (Markdown)", height=180)
+        np_description = markdown_editor(
+            value="",
+            key="admin_new_proj_notes",
+            height=220,
+            label="📝 Project Description (optional)",
+        )
 
         add_btn = st.form_submit_button("➕ Add Project", type="primary")
         if add_btn:
@@ -426,6 +432,8 @@ def _tab_projects():
                         "description":    np_description.strip() or None,
                         "is_archived":    False,
                     }).execute()
+                    # clear admin new-project description editor
+                    st.session_state.pop("__mde_admin_new_proj_notes", None)
                     st.success(f"Project '{np_name}' created.")
                     st.rerun()
                 except Exception as e:
