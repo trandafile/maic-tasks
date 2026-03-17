@@ -92,6 +92,8 @@ deliverables
 - type TEXT
 - status TEXT
 - deadline DATE
+- owner_email FK -> users.email
+- supervisor_email FK -> users.email
 - is_archived BOOLEAN
 - description TEXT (required by current UI/report flow)
 

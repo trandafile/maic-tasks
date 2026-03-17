@@ -65,6 +65,7 @@ def init_session_state():
 # Import views
 from views.dashboard import show_dashboard
 from views.projects import show_projects
+from views.deliverables import show_deliverables
 from views.calendar import show_calendar
 from views.reports import show_reports
 from views.admin import show_admin
@@ -98,7 +99,7 @@ def main():
         st.markdown(f"**Role:** {str(st.session_state.get('user_role', '')).capitalize()}")
         st.markdown("---")
 
-        pages = ["Dashboard", "Active Tasks", "Calendar", "Reports"]
+        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports"]
 
         if st.session_state.get('user_role') == 'admin':
             pages.append("Admin Panel")
@@ -122,6 +123,8 @@ def main():
         show_dashboard()
     elif page == "Active Tasks":
         show_projects()
+    elif page == "Deliverables":
+        show_deliverables()
     elif page == "Calendar":
         show_calendar()
     elif page == "Reports":
