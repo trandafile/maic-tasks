@@ -141,7 +141,7 @@ def _render_people_pills(owner_email: str | None, sup_email: str | None, users_m
     return pills
 
 
-def _render_task_row(t: dict, users_meta: dict, key_prefix: str = "rp_t"):
+def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_t"):
     seq_id   = t.get("sequence_id") or f"T-{t['id']}"
     name     = t.get("name", "")
     status   = t.get("status", "Not started")
@@ -167,10 +167,10 @@ def _render_task_row(t: dict, users_meta: dict, key_prefix: str = "rp_t"):
         st.html(_deadline_html(deadline))
     with c_action:
         if st.button("Details", key=f"{key_prefix}_{t['id']}", use_container_width=True):
-            task_details_modal(t, can_edit=False)
+            task_details_modal(t, can_edit=can_edit)
 
 
-def _render_subtask_row(s: dict, users_meta: dict, key_prefix: str = "rp_s"):
+def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_s"):
     s_name   = s.get("name", "")
     s_status = s.get("status", "Not started")
     s_dead   = s.get("deadline")
@@ -192,7 +192,7 @@ def _render_subtask_row(s: dict, users_meta: dict, key_prefix: str = "rp_s"):
         st.html(_deadline_html(s_dead))
     with c_action:
         if st.button("Details", key=f"{key_prefix}_{s['id']}", use_container_width=True):
-            subtask_details_modal(s, can_edit=False)
+            subtask_details_modal(s, can_edit=can_edit)
 
 def _fetch():
     try:
@@ -212,6 +212,7 @@ def _render_main_report():
     user_role  = st.session_state.get("user_role")
     user_email = st.session_state.get("user_email")
     rbac_email = None if user_role == "admin" else user_email
+    is_admin   = user_role == "admin"
 
     projects, deliverables, tasks, subtasks, users = _fetch()
     if not projects:
@@ -351,14 +352,22 @@ def _render_main_report():
                     st.divider()
                     if d_tasks:
                         for t in d_tasks:
-                            _render_task_row(t, users_meta, key_prefix=f"rp_t_{did}")
+                            can_edit_t = is_admin or (
+                                t.get("owner_email") == user_email
+                                or t.get("supervisor_email") == user_email
+                            )
+                            _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_{did}")
                             t_subtasks = [
                                 s for s in subtasks
                                 if s.get("task_id") == t.get("id")
                                 and not s.get("is_archived", False)
                             ]
                             for s in t_subtasks:
-                                _render_subtask_row(s, users_meta, key_prefix=f"rp_s_{did}_{t.get('id')}")
+                                can_edit_s = is_admin or (
+                                    s.get("owner_email") == user_email
+                                    or s.get("supervisor_email") == user_email
+                                )
+                                _render_subtask_row(s, users_meta, can_edit=can_edit_s, key_prefix=f"rp_s_{did}_{t.get('id')}")
                     else:
                         st.caption("No tasks matching the filters.")
 
@@ -376,14 +385,22 @@ def _render_main_report():
                 st.html("<p style='font-style:italic;color:#888;font-size:0.85rem;margin:0 0 8px 0'>"
                         "General tasks — not linked to a specific deliverable</p>")
                 for t in unassigned:
-                    _render_task_row(t, users_meta, key_prefix=f"rp_t_un_{pid}")
+                    can_edit_t = is_admin or (
+                        t.get("owner_email") == user_email
+                        or t.get("supervisor_email") == user_email
+                    )
+                    _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_un_{pid}")
                     t_subtasks = [
                         s for s in subtasks
                         if s.get("task_id") == t.get("id")
                         and not s.get("is_archived", False)
                     ]
                     for s in t_subtasks:
-                        _render_subtask_row(s, users_meta, key_prefix=f"rp_s_un_{pid}_{t.get('id')}")
+                        can_edit_s = is_admin or (
+                            s.get("owner_email") == user_email
+                            or s.get("supervisor_email") == user_email
+                        )
+                        _render_subtask_row(s, users_meta, can_edit=can_edit_s, key_prefix=f"rp_s_un_{pid}_{t.get('id')}")
 
         st.divider()
 
@@ -914,7 +931,7 @@ def _render_detailed_report():
         "Cancelled":   "#B71C1C",
     }
 
-    def _render_task_block(t: dict):
+    def _render_task_block(t: dict, can_edit: bool):
         seq     = t.get("sequence_id") or f"T-{t['id']}"
         status  = t.get("status", "Not started")
         prio    = (t.get("priority") or "none").lower()
@@ -1055,67 +1072,80 @@ def _render_detailed_report():
 
         st.divider()
 
+        is_admin = st.session_state.get("user_role") == "admin"
+        user_email = st.session_state.get("user_email")
+
         for d in sorted_delivs:
             did     = d["id"]
             d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
-        total_d = len(d_tasks)
-        done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
-        prog    = done_d / total_d if total_d > 0 else 0.0
-        d_owner = d.get("owner_email")
-        d_sup   = d.get("supervisor_email")
-        d_pills = ""
-        if d_owner:
-            u = user_map.get(d_owner, {"name": d_owner, "avatar_color": "#534AB7"})
-            d_pills += person_pill_html(u.get("name", d_owner), u.get("avatar_color", "#534AB7"), role="owner", compact=True)
-        if d_sup and d_sup != d_owner:
-            u = user_map.get(d_sup, {"name": d_sup, "avatar_color": "#BA7517"})
-            d_pills += person_pill_html(u.get("name", d_sup), u.get("avatar_color", "#BA7517"), role="sup", compact=True)
+            d_tasks = sort_tasks_by_deadline(d_tasks)
+            total_d = len(d_tasks)
+            done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
+            prog    = done_d / total_d if total_d > 0 else 0.0
+            d_owner = d.get("owner_email")
+            d_sup   = d.get("supervisor_email")
+            d_pills = ""
+            if d_owner:
+                u = user_map.get(d_owner, {"name": d_owner, "avatar_color": "#534AB7"})
+                d_pills += person_pill_html(u.get("name", d_owner), u.get("avatar_color", "#534AB7"), role="owner", compact=True)
+            if d_sup and d_sup != d_owner:
+                u = user_map.get(d_sup, {"name": d_sup, "avatar_color": "#BA7517"})
+                d_pills += person_pill_html(u.get("name", d_sup), u.get("avatar_color", "#BA7517"), role="sup", compact=True)
 
-        dh1, dh_btn = st.columns([8, 1])
-        with dh1:
-            st.html(
-                f"<div style='background:#F5F5F5;border-radius:6px;padding:10px 16px;margin:8px 0'>"
-                f"<span style='font-weight:700;font-size:1.05rem'>{d.get('name','')}</span>"
-                f"&nbsp;<span style='font-style:italic;color:#888;font-size:0.85rem'>{d.get('type','')}</span>"
-                f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
-                f"Deadline: {fmt_date(d.get('deadline'))}</span>"
-                f"<div style='margin-top:4px'>{d_pills if d_pills else '<span style=\'color:#888;font-size:0.82rem\'>Owner/Supervisor: —</span>'}</div>"
-                f"</div>"
-            )
-        with dh_btn:
-            if st.button("Details", key=f"dr_dd_{did}", use_container_width=True):
-                deliverable_details_modal(
-                    d,
-                    can_edit=False,
-                    breadcrumb=f"Reports / Detailed Report / {proj.get('name', '-') } / Deliverable",
+            dh1, dh_btn = st.columns([8, 1])
+            with dh1:
+                st.html(
+                    f"<div style='background:#F5F5F5;border-radius:6px;padding:10px 16px;margin:8px 0'>"
+                    f"<span style='font-weight:700;font-size:1.05rem'>{d.get('name','')}</span>"
+                    f"&nbsp;<span style='font-style:italic;color:#888;font-size:0.85rem'>{d.get('type','')}</span>"
+                    f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
+                    f"Deadline: {fmt_date(d.get('deadline'))}</span>"
+                    f"<div style='margin-top:4px'>{d_pills if d_pills else '<span style=\'color:#888;font-size:0.82rem\'>Owner/Supervisor: —</span>'}</div>"
+                    f"</div>"
                 )
-        if d.get("description"):
-            st.markdown(
-                "<div style='background:#FAFAFA;border-radius:4px;padding:10px 16px;"
-                "margin:4px 0 8px 0;border-left:3px solid #ddd;font-size:0.92rem'>",
-                unsafe_allow_html=True,
-            )
-            st.markdown(d.get("description"))
-            st.markdown("</div>", unsafe_allow_html=True)
-        st.progress(prog)
-        st.caption(f"{done_d} / {total_d} tasks completed")
+            with dh_btn:
+                if st.button("Details", key=f"dr_dd_{did}", use_container_width=True):
+                    deliverable_details_modal(
+                        d,
+                        can_edit=is_admin,
+                        breadcrumb=f"Reports / Detailed Report / {proj.get('name', '-') } / Deliverable",
+                    )
+            if d.get("description"):
+                st.markdown(
+                    "<div style='background:#FAFAFA;border-radius:4px;padding:10px 16px;"
+                    "margin:4px 0 8px 0;border-left:3px solid #ddd;font-size:0.92rem'>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown(d.get("description"))
+                st.markdown("</div>", unsafe_allow_html=True)
+            st.progress(prog)
+            st.caption(f"{done_d} / {total_d} tasks completed")
 
-        if d_tasks:
-            for t in sorted(d_tasks, key=lambda t: t.get("sort_order") or 0):
-                _render_task_block(t)
-        else:
-            st.caption("No tasks in this deliverable.")
+            if d_tasks:
+                for t in d_tasks:
+                    can_edit_t = is_admin or (
+                        t.get("owner_email") == user_email
+                        or t.get("supervisor_email") == user_email
+                    )
+                    _render_task_block(t, can_edit=can_edit_t)
+            else:
+                st.caption("No tasks in this deliverable.")
 
-    # ── Generic tasks (no deliverable) ────────────────────────────────────────
+        # ── Generic tasks (no deliverable) ─────────────────────────────────────
         no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
-    if no_deliv:
-        st.html(
-            "<div style='border:2px dashed #cccccc;border-radius:6px;padding:10px 16px;margin:16px 0;'>"
-            "<span style='font-weight:700;color:#888;font-size:0.95rem'>"
-            "GENERIC TASKS (NO DELIVERABLE)</span></div>"
-        )
-        for t in sorted(no_deliv, key=lambda t: t.get("sort_order") or 0):
-            _render_task_block(t)
+        no_deliv = sort_tasks_by_deadline(no_deliv)
+        if no_deliv:
+            st.html(
+                "<div style='border:2px dashed #cccccc;border-radius:6px;padding:10px 16px;margin:16px 0;'>"
+                "<span style='font-weight:700;color:#888;font-size:0.95rem'>"
+                "GENERIC TASKS (NO DELIVERABLE)</span></div>"
+            )
+            for t in no_deliv:
+                can_edit_t = is_admin or (
+                    t.get("owner_email") == user_email
+                    or t.get("supervisor_email") == user_email
+                )
+                _render_task_block(t, can_edit=can_edit_t)
 
 
 # ─── Main entry point ──────────────────────────────────────────────────────────

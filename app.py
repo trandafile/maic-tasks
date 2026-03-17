@@ -98,7 +98,7 @@ def main():
         st.markdown(f"**Role:** {str(st.session_state.get('user_role', '')).capitalize()}")
         st.markdown("---")
 
-        pages = ["Dashboard", "Projects", "Calendar", "Reports"]
+        pages = ["Dashboard", "Active Tasks", "Calendar", "Reports"]
 
         if st.session_state.get('user_role') == 'admin':
             pages.append("Admin Panel")
@@ -120,7 +120,7 @@ def main():
     
     if page == "Dashboard":
         show_dashboard()
-    elif page == "Projects":
+    elif page == "Active Tasks":
         show_projects()
     elif page == "Calendar":
         show_calendar()

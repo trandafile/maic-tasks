@@ -346,7 +346,9 @@ def _render_item(entry, projects, deliverables, mode, today, threshold, user_map
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-        can_edit = mode == "todo"
+        # On the dashboard, the user always sees items they own or supervise,
+        # so allow editing in both To Do and To Review.
+        can_edit = True
         if st.button("🔍 Details", key=f"det_{unique_key}", use_container_width=True):
             if kind == "task":
                 task_details_modal(item, can_edit=can_edit)

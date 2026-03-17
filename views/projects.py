@@ -44,7 +44,7 @@ def _priority_badge(priority):
 
 # ─── Data fetching ──────────────────────────────────────────────────────────────
 
-def fetch_hierarchy(show_archived=False):
+def fetch_hierarchy(show_archived=False, user_email=None, is_admin=False):
     try:
         pq = supabase.table("projects").select("*")
         if not show_archived:
@@ -68,6 +68,26 @@ def fetch_hierarchy(show_archived=False):
 
         users = supabase.table("users").select("email, name, avatar_color").eq("is_approved", True).execute().data
         user_map = {u["email"]: u for u in (users or [])}
+
+        # RBAC: for non-admin users, only keep projects where they are involved.
+        if not is_admin and user_email:
+            tasks_by_id = {t["id"]: t for t in (tasks or [])}
+            involved_project_ids = {
+                t.get("project_id")
+                for t in (tasks or [])
+                if t.get("project_id")
+                and (
+                    t.get("owner_email") == user_email
+                    or t.get("supervisor_email") == user_email
+                )
+            }
+            involved_project_ids.update(
+                tasks_by_id.get(s.get("task_id"), {}).get("project_id")
+                for s in (subtasks or [])
+                if (s.get("owner_email") == user_email or s.get("supervisor_email") == user_email)
+                and tasks_by_id.get(s.get("task_id"), {}).get("project_id")
+            )
+            projects = [p for p in (projects or []) if p.get("id") in involved_project_ids]
 
         return projects, deliverables, tasks, subtasks, users, user_map
     except Exception as e:
@@ -347,7 +367,8 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
     is_owner  = t.get("owner_email") == user_email
     is_sup    = t.get("supervisor_email") == user_email
     can_edit  = is_admin or is_owner or is_sup
-    opacity   = "1" if can_edit else "0.45"
+    readonly_for_user = (not is_admin) and (not can_edit)
+    opacity   = "1" if can_edit else "0.35" if readonly_for_user else "0.45"
     seq_id    = t.get("sequence_id") or f"T-{t_id}"
     status    = t.get("status", "Not started")
     priority  = (t.get("priority") or "none").lower()
@@ -356,28 +377,29 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
     owner_e = t.get("owner_email")
     sup_e   = t.get("supervisor_email")
     pills   = ""
-    if owner_e:
-        u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
-        pills += person_pill_html(
-            u.get("name", owner_e),
-            u.get("avatar_color", "#534AB7"),
-            role="owner",
-            compact=False,
-        )
-    if sup_e and sup_e != owner_e:
-        u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
-        pills += person_pill_html(
-            u.get("name", sup_e),
-            u.get("avatar_color", "#BA7517"),
-            role="sup",
-            compact=False,
-        )
+    if not readonly_for_user:
+        if owner_e:
+            u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
+            pills += person_pill_html(
+                u.get("name", owner_e),
+                u.get("avatar_color", "#534AB7"),
+                role="owner",
+                compact=False,
+            )
+        if sup_e and sup_e != owner_e:
+            u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
+            pills += person_pill_html(
+                u.get("name", sup_e),
+                u.get("avatar_color", "#BA7517"),
+                role="sup",
+                compact=False,
+            )
 
-    dl_html = _deadline_html(t.get("deadline"), status, threshold)
+    dl_html = "" if readonly_for_user else _deadline_html(t.get("deadline"), status, threshold)
     s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
     p_fg, p_bg = PRIORITY_COLOURS.get(priority, ("#888", "#f0f0f0"))
     s_badge = _badge(status, s_fg, s_bg)
-    p_badge = _badge(priority, p_fg, p_bg)
+    p_badge = _badge(priority, p_fg, p_bg) if not readonly_for_user else ""
 
     col_html, col_btns = st.columns([6, 4])
     with col_html:
@@ -405,19 +427,22 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
             """
         )
     with col_btns:
-        b1, b2, b3 = st.columns([2.5, 2, 1])
-        with b1:
-            if st.button("Details", key=f"{key_prefix}_det_{t_id}", use_container_width=True):
-                task_details_modal(t, can_edit)
-        with b2:
-            if st.button("+ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit, use_container_width=True):
-                add_subtask_modal(t_id, users)
-        with b3:
-            if is_admin:
-                confirm_key = f"_confirm_del_t_{t_id}"
-                if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete", use_container_width=True):
-                    st.session_state[confirm_key] = True
-                    st.rerun()
+        if readonly_for_user:
+            st.write("")  # no actions for non-involved users
+        else:
+            b1, b2, b3 = st.columns([2.5, 2, 1])
+            with b1:
+                if st.button("Details", key=f"{key_prefix}_det_{t_id}", use_container_width=True):
+                    task_details_modal(t, can_edit)
+            with b2:
+                if st.button("+ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit, use_container_width=True):
+                    add_subtask_modal(t_id, users)
+            with b3:
+                if is_admin:
+                    confirm_key = f"_confirm_del_t_{t_id}"
+                    if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete", use_container_width=True):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
 
     # ── Delete confirmation (inline, full width) ─────────────────────────────
     confirm_key = f"_confirm_del_t_{t_id}"
@@ -444,31 +469,33 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
         s_id        = s["id"]
         s_is_owner  = s.get("owner_email") == user_email
         s_can_edit  = is_admin or s_is_owner or (s.get("supervisor_email") == user_email)
-        s_opacity   = "1" if s_can_edit else "0.45"
+        s_readonly  = (not is_admin) and (not s_can_edit)
+        s_opacity   = "1" if s_can_edit else "0.35" if s_readonly else "0.45"
         s_status    = s.get("status", "Not started")
         s_name      = s.get("name", "")
 
         s_owner_e = s.get("owner_email")
         s_sup_e   = s.get("supervisor_email")
         s_pills   = ""
-        if s_owner_e:
-            u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#534AB7"})
-            s_pills += person_pill_html(
-                u.get("name", s_owner_e),
-                u.get("avatar_color", "#534AB7"),
-                role="owner",
-                compact=False,
-            )
-        if s_sup_e and s_sup_e != s_owner_e:
-            u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#BA7517"})
-            s_pills += person_pill_html(
-                u.get("name", s_sup_e),
-                u.get("avatar_color", "#BA7517"),
-                role="sup",
-                compact=False,
-            )
+        if not s_readonly:
+            if s_owner_e:
+                u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#534AB7"})
+                s_pills += person_pill_html(
+                    u.get("name", s_owner_e),
+                    u.get("avatar_color", "#534AB7"),
+                    role="owner",
+                    compact=False,
+                )
+            if s_sup_e and s_sup_e != s_owner_e:
+                u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#BA7517"})
+                s_pills += person_pill_html(
+                    u.get("name", s_sup_e),
+                    u.get("avatar_color", "#BA7517"),
+                    role="sup",
+                    compact=False,
+                )
 
-        s_dl_html = _deadline_html(s.get("deadline"), s_status, threshold)
+        s_dl_html = "" if s_readonly else _deadline_html(s.get("deadline"), s_status, threshold)
         ss_fg, ss_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
         s_badge = _badge(s_status, ss_fg, ss_bg)
 
@@ -496,16 +523,19 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
                 """
             )
         with scol_btns:
-            sb1, sb2 = st.columns([3, 1])
-            with sb1:
-                if st.button("Details", key=f"{key_prefix}_vistaS_{s_id}", use_container_width=True):
-                    subtask_details_modal(s, s_can_edit)
-            with sb2:
-                if is_admin:
-                    s_confirm_key = f"_confirm_del_s_{s_id}"
-                    if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete", use_container_width=True):
-                        st.session_state[s_confirm_key] = True
-                        st.rerun()
+            if s_readonly:
+                st.write("")
+            else:
+                sb1, sb2 = st.columns([3, 1])
+                with sb1:
+                    if st.button("Details", key=f"{key_prefix}_vistaS_{s_id}", use_container_width=True):
+                        subtask_details_modal(s, s_can_edit)
+                with sb2:
+                    if is_admin:
+                        s_confirm_key = f"_confirm_del_s_{s_id}"
+                        if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete", use_container_width=True):
+                            st.session_state[s_confirm_key] = True
+                            st.rerun()
 
         # subtask delete confirmation
         s_confirm_key = f"_confirm_del_s_{s_id}"
@@ -530,7 +560,7 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
 # ─── Main view ──────────────────────────────────────────────────────────────────
 
 def show_projects():
-    st.title("Projects & Workspace")
+    st.title("Active Tasks")
 
     # Compact row rhythm for dense task/subtask tables in this page.
     st.markdown(
@@ -565,7 +595,14 @@ def show_projects():
 
     st.divider()
 
-    projects, deliverables, tasks, subtasks, users, user_map = fetch_hierarchy(show_archived)
+    user_email = st.session_state.get('user_email')
+    is_admin   = st.session_state.get('user_role') == 'admin'
+
+    projects, deliverables, tasks, subtasks, users, user_map = fetch_hierarchy(
+        show_archived,
+        user_email=user_email,
+        is_admin=is_admin,
+    )
 
     # deadline urgency threshold from settings
     try:
@@ -575,11 +612,8 @@ def show_projects():
         threshold = 7
 
     if not projects:
-        st.info("No projects found. Create a new project to get started.")
+        st.info("No active tasks found. Create a new task to get started.")
         return
-
-    user_email = st.session_state.get('user_email')
-    is_admin   = st.session_state.get('user_role') == 'admin'
 
     for proj in projects:
         proj_id   = proj["id"]
