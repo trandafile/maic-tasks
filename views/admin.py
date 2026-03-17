@@ -581,6 +581,22 @@ def _tab_settings():
                 st.code(SETTINGS_MIGRATION_SQL, language="sql")
 
     st.divider()
+    st.subheader("Google Sheets Backup")
+    st.caption("Copy all main tables from Supabase into the configured Google Sheet.")
+
+    if st.button("☁️ Run Backup to Google Sheets", type="primary", use_container_width=True):
+        try:
+            from utils.sync_to_sheets import backup_supabase_to_sheets
+            with st.spinner("Sync in progress..."):
+                ok, msg = backup_supabase_to_sheets()
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+        except Exception as e:
+            st.error(f"Backup error: {e}")
+
+    st.divider()
     st.subheader("Test Email")
     admin_email = st.session_state.get("user_email", "")
     test_target = st.text_input("Test email recipient", value=admin_email)
