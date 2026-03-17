@@ -2,6 +2,7 @@ import streamlit as st
 import datetime
 from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal
+from utils.notifications import send_task_assigned
 
 # ─── Status / Priority badge helpers ───────────────────────────────────────────
 STATUS_COLOURS = {

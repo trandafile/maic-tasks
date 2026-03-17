@@ -62,10 +62,14 @@ def generate_report_pdf(
 
     elements = []
     
-    # Helper to filter tasks
+    # Helper to filter tasks (includes RBAC)
     def task_matches(t):
         if t.get("is_archived"):
             return False
+        # RBAC filter: user sees only tasks where they are owner or supervisor
+        if rbac_email:
+            if t.get("owner_email") != rbac_email and t.get("supervisor_email") != rbac_email:
+                return False
         if filter_proj and t.get("project_id") != filter_proj:
             return False
         if filter_user:
@@ -82,7 +86,16 @@ def generate_report_pdf(
                 return False
         return True
 
-    proj_list = [p for p in projects if filter_proj is None or p["id"] == filter_proj]
+    # RBAC-aware project list: only projects that have visible tasks
+    if rbac_email:
+        visible_proj_ids = {t["project_id"] for t in tasks if task_matches(t)}
+        proj_list = [
+            p for p in projects
+            if (filter_proj is None or p["id"] == filter_proj)
+            and p["id"] in visible_proj_ids
+        ]
+    else:
+        proj_list = [p for p in projects if filter_proj is None or p["id"] == filter_proj]
 
     TABLE_HEADER = ["ID", "Nome Task", "Stato", "Priorità", "Owner", "Scadenza"]
     # Usable width ≈ A4 – margins = 170mm
@@ -104,7 +117,14 @@ def generate_report_pdf(
         elements.append(Paragraph("  ·  ".join(capt_parts), caption))
         elements.append(Spacer(1, 5))
 
-        proj_deliverables = [d for d in deliverables if d.get("project_id") == pid]
+        proj_deliverables = [
+            d for d in deliverables
+            if d.get("project_id") == pid
+            and (rbac_email is None or any(
+                t.get("deliverable_id") == d["id"] and task_matches(t)
+                for t in tasks
+            ))
+        ]
 
         if proj_deliverables:
             elements.append(Paragraph("DELIVERABLES", label))
