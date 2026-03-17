@@ -8,7 +8,7 @@ Due tab: "To Do" (owner) e "To Review" (supervisor, non owner).
 import datetime
 import streamlit as st
 from core.supabase_client import supabase
-from utils.modals import task_details_modal, subtask_details_modal
+from utils.modals import task_details_modal, subtask_details_modal, person_pill_html
 
 # ── Costanti badge ────────────────────────────────────────────────────────────
 _STATUS_BADGE = {
@@ -53,7 +53,10 @@ def _fetch_data():
     st_res       = supabase.table("subtasks").select("*").eq("is_archived", False).execute()
     all_subtasks = st_res.data or []
 
-    return threshold, projects, deliverables, all_tasks, all_subtasks
+    u_res    = supabase.table("users").select("email, name, avatar_color").eq("is_approved", True).execute()
+    user_map = {u["email"]: u for u in (u_res.data or [])}
+
+    return threshold, projects, deliverables, all_tasks, all_subtasks, user_map
 
 
 # ── Leaf-rule builder ─────────────────────────────────────────────────────────
@@ -161,24 +164,26 @@ def _deadline_group(deadline_str, today, threshold):
 
     delta = (dl - today).days
     if delta < 0:
+        days_str = f"{abs(delta)} day{'s' if abs(delta) != 1 else ''}"
         html = (f"<span style='color:#d93025;font-size:12px;'>"
-                f"Scaduto {abs(delta)} giorni fa</span>")
+                f"Overdue by {days_str}</span>")
         return "overdue", html
     elif delta <= threshold:
+        days_str = f"{delta} day{'s' if delta != 1 else ''}"
         html = (f"<span style='color:#e37400;font-size:12px;'>"
-                f"Scade tra {delta} giorni</span>")
+                f"Due in {days_str}</span>")
         return "soon", html
     else:
         html = (f"<span style='color:#888;font-size:12px;'>"
-                f"Scade il {dl.strftime('%d/%m/%Y')}</span>")
+                f"Due on {dl.strftime('%Y/%m/%d')}</span>")
         return "future", html
 
 
 def _render_group_header(group_key, count, threshold):
     cfg = {
-        "overdue": ("🔴", "Scaduti",                        "#d93025"),
-        "soon":    ("🟠", f"In scadenza entro {threshold} giorni", "#e37400"),
-        "future":  ("⚫", "Prossimamente",                   "#888888"),
+        "overdue": ("🔴", "Overdue",                        "#d93025"),
+        "soon":    ("🟠", f"Due within {threshold} days",   "#e37400"),
+        "future":  ("⚫", "Upcoming",                        "#888888"),
     }
     dot, label, color = cfg[group_key]
     st.markdown(
@@ -190,7 +195,7 @@ def _render_group_header(group_key, count, threshold):
     )
 
 
-def _render_item(entry, projects, deliverables, mode, today, threshold):
+def _render_item(entry, projects, deliverables, mode, today, threshold, user_map=None):
     """Renderizza una singola card item + pulsanti azione."""
     kind         = entry["kind"]
     item         = entry["item"]
@@ -210,7 +215,7 @@ def _render_item(entry, projects, deliverables, mode, today, threshold):
     proj         = projects.get(proj_id, {})
     proj_acronym = proj.get("acronym") or proj.get("name", "?")
     deliv        = deliverables.get(deliv_id)
-    deliv_name   = deliv["name"] if deliv else "<em>task generico</em>"
+    deliv_name   = deliv["name"] if deliv else "<em>generic task</em>"
 
     if kind == "subtask" and parent_task:
         breadcrumb = (
@@ -261,6 +266,21 @@ def _render_item(entry, projects, deliverables, mode, today, threshold):
             "✅ Subtask completati — chiudi il task?</span>"
         )
 
+    # ── Person pills (owner + supervisor) ────────────────────────────────────
+    persons_html = ""
+    umap = user_map or {}
+    owner_e = item.get("owner_email")
+    sup_e   = item.get("supervisor_email")
+    if owner_e:
+        u = umap.get(owner_e, {"name": owner_e, "avatar_color": "#888888"})
+        persons_html += person_pill_html(u.get("name", owner_e), u.get("avatar_color", "#888888"))
+    if sup_e and sup_e != owner_e:
+        u = umap.get(sup_e, {"name": sup_e, "avatar_color": "#888888"})
+        persons_html += person_pill_html(u.get("name", sup_e), u.get("avatar_color", "#888888"), "(sup)")
+    persons_row = (
+        f"<div style='margin-top:5px;'>{persons_html}</div>" if persons_html else ""
+    )
+
     # ── Scadenza ──────────────────────────────────────────────────────────────
     group_key, deadline_html = _deadline_group(item.get("deadline"), today, threshold)
 
@@ -280,12 +300,13 @@ def _render_item(entry, projects, deliverables, mode, today, threshold):
       <div style='margin-bottom:4px;'>
         {type_badge}<strong style='font-size:14px;'>{item_name}</strong>{close_badge}
       </div>
-      <div style='margin-bottom:7px;'>{breadcrumb}</div>
+      <div style='margin-bottom:5px;'>{breadcrumb}</div>
       <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>
         {status_badge}
         {prio_badge}
         {deadline_html}
       </div>
+      {persons_row}
     </div>
     """
 
@@ -295,7 +316,7 @@ def _render_item(entry, projects, deliverables, mode, today, threshold):
     with col_actions:
         # "Segna completato" — solo To Do, solo se non già Completed
         if mode == "todo" and status != "Completed":
-            if st.button("✓ Completato", key=f"done_{unique_key}",
+            if st.button("✓ Mark complete", key=f"done_{unique_key}",
                          use_container_width=True, type="secondary"):
                 try:
                     update = {"status": "Completed"}
@@ -306,11 +327,11 @@ def _render_item(entry, projects, deliverables, mode, today, threshold):
                         supabase.table("subtasks").update(update).eq("id", item_id).execute()
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Errore: {e}")
+                    st.error(f"Error: {e}")
 
         # "Dettaglio" — apre il modal esistente
         can_edit = (mode == "todo")
-        if st.button("🔍 Dettaglio", key=f"det_{unique_key}", use_container_width=True):
+        if st.button("🔍 Detail", key=f"det_{unique_key}", use_container_width=True):
             if kind == "task":
                 task_details_modal(item, can_edit=can_edit)
             else:
@@ -319,10 +340,10 @@ def _render_item(entry, projects, deliverables, mode, today, threshold):
 
 # ── Render tab ────────────────────────────────────────────────────────────────
 
-def _render_tab(entries, projects, deliverables, mode, today, threshold):
+def _render_tab(entries, projects, deliverables, mode, today, threshold, user_map=None):
     """Raggruppa le entry per urgenza e renderizza ogni gruppo."""
     if not entries:
-        st.info("Nessun elemento attivo. ✅")
+        st.info("No active items. ✅")
         return
 
     overdue, soon, future = [], [], []
@@ -340,7 +361,7 @@ def _render_tab(entries, projects, deliverables, mode, today, threshold):
             continue
         _render_group_header(group_key, len(group_entries), threshold)
         for entry in group_entries:
-            _render_item(entry, projects, deliverables, mode, today, threshold)
+            _render_item(entry, projects, deliverables, mode, today, threshold, user_map=user_map)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -354,7 +375,7 @@ def show_dashboard():
         return
 
     try:
-        threshold, projects, deliverables, all_tasks, all_subtasks = _fetch_data()
+        threshold, projects, deliverables, all_tasks, all_subtasks, user_map = _fetch_data()
     except Exception as e:
         st.error(f"Errore nel caricamento dei dati: {e}")
         return
@@ -370,11 +391,11 @@ def show_dashboard():
     ])
 
     with tab1:
-        _render_tab(todo_entries, projects, deliverables, "todo", today, threshold)
+        _render_tab(todo_entries, projects, deliverables, "todo", today, threshold, user_map=user_map)
 
     with tab2:
         st.caption(
-            "Questi task sono assegnati ad altri. "
-            "Il tuo ruolo è controllare, sbloccare o approvare."
+            "These tasks are assigned to others. "
+            "Your role is to monitor, unblock, or approve."
         )
-        _render_tab(review_entries, projects, deliverables, "review", today, threshold)
+        _render_tab(review_entries, projects, deliverables, "review", today, threshold, user_map=user_map)

@@ -1,7 +1,8 @@
 import streamlit as st
 import datetime
 from core.supabase_client import supabase
-from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal
+from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html
+from db import delete_task_cascade
 from utils.notifications import send_task_assigned
 
 # ─── Status / Priority badge helpers ───────────────────────────────────────────
@@ -62,7 +63,7 @@ def fetch_hierarchy(show_archived=False):
             sq = sq.eq("is_archived", False)
         subtasks = sq.execute().data
 
-        users = supabase.table("users").select("email, name").eq("is_approved", True).execute().data
+        users = supabase.table("users").select("email, name, avatar_color").eq("is_approved", True).execute().data
 
         return projects, deliverables, tasks, subtasks, users
     except Exception as e:
@@ -72,15 +73,15 @@ def fetch_hierarchy(show_archived=False):
 
 # ─── Modals ─────────────────────────────────────────────────────────────────────
 
-@st.dialog("Aggiungi Nuovo Deliverable")
+@st.dialog("Add New Deliverable")
 def add_deliverable_modal(project_id):
     with st.form("new_deliv_form"):
-        name     = st.text_input("Nome Deliverable*")
-        type_val = st.selectbox("Tipologia", ["paper", "layout", "prototype"])
-        deadline = st.date_input("Scadenza", value=None)
-        if st.form_submit_button("Crea Deliverable", type="primary"):
+        name     = st.text_input("Deliverable Name*")
+        type_val = st.selectbox("Type", ["paper", "layout", "prototype"])
+        deadline = st.date_input("Deadline", value=None, format="YYYY/MM/DD")
+        if st.form_submit_button("Create Deliverable", type="primary"):
             if not name:
-                st.error("Nome obbligatorio.")
+                st.error("Name is required.")
                 return
             try:
                 supabase.table("deliverables").insert({
@@ -88,24 +89,24 @@ def add_deliverable_modal(project_id):
                     "status": "Not started",
                     "deadline": str(deadline) if deadline else None
                 }).execute()
-                st.success("Creato!")
+                st.success("Created!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Errore: {e}")
+                st.error(f"Error: {e}")
 
 
-@st.dialog("Aggiungi Nuovo Task")
+@st.dialog("Add New Task")
 def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None):
     """Generic add-task modal; if prefill_deliverable_id is set that deliverable
     is pre-selected in the dropdown."""
     with st.form("new_task_form"):
-        name = st.text_input("Titolo del Task*")
+        name = st.text_input("Task Title*")
 
-        deliv_options = {"Nessuno": None}
+        deliv_options = {"None": None}
         deliv_options.update({d["name"]: d["id"] for d in deliverables if d["project_id"] == project_id})
 
         # Pre-select deliverable if requested
-        prefill_name = "Nessuno"
+        prefill_name = "None"
         if prefill_deliverable_id:
             for k, v in deliv_options.items():
                 if v == prefill_deliverable_id:
@@ -113,7 +114,7 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
                     break
 
         sel_deliv = st.selectbox(
-            "Collega a Deliverable",
+            "Link to Deliverable",
             list(deliv_options.keys()),
             index=list(deliv_options.keys()).index(prefill_name)
         )
@@ -125,23 +126,23 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
         with c1:
             owner    = st.selectbox("Owner*", list(user_opts.keys()),
                                      index=list(user_opts.values()).index(me) if me in user_opts.values() else 0)
-            priority = st.selectbox("Priorità", ["none", "low", "medium", "high", "urgent"], index=2)
+            priority = st.selectbox("Priority", ["none", "low", "medium", "high", "urgent"], index=2)
         with c2:
-            supervisor = st.selectbox("Supervisor", ["Nessuno"] + list(user_opts.keys()))
-            deadline   = st.date_input("Scadenza", value=None)
+            supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
+            deadline   = st.date_input("Deadline", value=None, format="YYYY/MM/DD")
 
-        notes = st.text_area("Note/Descrizione (Markdown)", height=120)
+        notes = st.text_area("Notes/Description (Markdown)", height=120)
 
-        if st.form_submit_button("Crea Task", type="primary"):
+        if st.form_submit_button("Create Task", type="primary"):
             if not name:
-                st.error("Il titolo è obbligatorio.")
+                st.error("Title is required.")
                 return
             new_task = {
                 "project_id":     project_id,
                 "deliverable_id": deliv_options[sel_deliv],
                 "name":           name,
                 "owner_email":    user_opts[owner],
-                "supervisor_email": user_opts[supervisor] if supervisor != "Nessuno" else None,
+                "supervisor_email": user_opts[supervisor] if supervisor != "None" else None,
                 "status":         "Not started",
                 "priority":       priority,
                 "deadline":       str(deadline) if deadline else None,
@@ -161,21 +162,21 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
                 proj_name = p_res.data[0].get("name", "") if p_res.data else ""
                 enriched_task = {**new_task, "id": t_id, "sequence_id": seq_id, "project_name": proj_name}
                 owner_email = user_opts[owner]
-                sup_email   = user_opts[supervisor] if supervisor != "Nessuno" else None
+                sup_email   = user_opts[supervisor] if supervisor != "None" else None
                 send_task_assigned(enriched_task, owner_email, assigner)
                 if sup_email and sup_email != owner_email:
                     send_task_assigned(enriched_task, sup_email, assigner)
 
-                st.success("Creato!")
+                st.success("Created!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Errore: {e}")
+                st.error(f"Error: {e}")
 
 
-@st.dialog("Aggiungi Subtask")
+@st.dialog("Add Subtask")
 def add_subtask_modal(task_id, users):
     with st.form("new_subtask_form"):
-        name      = st.text_input("Titolo del Subtask*")
+        name      = st.text_input("Subtask Title*")
         user_opts = {f"{u['name']} ({u['email']})": u['email'] for u in users}
         me        = st.session_state.get('user_email')
 
@@ -184,16 +185,16 @@ def add_subtask_modal(task_id, users):
             owner      = st.selectbox("Owner*", list(user_opts.keys()),
                                        index=list(user_opts.values()).index(me) if me in user_opts.values() else 0)
         with c2:
-            supervisor = st.selectbox("Supervisor", ["Nessuno"] + list(user_opts.keys()))
-        deadline = st.date_input("Scadenza", value=None)
+            supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
+        deadline = st.date_input("Deadline", value=None, format="YYYY/MM/DD")
 
-        if st.form_submit_button("Crea Subtask", type="primary"):
+        if st.form_submit_button("Create Subtask", type="primary"):
             if not name:
-                st.error("Titolo obbligatorio.")
+                st.error("Title is required.")
                 return
             try:
                 owner_email = user_opts[owner]
-                sup_email   = user_opts[supervisor] if supervisor != "Nessuno" else None
+                sup_email   = user_opts[supervisor] if supervisor != "None" else None
                 res = supabase.table("subtasks").insert({
                     "task_id":          task_id,
                     "name":             name,
@@ -218,28 +219,28 @@ def add_subtask_modal(task_id, users):
                 if sup_email and sup_email != owner_email:
                     send_task_assigned(subtask_as_task, sup_email, assigner)
 
-                st.success("Creato!")
+                st.success("Created!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Errore: {e}")
+                st.error(f"Error: {e}")
 
 
-@st.dialog("Crea Nuovo Progetto")
+@st.dialog("Create New Project")
 def add_project_modal():
     with st.form("new_proj_form"):
-        name       = st.text_input("Nome Progetto*")
+        name       = st.text_input("Project Name*")
         c1, c2     = st.columns(2)
         with c1:
-            acronym    = st.text_input("Acronimo", help="Es. HIPA2")
-            identifier = st.text_input("Modello ID Task*", help="Es. HIP → HIP-1, HIP-2…")
+            acronym    = st.text_input("Acronym", help="E.g. HIPA2")
+            identifier = st.text_input("Task ID Template*", help="E.g. HIP → HIP-1, HIP-2…")
         with c2:
-            start_date = st.date_input("Data Inizio", value=datetime.date.today())
-            end_date   = st.date_input("Data Fine Stimata", value=None)
-        funding = st.text_input("Ente Finanziatore")
+            start_date = st.date_input("Start Date", value=datetime.date.today(), format="YYYY/MM/DD")
+            end_date   = st.date_input("Estimated End Date", value=None, format="YYYY/MM/DD")
+        funding = st.text_input("Funding Agency")
 
-        if st.form_submit_button("Crea Progetto", type="primary"):
+        if st.form_submit_button("Create Project", type="primary"):
             if not name or not identifier:
-                st.error("Nome e Modello ID sono obbligatori.")
+                st.error("Name and ID Template are required.")
                 return
             try:
                 supabase.table("projects").insert({
@@ -251,15 +252,16 @@ def add_project_modal():
                     "end_date":        str(end_date) if end_date else None,
                     "is_archived":     False,
                 }).execute()
-                st.success("Progetto Creato!")
+                st.success("Project created!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Errore: {e}")
+                st.error(f"Error: {e}")
 
 
 # ─── Task row renderer ──────────────────────────────────────────────────────────
 
 def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
+    user_map  = {u["email"]: u for u in users}
     t_id      = t["id"]
     is_owner  = t.get("owner_email") == user_email
     is_sup    = t.get("supervisor_email") == user_email
@@ -275,7 +277,8 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
         f"</div>"
     )
 
-    c1, c2, c3, c4 = st.columns([4, 1.6, 1.4, 2.2])
+    # columns: name | status | priority | owner+sup | action buttons | [delete]
+    c1, c2, c3, c4, c5, c_del = st.columns([3, 1.4, 1.2, 2.8, 2.2, 0.5])
     with c1:
         st.markdown(
             f"<span style='opacity:{opacity};font-size:0.95rem'><b>{t.get('name')}</b></span>",
@@ -286,13 +289,50 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
     with c3:
         st.html(_priority_badge(priority))
     with c4:
+        owner_e = t.get("owner_email")
+        sup_e   = t.get("supervisor_email")
+        pills   = ""
+        if owner_e:
+            u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#888888"})
+            pills += person_pill_html(u.get("name", owner_e), u.get("avatar_color", "#888888"))
+        if sup_e and sup_e != owner_e:
+            u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#888888"})
+            pills += person_pill_html(u.get("name", sup_e), u.get("avatar_color", "#888888"), "(sup)")
+        if pills:
+            st.html(f"<div style='opacity:{opacity}'>{pills}</div>")
+    with c5:
         btn1, btn2 = st.columns(2)
         with btn1:
-            if st.button("🔍 Dettaglio", key=f"{key_prefix}_det_{t_id}"):
+            if st.button("🔍 Detail", key=f"{key_prefix}_det_{t_id}"):
                 task_details_modal(t, can_edit)
         with btn2:
             if st.button("➕ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit):
                 add_subtask_modal(t_id, users)
+    with c_del:
+        if is_admin:
+            confirm_key = f"_confirm_del_t_{t_id}"
+            if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete"):
+                st.session_state[confirm_key] = True
+                st.rerun()
+
+    # ── Delete confirmation (inline, full width) ─────────────────────────────
+    confirm_key = f"_confirm_del_t_{t_id}"
+    if st.session_state.get(confirm_key):
+        with st.container():
+            st.warning(
+                f"Permanently delete **{seq_id} — {t.get('name')}**? "
+                f"This action cannot be undone."
+            )
+            cc1, cc2, cc3 = st.columns([1.5, 1.5, 7])
+            with cc1:
+                if st.button("Yes, delete", key=f"{key_prefix}_delyes_{t_id}", type="primary"):
+                    delete_task_cascade(t_id)
+                    st.session_state.pop(confirm_key, None)
+                    st.rerun()
+            with cc2:
+                if st.button("Cancel", key=f"{key_prefix}_delno_{t_id}"):
+                    st.session_state.pop(confirm_key, None)
+                    st.rerun()
 
     # ── Nested subtasks ──────────────────────────────────────────────────────
     t_subtasks = [s for s in subtasks if s.get("task_id") == t_id]
@@ -303,7 +343,7 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
         s_opacity   = "1" if s_can_edit else "0.45"
         s_status    = s.get("status", "Not started")
 
-        sc1, sc2, sc3, sc4 = st.columns([4, 1.6, 1.4, 2.2])
+        sc1, sc2, sc3, sc4, sc5, sc_del = st.columns([3, 1.4, 1.2, 2.8, 2.2, 0.5])
         with sc1:
             st.markdown(
                 f"<span style='opacity:{s_opacity};padding-left:28px;font-size:0.88rem'>"
@@ -313,33 +353,70 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
         with sc2:
             st.html(_status_badge(s_status))
         with sc3:
-            st.write("")  # subtasks have no priority field, keep aligned
+            st.write("")  # no priority on subtasks
         with sc4:
+            s_owner_e = s.get("owner_email")
+            s_sup_e   = s.get("supervisor_email")
+            s_pills   = ""
+            if s_owner_e:
+                u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#888888"})
+                s_pills += person_pill_html(u.get("name", s_owner_e), u.get("avatar_color", "#888888"))
+            if s_sup_e and s_sup_e != s_owner_e:
+                u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#888888"})
+                s_pills += person_pill_html(u.get("name", s_sup_e), u.get("avatar_color", "#888888"), "(sup)")
+            if s_pills:
+                st.html(f"<div style='opacity:{s_opacity}'>{s_pills}</div>")
+        with sc5:
             stc1, _ = st.columns(2)
             with stc1:
-                if st.button("🔍 Vista", key=f"{key_prefix}_vistaS_{s_id}"):
+                if st.button("🔍 View", key=f"{key_prefix}_vistaS_{s_id}"):
                     subtask_details_modal(s, s_can_edit)
+        with sc_del:
+            if is_admin:
+                s_confirm_key = f"_confirm_del_s_{s_id}"
+                if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete"):
+                    st.session_state[s_confirm_key] = True
+                    st.rerun()
+
+        # subtask delete confirmation
+        s_confirm_key = f"_confirm_del_s_{s_id}"
+        if st.session_state.get(s_confirm_key):
+            with st.container():
+                st.warning(
+                    f"Permanently delete subtask **{s.get('name')}**? "
+                    f"This action cannot be undone."
+                )
+                scc1, scc2, scc3 = st.columns([1.5, 1.5, 7])
+                with scc1:
+                    if st.button("Yes, delete", key=f"{key_prefix}_sdelyes_{s_id}", type="primary"):
+                        supabase.table("subtasks").delete().eq("id", s_id).execute()
+                        st.session_state.pop(s_confirm_key, None)
+                        st.rerun()
+                with scc2:
+                    if st.button("Cancel", key=f"{key_prefix}_sdelno_{s_id}"):
+                        st.session_state.pop(s_confirm_key, None)
+                        st.rerun()
 
 
 # ─── Main view ──────────────────────────────────────────────────────────────────
 
 def show_projects():
-    st.title("Progetti e Workspace")
+    st.title("Projects & Workspace")
 
     col_tools, c_arch = st.columns([1, 3])
     with col_tools:
         if st.session_state.get('user_role') == 'admin':
-            if st.button("➕ Nuovo Progetto", type="primary", use_container_width=True):
+            if st.button("➕ New Project", type="primary", use_container_width=True):
                 add_project_modal()
     with c_arch:
-        show_archived = st.checkbox("Mostra Archiviati", value=False)
+        show_archived = st.checkbox("Show Archived", value=False)
 
     st.divider()
 
     projects, deliverables, tasks, subtasks, users = fetch_hierarchy(show_archived)
 
     if not projects:
-        st.info("Nessun progetto trovato. Crea un nuovo progetto per iniziare.")
+        st.info("No projects found. Create a new project to get started.")
         return
 
     user_email = st.session_state.get('user_email')
@@ -347,9 +424,9 @@ def show_projects():
 
     for proj in projects:
         proj_id   = proj["id"]
-        proj_name = proj.get("name", "Progetto")
+        proj_name = proj.get("name", "Project")
         acronym   = proj.get("acronym", "")
-        arch_tag  = " 🗄️ ARCHIVIATO" if proj.get("is_archived") else ""
+        arch_tag  = " 🗄️ ARCHIVED" if proj.get("is_archived") else ""
 
         # ── Collapsed by default ──────────────────────────────────────────────
         with st.expander(f"📁 {proj_name} ({acronym}){arch_tag}", expanded=False):
@@ -361,7 +438,7 @@ def show_projects():
                     if st.button("➕ Deliverable", key=f"add_del_{proj_id}", use_container_width=True):
                         add_deliverable_modal(proj_id)
             with tc2:
-                if st.button("➕ Task Generico", key=f"add_generic_t_{proj_id}", use_container_width=True):
+                if st.button("➕ Generic Task", key=f"add_generic_t_{proj_id}", use_container_width=True):
                     add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=None)
 
             st.write("")
@@ -369,7 +446,7 @@ def show_projects():
             proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
 
             if not proj_deliverables:
-                st.caption("*Nessun deliverable definito per questo progetto.*")
+                st.caption("*No deliverables defined for this project.*")
 
             # ── One styled block per deliverable ──────────────────────────────
             for d in proj_deliverables:
@@ -377,8 +454,8 @@ def show_projects():
                 d_name   = d.get("name", "")
                 d_type   = d.get("type", "")
                 d_status = d.get("status", "Not started")
-                arch_d   = " (archiviato)" if d.get("is_archived") else ""
-                
+                arch_d   = " (archived)" if d.get("is_archived") else ""
+
                 deliv_tasks = [t for t in tasks if t.get("deliverable_id") == d_id]
 
                 with st.container(border=True):
@@ -396,21 +473,21 @@ def show_projects():
                         )
                     with h2:
                         if is_admin and not d.get("is_archived"):
-                            if st.button("🗑️", key=f"arch_del_{d_id}", help="Archivia Deliverable"):
+                            if st.button("🗑️", key=f"arch_del_{d_id}", help="Archive Deliverable"):
                                 supabase.table("deliverables").update({"is_archived": True}).eq("id", d_id).execute()
                                 st.rerun()
 
                     # Task rows
                     if not deliv_tasks:
-                        st.caption("    *Nessun task per questo deliverable.*")
+                        st.caption("    *No tasks for this deliverable.*")
                     else:
                         for t in deliv_tasks:
                             _render_task_row(t, subtasks, users, user_email, is_admin,
                                              key_prefix=f"d{d_id}")
                             st.divider()
 
-                    # Per-deliverable "+ Nuovo Task" button
-                    if st.button(f"➕ Nuovo Task in «{d_name}»", key=f"add_dt_{d_id}",
+                    # Per-deliverable "+ New Task" button
+                    if st.button(f"➕ New Task in «{d_name}»", key=f"add_dt_{d_id}",
                                  use_container_width=True):
                         add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=d_id)
 
@@ -424,12 +501,12 @@ def show_projects():
                 st.write("")
                 st.html(
                     "<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
-                    "color:#666;text-transform:uppercase'>Task senza Deliverable</span>"
+                    "color:#666;text-transform:uppercase'>Generic Tasks (No Deliverable)</span>"
                 )
                 with st.container(border=True):
                     st.html(
                         "<p style='font-style:italic;color:#888;font-size:0.83rem;margin:0 0 6px 0'>"
-                        "Task generali — non associati a un deliverable specifico</p>"
+                        "General tasks — not linked to a specific deliverable</p>"
                     )
                     for t in unassigned:
                         _render_task_row(t, subtasks, users, user_email, is_admin,

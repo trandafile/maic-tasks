@@ -97,18 +97,15 @@ def main():
 
     # Costruzione della Sidebar
     with st.sidebar:
-        st.markdown(f"**Utente:** {st.session_state.get('user_name', '')}")
-        st.markdown(f"**Ruolo:** {str(st.session_state.get('user_role', '')).capitalize()}")
+        st.markdown(f"**User:** {st.session_state.get('user_name', '')}")
+        st.markdown(f"**Role:** {str(st.session_state.get('user_role', '')).capitalize()}")
         st.markdown("---")
-        
-        # Base pages for user
+
         pages = ["Dashboard", "Projects", "Calendar", "Reports"]
-        
-        # Pannello Admin solo per admin
+
         if st.session_state.get('user_role') == 'admin':
             pages.append("Admin Panel")
-            
-        st.markdown("**Navigazione**")
+
         current = st.session_state.get('current_page', 'Dashboard')
         
         # Render stylized navigation buttons

@@ -2,6 +2,17 @@ import streamlit as st
 import datetime
 from core.supabase_client import supabase
 from utils.md_editor import markdown_editor
+from utils.notifications import send_task_assigned
+
+
+def _fmt_date(d: str | None) -> str:
+    """Format an ISO date string as YYYY/MM/DD, or return '—' if missing."""
+    if not d:
+        return "—"
+    try:
+        return datetime.date.fromisoformat(d).strftime("%Y/%m/%d")
+    except Exception:
+        return d or "—"
 
 def get_status_color_map():
     return {
@@ -15,7 +26,6 @@ def get_status_color_map():
 def render_priority_badge(priority: str) -> str:
     if not priority:
         return "⚪ None"
-    
     p = priority.lower()
     if p == "urgent":
         return "🔴 Urgent"
@@ -27,149 +37,443 @@ def render_priority_badge(priority: str) -> str:
         return "🟢 Low"
     return f"⚪ {priority.capitalize()}"
 
-@st.dialog("Dettaglio Task", width="large")
+
+# ── Shared person-pill helper ─────────────────────────────────────────────────
+
+def person_pill_html(name: str, color: str, role_suffix: str = "") -> str:
+    """Colored avatar-initial chip + name for owner/supervisor display."""
+    parts = (name or "").split()
+    if len(parts) >= 2:
+        initials = (parts[0][0] + parts[-1][0]).upper()
+    elif parts:
+        initials = parts[0][:2].upper()
+    else:
+        initials = "?"
+    safe_color = color or "#888888"
+    suffix_html = (
+        f"<span style='color:#aaa;font-size:10px;margin-left:2px;'>{role_suffix}</span>"
+        if role_suffix else ""
+    )
+    return (
+        f"<span style='display:inline-flex;align-items:center;gap:4px;margin-right:10px;'>"
+        f"<span style='background:{safe_color};color:white;border-radius:50%;"
+        f"width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;"
+        f"font-size:9px;font-weight:700;flex-shrink:0;'>{initials}</span>"
+        f"<span style='font-size:12px;color:#444;'>{name or ''}</span>"
+        f"{suffix_html}"
+        f"</span>"
+    )
+
+
+# ── Context fetchers for modals ───────────────────────────────────────────────
+
+def _fetch_task_ctx(task: dict):
+    """Return (proj_dict, deliv_dict, user_map) for a task row."""
+    proj: dict = {}
+    deliv: dict = {}
+    user_map: dict = {}
+    try:
+        if task.get("project_id"):
+            res = supabase.table("projects").select("name, acronym").eq(
+                "id", task["project_id"]
+            ).execute().data
+            proj = res[0] if res else {}
+        if task.get("deliverable_id"):
+            res = supabase.table("deliverables").select("name").eq(
+                "id", task["deliverable_id"]
+            ).execute().data
+            deliv = res[0] if res else {}
+        emails = [e for e in [task.get("owner_email"), task.get("supervisor_email")] if e]
+        if emails:
+            res = supabase.table("users").select("email, name, avatar_color").in_(
+                "email", emails
+            ).execute().data
+            user_map = {u["email"]: u for u in res}
+    except Exception:
+        pass
+    return proj, deliv, user_map
+
+
+def _fetch_subtask_ctx(subtask: dict):
+    """Return (parent_task_dict, proj_dict, deliv_dict, user_map) for a subtask row."""
+    parent: dict = {}
+    proj: dict = {}
+    deliv: dict = {}
+    user_map: dict = {}
+    try:
+        if subtask.get("task_id"):
+            t_res = supabase.table("tasks").select(
+                "id, name, sequence_id, project_id, deliverable_id"
+            ).eq("id", subtask["task_id"]).execute().data
+            parent = t_res[0] if t_res else {}
+            if parent.get("project_id"):
+                p_res = supabase.table("projects").select("name, acronym").eq(
+                    "id", parent["project_id"]
+                ).execute().data
+                proj = p_res[0] if p_res else {}
+            if parent.get("deliverable_id"):
+                d_res = supabase.table("deliverables").select("name").eq(
+                    "id", parent["deliverable_id"]
+                ).execute().data
+                deliv = d_res[0] if d_res else {}
+        emails = [e for e in [subtask.get("owner_email"), subtask.get("supervisor_email")] if e]
+        if emails:
+            res = supabase.table("users").select("email, name, avatar_color").in_(
+                "email", emails
+            ).execute().data
+            user_map = {u["email"]: u for u in res}
+    except Exception:
+        pass
+    return parent, proj, deliv, user_map
+
+
+def _breadcrumb_and_persons_html(
+    seq_id: str,
+    name: str,
+    proj: dict,
+    deliv: dict,
+    user_map: dict,
+    owner_email: str | None,
+    sup_email: str | None,
+    parent_task: dict | None = None,
+) -> str:
+    """Build the breadcrumb line + person pills HTML block for a modal header."""
+    acronym = proj.get("acronym") or proj.get("name", "")
+    proj_name = proj.get("name", "")
+
+    parts: list[str] = []
+    if proj_name:
+        parts.append(f"<b>{acronym}</b>: {proj_name}" if acronym else proj_name)
+    if deliv:
+        parts.append(deliv.get("name", ""))
+    if parent_task:
+        pt_name = parent_task.get("name", "")
+        if pt_name:
+            parts.append(pt_name)
+
+    prefix = " &rsaquo; ".join(parts)
+    current = f"{seq_id} — {name}"
+
+    if prefix:
+        bc = (
+            f"<div style='font-size:11px;color:#888;margin-bottom:6px;line-height:1.7;'>"
+            f"{prefix} &rsaquo; "
+            f"<span style='color:#1a73e8;font-weight:500;'>{current}</span></div>"
+        )
+    else:
+        bc = (
+            f"<div style='font-size:11px;color:#1a73e8;font-weight:500;"
+            f"margin-bottom:6px;'>{current}</div>"
+        )
+
+    pills = ""
+    if owner_email:
+        u = user_map.get(owner_email, {"name": owner_email, "avatar_color": "#888888"})
+        pills += person_pill_html(u.get("name", owner_email), u.get("avatar_color", "#888888"))
+    if sup_email and sup_email != owner_email:
+        u = user_map.get(sup_email, {"name": sup_email, "avatar_color": "#888888"})
+        pills += person_pill_html(u.get("name", sup_email), u.get("avatar_color", "#888888"), "(sup)")
+
+    pills_div = f"<div style='margin-bottom:4px;'>{pills}</div>" if pills else ""
+    return bc + pills_div
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _fetch_all_users() -> list[dict]:
+    """Fetch all approved users ordered by name."""
+    try:
+        return supabase.table("users").select("email, name").eq(
+            "is_approved", True
+        ).order("name").execute().data or []
+    except Exception:
+        return []
+
+
+def _user_opts(all_users: list[dict]) -> dict[str, str]:
+    """Build {display_label: email} dict from user list."""
+    return {f"{u['name']} ({u['email']})": u["email"] for u in all_users}
+
+
+def _find_display(opts: dict[str, str], email: str | None) -> str | None:
+    """Return the display label for the given email, or None if not found."""
+    if not email:
+        return None
+    return next((k for k, v in opts.items() if v == email), None)
+
+
+def _parse_date(value: str | None) -> datetime.date | None:
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(value)
+    except (ValueError, TypeError):
+        return None
+
+
+# ── Modals ────────────────────────────────────────────────────────────────────
+
+@st.dialog("Task Detail", width="large")
 def task_details_modal(task, can_edit, deliverables=None):
-    st.write(f"**ID**: {task.get('sequence_id', f'T-{task.get('id')}')}")
-    st.write(f"**Nome**: {task.get('name')}")
+    # ── Breadcrumb + persons header ───────────────────────────────────────────
+    proj, deliv, user_map = _fetch_task_ctx(task)
+    seq_id = task.get("sequence_id") or f"T-{task.get('id')}"
+    header_html = _breadcrumb_and_persons_html(
+        seq_id=seq_id,
+        name=task.get("name", ""),
+        proj=proj,
+        deliv=deliv,
+        user_map=user_map,
+        owner_email=task.get("owner_email"),
+        sup_email=task.get("supervisor_email"),
+    )
+    st.html(header_html)
     st.markdown("---")
-    
+
     status_map = get_status_color_map()
-    
+
     if can_edit:
-        # If deliverables are not provided, try to fetch them to allow moving tasks
+        # ── Fetch supporting data ─────────────────────────────────────────────
         if deliverables is None:
-            res = supabase.table("deliverables").select("id, name, project_id").eq("project_id", task.get("project_id")).execute()
+            res = supabase.table("deliverables").select("id, name, project_id").eq(
+                "project_id", task.get("project_id")
+            ).execute()
             deliverables = res.data or []
-            
-        # Inline status change
+
+        all_users = _fetch_all_users()
+        user_opts = _user_opts(all_users)
+
+        # ── Row 1: Status | Priority | Deliverable ────────────────────────────
         status_options = list(status_map.keys())
         display_options = list(status_map.values())
-        
-        curr_status = task.get('status')
+
+        curr_status = task.get("status") or "Not started"
         if curr_status not in status_options:
             curr_status = "Not started"
-            
-        curr_idx = status_options.index(curr_status)
-        
+
+        deliv_opts = {d["name"]: d["id"] for d in deliverables}
+        deliv_opts["None (Generic)"] = None
+        curr_deliv_id = task.get("deliverable_id")
+        curr_deliv_name = next((k for k, v in deliv_opts.items() if v == curr_deliv_id), "None (Generic)")
+
         c1, c2, c3 = st.columns(3)
         with c1:
-            new_status_display = st.selectbox("Stato del Task", display_options, index=curr_idx)
+            new_status_display = st.selectbox(
+                "Status", display_options,
+                index=status_options.index(curr_status)
+            )
             new_status = status_options[display_options.index(new_status_display)]
-            
         with c2:
             priority_options = ["none", "low", "medium", "high", "urgent"]
             curr_priority = task.get("priority", "medium")
             if curr_priority not in priority_options:
                 curr_priority = "medium"
-            new_priority = st.selectbox("Priorità", priority_options, index=priority_options.index(curr_priority))
-            
+            new_priority = st.selectbox(
+                "Priority", priority_options,
+                index=priority_options.index(curr_priority)
+            )
         with c3:
-            deliv_options = {d["name"]: d["id"] for d in deliverables}
-            deliv_options["Nessuno (Generico)"] = None
-            
-            # Find current deliverable name
-            curr_deliv_id = task.get("deliverable_id")
-            curr_deliv_name = "Nessuno (Generico)"
-            for k, v in deliv_options.items():
-                if v == curr_deliv_id:
-                    curr_deliv_name = k
-                    break
-                    
-            new_deliv_name = st.selectbox("Deliverable", list(deliv_options.keys()), index=list(deliv_options.keys()).index(curr_deliv_name))
-            new_deliv_id = deliv_options[new_deliv_name]
+            new_deliv_name = st.selectbox(
+                "Deliverable",
+                list(deliv_opts.keys()),
+                index=list(deliv_opts.keys()).index(curr_deliv_name)
+            )
+            new_deliv_id = deliv_opts[new_deliv_name]
 
+        # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────────
+        owner_keys = list(user_opts.keys())
+        curr_owner_disp = _find_display(user_opts, task.get("owner_email"))
+        owner_idx = owner_keys.index(curr_owner_disp) if curr_owner_disp in owner_keys else 0
+
+        sup_keys = ["None"] + owner_keys
+        curr_sup_disp = _find_display(user_opts, task.get("supervisor_email")) or "None"
+        sup_idx = sup_keys.index(curr_sup_disp) if curr_sup_disp in sup_keys else 0
+
+        curr_deadline = _parse_date(task.get("deadline"))
+
+        c4, c5, c6 = st.columns([2, 2, 1])
+        with c4:
+            new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
+            new_owner_email = user_opts.get(new_owner_disp) or task.get("owner_email")
+        with c5:
+            new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
+            new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+        with c6:
+            new_deadline = st.date_input("Deadline", value=curr_deadline, format="YYYY/MM/DD")
+
+        # ── Markdown notes editor ─────────────────────────────────────────────
         new_notes = markdown_editor(
             value=task.get("notes") or "",
             key=f"task_notes_{task['id']}",
             height=340,
-            label="📝 Note / Descrizione",
+            label="📝 Notes / Description",
         )
-            
+
         st.markdown("---")
-        
+
         c_save, c_empty, c_arch = st.columns([2, 2, 2])
         with c_save:
-            if st.button("💾 Salva Modifiche", type="primary", use_container_width=True):
+            if st.button("💾 Save Changes", type="primary", use_container_width=True):
                 try:
                     update_data = {
-                        "notes": new_notes, 
-                        "status": new_status,
-                        "priority": new_priority,
-                        "deliverable_id": new_deliv_id
+                        "notes":            new_notes,
+                        "status":           new_status,
+                        "priority":         new_priority,
+                        "deliverable_id":   new_deliv_id,
+                        "owner_email":      new_owner_email,
+                        "supervisor_email": new_sup_email,
+                        "deadline":         new_deadline.isoformat() if new_deadline else None,
                     }
-                    
-                    # Auto-set completion date if moved to completed just now
+
+                    # Auto-manage completion date
                     if new_status == "Completed" and curr_status != "Completed":
                         update_data["completion_date"] = datetime.datetime.now().date().isoformat()
-                    # Clear it if moved out of completed
                     elif new_status != "Completed" and curr_status == "Completed":
                         update_data["completion_date"] = None
 
                     supabase.table("tasks").update(update_data).eq("id", task["id"]).execute()
-                    st.success("Salvato!")
+
+                    # Notify on assignment changes
+                    assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
+                    enriched = {**task, **update_data}
+                    old_owner = task.get("owner_email")
+                    old_sup   = task.get("supervisor_email")
+                    if new_owner_email and new_owner_email != old_owner:
+                        send_task_assigned(enriched, new_owner_email, assigner)
+                    if new_sup_email and new_sup_email != old_sup and new_sup_email != new_owner_email:
+                        send_task_assigned(enriched, new_sup_email, assigner)
+
+                    st.success("Saved!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Errore: {e}")
+                    st.error(f"Error: {e}")
         with c_arch:
-            if st.button("🗑️ Archivia Task", use_container_width=True):
+            if st.button("🗑️ Archive Task", use_container_width=True):
                 try:
                     supabase.table("tasks").update({"is_archived": True}).eq("id", task["id"]).execute()
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Errore: {e}")
+                    st.error(f"Error: {e}")
     else:
-        st.write(f"**Stato**: {status_map.get(task.get('status', 'Not started'))}")
-        st.write(f"**Priorità**: {render_priority_badge(task.get('priority'))}")
+        # ── Read-only view ────────────────────────────────────────────────────
+        st.write(f"**Status**: {status_map.get(task.get('status', 'Not started'))}")
+        st.write(f"**Priority**: {render_priority_badge(task.get('priority'))}")
+        if task.get("deadline"):
+            st.write(f"**Deadline**: {_fmt_date(task.get('deadline'))}")
         if task.get("completion_date"):
-            st.write(f"**Completato il**: {task.get('completion_date')}")
-        st.write("**Note/Descrizione**:")
-        st.markdown(task.get("notes") or "*Nessuna nota fornita.*")
+            st.write(f"**Completed on**: {_fmt_date(task.get('completion_date'))}")
+        st.write("**Notes/Description**:")
+        st.markdown(task.get("notes") or "*No notes provided.*")
 
 
-@st.dialog("Dettaglio Subtask", width="large")
+@st.dialog("Subtask Detail", width="large")
 def subtask_details_modal(subtask, can_edit):
-    st.write(f"**Nome**: {subtask.get('name')}")
+    # ── Breadcrumb + persons header ───────────────────────────────────────────
+    parent, proj, deliv, user_map = _fetch_subtask_ctx(subtask)
+    seq_id = subtask.get("sequence_id") or f"S-{subtask.get('id')}"
+    header_html = _breadcrumb_and_persons_html(
+        seq_id=seq_id,
+        name=subtask.get("name", ""),
+        proj=proj,
+        deliv=deliv,
+        user_map=user_map,
+        owner_email=subtask.get("owner_email"),
+        sup_email=subtask.get("supervisor_email"),
+        parent_task=parent or None,
+    )
+    st.html(header_html)
     st.markdown("---")
-    
+
     status_map = get_status_color_map()
-    
+
     if can_edit:
+        # ── Fetch supporting data ─────────────────────────────────────────────
+        all_users = _fetch_all_users()
+        user_opts = _user_opts(all_users)
+
+        # ── Row 1: Status ─────────────────────────────────────────────────────
         status_options = list(status_map.keys())
         display_options = list(status_map.values())
-        
-        curr_status = subtask.get('status')
+
+        curr_status = subtask.get("status") or "Not started"
         if curr_status not in status_options:
             curr_status = "Not started"
-            
-        new_status_display = st.selectbox("Stato del Subtask", display_options, index=status_options.index(curr_status))
+
+        new_status_display = st.selectbox(
+            "Status", display_options,
+            index=status_options.index(curr_status)
+        )
         new_status = status_options[display_options.index(new_status_display)]
-        
+
+        # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────────
+        owner_keys = list(user_opts.keys())
+        curr_owner_disp = _find_display(user_opts, subtask.get("owner_email"))
+        owner_idx = owner_keys.index(curr_owner_disp) if curr_owner_disp in owner_keys else 0
+
+        sup_keys = ["None"] + owner_keys
+        curr_sup_disp = _find_display(user_opts, subtask.get("supervisor_email")) or "None"
+        sup_idx = sup_keys.index(curr_sup_disp) if curr_sup_disp in sup_keys else 0
+
+        curr_deadline = _parse_date(subtask.get("deadline"))
+
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1:
+            new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
+            new_owner_email = user_opts.get(new_owner_disp) or subtask.get("owner_email")
+        with c2:
+            new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
+            new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+        with c3:
+            new_deadline = st.date_input("Deadline", value=curr_deadline, format="YYYY/MM/DD")
+
+        # ── Markdown notes editor ─────────────────────────────────────────────
         new_notes = markdown_editor(
             value=subtask.get("notes") or "",
             key=f"subtask_notes_{subtask['id']}",
             height=300,
-            label="📝 Note / Descrizione",
+            label="📝 Notes / Description",
         )
-            
+
         st.markdown("---")
-        
+
         c_save, c_empty, c_arch = st.columns([2, 2, 2])
         with c_save:
-            if st.button("💾 Salva Modifiche", key="save_st", type="primary", use_container_width=True):
+            if st.button("💾 Save Changes", key="save_st", type="primary", use_container_width=True):
                 try:
-                    supabase.table("subtasks").update({"notes": new_notes, "status": new_status}).eq("id", subtask["id"]).execute()
-                    st.success("Salvato!")
+                    update_data = {
+                        "notes":            new_notes,
+                        "status":           new_status,
+                        "owner_email":      new_owner_email,
+                        "supervisor_email": new_sup_email,
+                        "deadline":         new_deadline.isoformat() if new_deadline else None,
+                    }
+                    supabase.table("subtasks").update(update_data).eq("id", subtask["id"]).execute()
+
+                    # Notify on assignment changes
+                    assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
+                    enriched = {**subtask, **update_data}
+                    old_owner = subtask.get("owner_email")
+                    old_sup   = subtask.get("supervisor_email")
+                    if new_owner_email and new_owner_email != old_owner:
+                        send_task_assigned(enriched, new_owner_email, assigner)
+                    if new_sup_email and new_sup_email != old_sup and new_sup_email != new_owner_email:
+                        send_task_assigned(enriched, new_sup_email, assigner)
+
+                    st.success("Saved!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Errore: {e}")
+                    st.error(f"Error: {e}")
         with c_arch:
-            if st.button("🗑️ Archivia Subtask", key="arch_st", use_container_width=True):
+            if st.button("🗑️ Archive Subtask", key="arch_st", use_container_width=True):
                 try:
                     supabase.table("subtasks").update({"is_archived": True}).eq("id", subtask["id"]).execute()
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Errore: {e}")
+                    st.error(f"Error: {e}")
     else:
-        st.write(f"**Stato**: {status_map.get(subtask.get('status', 'Not started'))}")
-        st.write("**Note/Descrizione**:")
-        st.markdown(subtask.get("notes") or "*Nessuna nota fornita.*")
+        # ── Read-only view ────────────────────────────────────────────────────
+        st.write(f"**Status**: {status_map.get(subtask.get('status', 'Not started'))}")
+        if subtask.get("deadline"):
+            st.write(f"**Deadline**: {_fmt_date(subtask.get('deadline'))}")
+        st.write("**Notes/Description**:")
+        st.markdown(subtask.get("notes") or "*No notes provided.*")

@@ -236,3 +236,210 @@ def generate_report_pdf(
     doc.build(elements)
     buf.seek(0)
     return buf
+
+
+# ─── Report: Carico per Persona ───────────────────────────────────────────────
+
+def generate_workload_pdf(workload_data: list) -> "BytesIO":
+    """PDF version of the 'Carico per Persona' report.
+
+    Args:
+        workload_data: list returned by db.get_workload_per_person()
+    """
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=20*mm, rightMargin=20*mm,
+        topMargin=20*mm, bottomMargin=20*mm,
+    )
+    styles = getSampleStyleSheet()
+    h1     = ParagraphStyle("WH1", parent=styles["Heading1"], fontSize=14, spaceAfter=2)
+    h2     = ParagraphStyle("WH2", parent=styles["Heading2"], fontSize=10, spaceAfter=2)
+    normal = ParagraphStyle("WN",  parent=styles["Normal"],   fontSize=9)
+    small  = ParagraphStyle("WS",  parent=styles["Normal"],   fontSize=8, textColor=colors.grey)
+    label  = ParagraphStyle("WL",  parent=styles["Normal"],   fontSize=7,
+                             textColor=colors.grey, fontName="Helvetica-BoldOblique", spaceAfter=3)
+    italic = ParagraphStyle("WI",  parent=styles["Normal"],   fontSize=8,
+                             textColor=colors.grey, fontName="Helvetica-Oblique")
+
+    import datetime as _dt
+    elements = []
+
+    elements.append(Paragraph("Carico per Persona — MAIC LAB", h1))
+    elements.append(Paragraph(
+        f"Generato il {_dt.date.today().strftime('%d/%m/%Y')}", small
+    ))
+    elements.append(Spacer(1, 8))
+
+    for person in workload_data:
+        user        = person["user"]
+        name        = user.get("name", "?")
+        role        = user.get("role", "user")
+        notes       = user.get("notes") or ""
+        sub_label   = f"{role} · {notes}" if notes else role
+
+        tasks_active  = person["tasks_active"]
+        tasks_overdue = person["tasks_overdue"]
+        proj_count    = person["projects_count"]
+        est_hours     = person["estimate_hours"]
+        hours_str     = f"{int(est_hours)}h" if est_hours else "—"
+
+        all_tasks = person["all_user_tasks"]
+        total     = len(all_tasks)
+
+        def _pct(n, t):
+            return round(100 * n / t) if t else 0
+
+        pct_c = _pct(sum(1 for t in all_tasks if t.get("status") == "Completed"),  total)
+        pct_w = _pct(sum(1 for t in all_tasks if t.get("status") == "Working on"), total)
+        pct_b = _pct(sum(1 for t in all_tasks if t.get("status") == "Blocked"),    total)
+
+        elements.append(HRFlowable(width="100%", thickness=1.0, lineCap="butt",
+                                    color=colors.HexColor("#CCCCCC")))
+        elements.append(Spacer(1, 4))
+        elements.append(Paragraph(f"{_initials(name)}  {name}", h2))
+        elements.append(Paragraph(sub_label, small))
+        elements.append(Spacer(1, 4))
+
+        # Stats line
+        overdue_txt = f"{tasks_overdue} scaduti" if tasks_overdue > 0 else "0 scaduti"
+        elements.append(Paragraph(
+            f"Task attivi: <b>{tasks_active}</b>  ·  {overdue_txt}  ·  "
+            f"Progetti: <b>{proj_count}</b>  ·  Ore stimate: <b>{hours_str}</b>",
+            normal
+        ))
+        elements.append(Spacer(1, 3))
+        elements.append(Paragraph(
+            f"Completati: {pct_c}%  ·  In corso: {pct_w}%  ·  Bloccati: {pct_b}%",
+            small
+        ))
+        elements.append(Spacer(1, 6))
+
+        if person["projects"]:
+            elements.append(Paragraph("PROGETTI", label))
+            proj_table_data = [["Progetto", "Stato task", "Ruolo", "Ore"]]
+            for proj in person["projects"]:
+                sc        = proj["status_counts"]
+                stato_txt = "  ".join(f"{cnt} {s}" for s, cnt in sorted(sc.items()))
+                role_p    = proj["role"]
+                est_proj  = sum(t.get("estimate_hours") or 0 for t in proj["tasks"])
+                hrs_p     = f"{int(est_proj)}h" if est_proj > 0 else "—"
+                proj_table_data.append([
+                    Paragraph(proj["project_name"], normal),
+                    Paragraph(stato_txt or "—", small),
+                    Paragraph(role_p, small),
+                    Paragraph(hrs_p, small),
+                ])
+            tbl = Table(proj_table_data, colWidths=[65*mm, 60*mm, 22*mm, 16*mm], repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#F5F5F5")),
+                ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",      (0, 0), (-1, 0), 8),
+                ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
+                ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]))
+            elements.append(tbl)
+
+        elements.append(Spacer(1, 10))
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf
+
+
+# ─── Report: Organico per Progetto ───────────────────────────────────────────
+
+def generate_staff_pdf(staff_data: list) -> "BytesIO":
+    """PDF version of the 'Organico per Progetto' report.
+
+    Args:
+        staff_data: list returned by db.get_staff_per_project()
+    """
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=20*mm, rightMargin=20*mm,
+        topMargin=20*mm, bottomMargin=20*mm,
+    )
+    styles = getSampleStyleSheet()
+    h1     = ParagraphStyle("SH1", parent=styles["Heading1"], fontSize=14, spaceAfter=2)
+    h2     = ParagraphStyle("SH2", parent=styles["Heading2"], fontSize=11, spaceAfter=2)
+    normal = ParagraphStyle("SN",  parent=styles["Normal"],   fontSize=9)
+    small  = ParagraphStyle("SS",  parent=styles["Normal"],   fontSize=8, textColor=colors.grey)
+    caption= ParagraphStyle("SC",  parent=styles["Normal"],   fontSize=8, textColor=colors.grey)
+    label  = ParagraphStyle("SL",  parent=styles["Normal"],   fontSize=7,
+                             textColor=colors.grey, fontName="Helvetica-BoldOblique", spaceAfter=3)
+
+    import datetime as _dt
+    elements = []
+
+    elements.append(Paragraph("Organico per Progetto — MAIC LAB", h1))
+    elements.append(Paragraph(
+        f"Generato il {_dt.date.today().strftime('%d/%m/%Y')}", small
+    ))
+
+    for idx, proj_data in enumerate(staff_data):
+        if idx > 0:
+            elements.append(PageBreak())
+
+        proj       = proj_data["project"]
+        people     = proj_data["people"]
+        task_count = proj_data["tasks_active_count"]
+
+        acronym = proj.get("acronym", "") or proj.get("identifier", "")
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph(f"{proj.get('name')} ({acronym})", h2))
+
+        capt_parts = []
+        if proj.get("funding_agency"):
+            capt_parts.append(proj["funding_agency"])
+        if proj.get("start_date"):
+            capt_parts.append(
+                f"{_fmt_date(proj.get('start_date'))} → {_fmt_date(proj.get('end_date'))}"
+            )
+        capt_parts.append(f"{len(people)} ricercatori coinvolti")
+        elements.append(Paragraph("  ·  ".join(capt_parts), caption))
+        elements.append(Paragraph(f"Task attivi totali: {task_count}", small))
+        elements.append(Spacer(1, 6))
+
+        if people:
+            elements.append(Paragraph("RICERCATORI COINVOLTI", label))
+            table_data = [["Ricercatore", "Task", "Distribuzione stati", "Ruolo", "Ore"]]
+            for p in people:
+                name     = p["user"].get("name", "?")
+                sc       = p["status_counts"]
+                stato    = "  ".join(f"{cnt} {s}" for s, cnt in sorted(sc.items()))
+                role     = p["role_prevalent"]
+                est      = p["estimate_hours"]
+                hrs_str  = f"{int(est)}h" if est else "—"
+                table_data.append([
+                    Paragraph(f"{_initials(name)}  {name}", normal),
+                    Paragraph(str(p["tasks_active"]), small),
+                    Paragraph(stato or "—", small),
+                    Paragraph(role, small),
+                    Paragraph(hrs_str, small),
+                ])
+
+            tbl = Table(
+                table_data,
+                colWidths=[52*mm, 16*mm, 58*mm, 22*mm, 16*mm],
+                repeatRows=1,
+            )
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#F5F5F5")),
+                ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",      (0, 0), (-1, 0), 8),
+                ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
+                ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            elements.append(tbl)
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf

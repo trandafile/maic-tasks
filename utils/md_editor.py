@@ -14,18 +14,18 @@ How it works
 ------------
 • EasyMDE is injected via jsDelivr CDN inside an st.components.v1.html iframe.
   No pip package or npm build required.
-• A hidden <textarea id="st_sink"> beneath the EasyMDE canvas is kept in-sync
-  by EasyMDE's onChange callback via JavaScript.
-• A standard Streamlit st.text_area (shrunk to 1 px and visually hidden via CSS)
-  is the *real* Streamlit widget that holds the value.  Its key is used to read
-  back the markdown string.
-• On every EasyMDE keystroke, a window.parent.postMessage fires so the outer
-  Streamlit app knows content changed (triggers form awareness).
+• On every EasyMDE keystroke the iframe JS finds the hidden companion
+  st.text_area (the "sink") in the parent page and updates it via React's
+  native value setter + input event dispatch.  This makes Streamlit register
+  the change so the correct value is read when Save is clicked.
+• The sink textarea is visually hidden via CSS (display:none) — only EasyMDE
+  is visible to the user.
 """
 
 import streamlit as st
 import streamlit.components.v1 as components
 import html as _html
+import json
 
 # ── EasyMDE CDN URLs (jsDelivr, pinned to 2.18.0) ───────────────────────────
 _EASYMDE_CSS = "https://cdn.jsdelivr.net/npm/easymde@2.18.0/dist/easymde.min.css"
@@ -73,8 +73,7 @@ _TEMPLATE = """
       font-size: 14px;
       line-height: 1.7;
     }}
-    /* Hide the raw textarea we use as sink — EasyMDE already hides it,
-       but be explicit */
+    /* Hide EasyMDE's internal raw textarea */
     #mde_textarea {{ display: none; }}
   </style>
 </head>
@@ -82,6 +81,9 @@ _TEMPLATE = """
   <textarea id="mde_textarea">{initial_value}</textarea>
   <script src="{js}"></script>
   <script>
+    // Label (aria-label) of the companion Streamlit sink textarea in the parent page.
+    var SINK_LABEL = {sink_label_json};
+
     var easyMDE = new EasyMDE({{
       element: document.getElementById("mde_textarea"),
       initialValue: {js_initial},
@@ -103,21 +105,48 @@ _TEMPLATE = """
       }},
     }});
 
-    // On every change, send current value to parent Streamlit via postMessage.
+    /**
+     * Push the current EasyMDE value into the Streamlit sink textarea so that
+     * Streamlit registers the change and reads the correct value on Save.
+     *
+     * Works by:
+     *  1. Locating the sink <textarea aria-label=SINK_LABEL> in the parent page.
+     *  2. Using React's native HTMLTextAreaElement value setter so that React's
+     *     controlled-component machinery picks up the change.
+     *  3. Dispatching a bubbling "input" event to trigger React's onChange.
+     */
+    function syncToParent(md) {{
+      try {{
+        var parentDoc = window.parent.document;
+        var sinkTA = parentDoc.querySelector('textarea[aria-label="' + SINK_LABEL + '"]');
+        if (sinkTA) {{
+          var setter = Object.getOwnPropertyDescriptor(
+            window.parent.HTMLTextAreaElement.prototype, 'value'
+          ).set;
+          setter.call(sinkTA, md);
+          sinkTA.dispatchEvent(new window.parent.Event('input', {{bubbles: true}}));
+          return true;
+        }}
+      }} catch(e) {{}}
+      return false;
+    }}
+
+    // Sync on every EasyMDE keystroke.
     easyMDE.codemirror.on("change", function() {{
-      var md = easyMDE.value();
-      window.parent.postMessage({{
-        type: "streamlit:setComponentValue",
-        value: md
-      }}, "*");
+      syncToParent(easyMDE.value());
     }});
 
-    // Also fire once on load so Streamlit has the initial value.
+    // Sync on load — retry until the sink textarea appears in the parent DOM
+    // (it may render slightly after the iframe).
     window.addEventListener("load", function() {{
-      window.parent.postMessage({{
-        type: "streamlit:setComponentValue",
-        value: easyMDE.value()
-      }}, "*");
+      var attempts = 0;
+      function trySync() {{
+        if (!syncToParent(easyMDE.value()) && attempts < 10) {{
+          attempts++;
+          setTimeout(trySync, 200);
+        }}
+      }}
+      setTimeout(trySync, 100);
     }});
   </script>
 </body>
@@ -145,8 +174,7 @@ def markdown_editor(
     -------
     str : Current markdown content of the editor.
     """
-    # Reserve a session_state slot so the value survives reruns without
-    # losing in-progress edits.
+    # Reserve a session_state slot so the value survives reruns.
     sk = f"__mde_{key}"
     if sk not in st.session_state:
         st.session_state[sk] = value
@@ -154,13 +182,12 @@ def markdown_editor(
     st.caption(label)
 
     # ── Render EasyMDE iframe ────────────────────────────────────────────────
-    cm_height = max(height - 50, 120)   # leave room for toolbar
+    cm_height = max(height - 50, 120)
 
-    # Escape the initial value for safe injection
     safe_html_value = _html.escape(st.session_state[sk], quote=True)
-    # JSON-encode for the JS string literal
-    import json
     js_value = json.dumps(st.session_state[sk])
+    sink_label = key + "_sink"
+    sink_label_json = json.dumps(sink_label)
 
     iframe_html = _TEMPLATE.format(
         css=_EASYMDE_CSS,
@@ -168,43 +195,34 @@ def markdown_editor(
         initial_value=safe_html_value,
         js_initial=js_value,
         cm_height=cm_height,
+        sink_label_json=sink_label_json,
     )
 
-    # The component returns the value via postMessage → Streamlit bridge.
-    # components.html() doesn't return a value, so we use a companion
-    # st.text_area that the user can still fall back on (hidden via CSS).
     components.html(iframe_html, height=height + 6, scrolling=False)
 
-    # ── Hidden text_area that holds the authoritative value ──────────────────
-    # We render it normally but visually collapse it to near-zero height via
-    # a small st.markdown CSS injection scoped to this key.
+    # ── CSS: completely hide the sink textarea container ─────────────────────
+    # The :has() pseudo-class is supported in all modern browsers (Chrome 105+,
+    # Firefox 121+, Safari 15.4+) and targets the stTextArea wrapper div.
     st.markdown(
         f"""
         <style>
-          div[data-testid="stTextArea"][aria-label="{key}_sink"] textarea {{
-            min-height: 28px !important;
-            height: 28px !important;
-            resize: none;
-            font-size: 11px;
-            color: #888;
-            background: #fafafa;
-            border: 1px dashed #ccc;
-            border-radius: 4px;
+          div[data-testid="stTextArea"]:has(textarea[aria-label="{sink_label}"]) {{
+            display: none !important;
           }}
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+    # ── Hidden sink text_area — authoritative Streamlit value holder ─────────
+    # Visually hidden by the CSS above; EasyMDE syncs to it via JS.
     new_val = st.text_area(
-        key + "_sink",
+        sink_label,
         value=st.session_state[sk],
         height=68,
-        help="Backup editor — il contenuto qui sopra è sincronizzato automaticamente."
-             " Puoi anche modificare qui in caso di problemi con l'editor grafico.",
         key=f"{key}_ta",
-        label_visibility="visible",
+        label_visibility="collapsed",
     )
 
-    # Keep session state in sync with whichever value is freshest.
     st.session_state[sk] = new_val
     return new_val
