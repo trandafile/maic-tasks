@@ -159,7 +159,7 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
 
     pills = _render_people_pills(t.get("owner_email"), t.get("supervisor_email"), users_meta)
 
-    col_html, col_btns = st.columns([6, 4])
+    col_html, col_btns = st.columns([7.5, 2.5])
     with col_html:
         st.html(
             f"""
@@ -184,7 +184,7 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
             """
         )
     with col_btns:
-        if st.button("Details", key=f"{key_prefix}_{t['id']}", use_container_width=True):
+        if st.button("Details", key=f"{key_prefix}_{t['id']}", use_container_width=False):
             task_details_modal(t, can_edit=can_edit)
 
 
@@ -197,7 +197,7 @@ def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: s
     s_dl_html = _deadline_html(s.get("deadline"))
     s_pills = _render_people_pills(s.get("owner_email"), s.get("supervisor_email"), users_meta)
 
-    scol_html, scol_btns = st.columns([6, 4])
+    scol_html, scol_btns = st.columns([7.5, 2.5])
     with scol_html:
         st.html(
             f"""
@@ -220,7 +220,7 @@ def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: s
             """
         )
     with scol_btns:
-        if st.button("Details", key=f"{key_prefix}_{s['id']}", use_container_width=True):
+        if st.button("Details", key=f"{key_prefix}_{s['id']}", use_container_width=False):
             subtask_details_modal(s, can_edit=can_edit)
 
 def _fetch():

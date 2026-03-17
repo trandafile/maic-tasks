@@ -686,15 +686,16 @@ def show_projects():
                     d_deadline_txt = f" · {fmt_date(d.get('deadline'))}" if d.get("deadline") else ""
                     with h1:
                         st.html(
-                            f"<div style='background:#F5F5F5;border-radius:6px;padding:6px 10px;"
+                            f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;"
                             f"margin-bottom:4px'>"
-                            f"<b>{d_name}</b><i style='color:#888;font-size:0.85rem'>"
+                            f"<b style='color:#0F5943;'>{d_name}</b>"
+                            f"<i style='color:#2E8B6E;font-size:0.85rem'>"
                             f"  {d_type}{d_deadline_txt}{arch_d}</i>"
                             f"&nbsp;&nbsp;"
                             f"<span style='float:right'>{_status_badge(d_status)}</span>"
                             f"</div>"
                         )
-                        st.html(d_people if d_people else "<span style='color:#888;font-size:0.82rem'>Owner/Supervisor: —</span>")
+                        st.html(d_people if d_people else "<span style='color:#2E8B6E;font-size:0.82rem'>Owner/Supervisor: —</span>")
                     with h_det:
                         if st.button("🔍", key=f"det_del_{d_id}", use_container_width=True):
                             deliverable_details_modal(d, can_edit=is_admin and not d.get("is_archived"))
