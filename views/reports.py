@@ -2,7 +2,7 @@ import streamlit as st
 import datetime
 from core.supabase_client import supabase
 from utils.pdf_generator import generate_report_pdf
-from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
+from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
 from utils.helpers import fmt_date
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
@@ -305,7 +305,7 @@ def _render_main_report():
         if proj.get("funding_agency"):
             caption_parts.append(f"Funding: {proj['funding_agency']}")
         if proj.get("start_date"):
-            caption_parts.append(f"{proj['start_date']} → {proj.get('end_date') or '—'}")
+            caption_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
         st.caption("  ·  ".join(caption_parts))
         st.write("")
 
@@ -328,16 +328,19 @@ def _render_main_report():
                 d_sl_fg, d_sl_bg = STATUS_COLOURS.get(d_status, ("#888", "#f0f0f0"))
 
                 with st.container(border=True):
-                    h1, h2, h3, h4 = st.columns([3, 2, 2, 1.3])
+                    h1, h2, h3, h4, h5 = st.columns([2.6, 1.8, 1.8, 1.2, 1.0])
                     with h1:
                         st.write(f"**{d.get('name')}**")
-                        st.caption(f"{d.get('type')} · deadline {d.get('deadline') or '—'}")
+                        st.caption(f"{d.get('type')} · deadline: {fmt_date(d.get('deadline'))}")
                     with h2:
                         st.progress(progress)
                     with h3:
                         st.caption(f"{done} / {total} tasks completed")
                     with h4:
                         st.html(_badge(d_status, d_sl_fg, d_sl_bg))
+                    with h5:
+                        if st.button("Details", key=f"rp_dd_{did}", use_container_width=True):
+                            deliverable_details_modal(d, can_edit=False)
                     st.divider()
                     if d_tasks:
                         for t in d_tasks:
@@ -1046,14 +1049,27 @@ def _render_detailed_report():
         did     = d["id"]
         d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
         total_d = len(d_tasks)
-        done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
-        prog    = done_d / total_d if total_d > 0 else 0.0
-
-        st.html(
-            f"<div style='background:#F5F5F5;border-radius:6px;padding:10px 16px;margin:8px 0'>"
-            f"<span style='font-weight:700;font-size:1.05rem'>{d.get('name','')}</span>"
-            f"&nbsp;<span style='font-style:italic;color:#888;font-size:0.85rem'>{d.get('type','')}</span>"
-            f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
+        dh1, dh_btn = st.columns([8, 1])
+        with dh1:
+            st.html(
+                f"<div style='background:#F5F5F5;border-radius:6px;padding:10px 16px;margin:8px 0'>"
+                f"<span style='font-weight:700;font-size:1.05rem'>{d.get('name','')}</span>"
+                f"&nbsp;<span style='font-style:italic;color:#888;font-size:0.85rem'>{d.get('type','')}</span>"
+                f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
+                f"Deadline: {fmt_date(d.get('deadline'))}</span>"
+                f"</div>"
+            )
+        with dh_btn:
+            if st.button("Details", key=f"dr_dd_{did}", use_container_width=True):
+                deliverable_details_modal(d, can_edit=False)
+        if d.get("description"):
+            st.markdown(
+                "<div style='background:#FAFAFA;border-radius:4px;padding:10px 16px;"
+                "margin:4px 0 8px 0;border-left:3px solid #ddd;font-size:0.92rem'>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(d.get("description"))
+            st.markdown("</div>", unsafe_allow_html=True    f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
             f"Deadline: {fmt_date(d.get('deadline'))}</span>"
             f"</div>"
         )

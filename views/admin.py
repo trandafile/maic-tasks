@@ -289,13 +289,13 @@ def _tab_projects():
                         p_start   = st.date_input(
                             "Start Date",
                             value=_parse_date(proj.get("start_date")),
-                            format="YYYY/MM/DD",
+                            format="DD/MM/YYYY",
                             key=f"p_start_{pid}",
                         )
                         p_end = st.date_input(
                             "End Date",
                             value=_parse_date(proj.get("end_date")),
-                            format="YYYY/MM/DD",
+                            format="DD/MM/YYYY",
                             key=f"p_end_{pid}",
                         )
                     pb1, pb2 = st.columns(2)
@@ -357,8 +357,8 @@ def _tab_projects():
             np_idf     = st.text_input("Identifier")
         with af2:
             np_funding = st.text_input("Funding Agency")
-            np_start   = st.date_input("Start Date", value=None, format="YYYY/MM/DD")
-            np_end     = st.date_input("End Date",   value=None, format="YYYY/MM/DD")
+            np_start   = st.date_input("Start Date", value=None, format="DD/MM/YYYY")
+            np_end     = st.date_input("End Date",   value=None, format="DD/MM/YYYY")
 
         add_btn = st.form_submit_button("➕ Add Project", type="primary")
         if add_btn:

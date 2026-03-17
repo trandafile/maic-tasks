@@ -6,11 +6,11 @@ from utils.notifications import send_task_assigned
 
 
 def _fmt_date(d: str | None) -> str:
-    """Format an ISO date string as YYYY/MM/DD, or return '—' if missing."""
+    """Format an ISO date string as DD/MM/YYYY, or return '—' if missing."""
     if not d:
         return "—"
     try:
-        return datetime.date.fromisoformat(d).strftime("%Y/%m/%d")
+        return datetime.date.fromisoformat(d).strftime("%d/%m/%Y")
     except Exception:
         return d or "—"
 
@@ -343,9 +343,9 @@ def task_details_modal(task, can_edit, deliverables=None):
             new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
             new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
         with c6:
-            new_deadline = st.date_input("Deadline", value=curr_deadline, format="YYYY/MM/DD")
+            new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
 
-        # ── Markdown notes editor ─────────────────────────────────────────────
+        # ── Markdown notes editor ────────────────────────────────
         new_notes = markdown_editor(
             value=task.get("notes") or "",
             key=f"task_notes_{task['id']}",
@@ -468,9 +468,9 @@ def subtask_details_modal(subtask, can_edit):
             new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
             new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
         with c3:
-            new_deadline = st.date_input("Deadline", value=curr_deadline, format="YYYY/MM/DD")
+            new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
 
-        # ── Markdown notes editor ─────────────────────────────────────────────
+        # ── Markdown notes editor ────────────────────────────────
         new_notes = markdown_editor(
             value=subtask.get("notes") or "",
             key=f"subtask_notes_{subtask['id']}",
@@ -521,3 +521,94 @@ def subtask_details_modal(subtask, can_edit):
             st.write(f"**Deadline**: {_fmt_date(subtask.get('deadline'))}")
         st.write("**Notes/Description**:")
         st.markdown(subtask.get("notes") or "*No notes provided.*")
+
+
+# ── Deliverable Details Modal ─────────────────────────────────────────────────
+
+@st.dialog("Deliverable Details", width="large")
+def deliverable_details_modal(deliverable: dict, can_edit: bool = False):
+    """Show deliverable details with an optional edit form for admins."""
+    from utils.md_editor import markdown_editor as _md_editor
+
+    d_id     = deliverable.get("id")
+    d_name   = deliverable.get("name", "")
+    d_type   = deliverable.get("type", "")
+    d_status = deliverable.get("status", "Not started")
+    d_dead   = deliverable.get("deadline")
+    d_desc   = deliverable.get("description") or ""
+
+    STATUS_OPTS = ["Not started", "Working on", "Blocked", "Completed", "Cancelled"]
+    TYPE_OPTS   = ["paper", "layout", "prototype"]
+    _SC = {
+        "Not started": ("#888888", "#f0f0f0"),
+        "Working on":  ("#1565C0", "#E3F2FD"),
+        "Blocked":     ("#E65100", "#FFF3E0"),
+        "Completed":   ("#2E7D32", "#E8F5E9"),
+        "Cancelled":   ("#B71C1C", "#FFEBEE"),
+    }
+    s_fg, s_bg = _SC.get(d_status, ("#888", "#f0f0f0"))
+
+    # ── Read-only header ──────────────────────────────────────────────────────
+    st.html(f"<span style='font-size:1.2rem;font-weight:700'>{d_name}</span>")
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.caption("Status")
+        st.html(
+            f"<span style='background:{s_bg};color:{s_fg};padding:3px 10px;"
+            f"border-radius:4px;font-weight:600;font-size:0.88rem'>{d_status}</span>"
+        )
+    with m2:
+        st.caption("Type")
+        st.write(d_type or "—")
+    with m3:
+        st.caption("Deadline")
+        st.write(_fmt_date(d_dead))
+
+    if d_desc and not can_edit:
+        st.divider()
+        st.caption("Description")
+        st.markdown(d_desc)
+    elif not d_desc and not can_edit:
+        st.caption("No description provided.")
+
+    if not can_edit:
+        return
+
+    # ── Edit form ─────────────────────────────────────────────────────────────
+    st.divider()
+    with st.form("edit_deliv_form"):
+        ef1, ef2 = st.columns(2)
+        with ef1:
+            e_name = st.text_input("Name*", value=d_name)
+            e_type = st.selectbox(
+                "Type", TYPE_OPTS,
+                index=TYPE_OPTS.index(d_type) if d_type in TYPE_OPTS else 0
+            )
+        with ef2:
+            e_status = st.selectbox(
+                "Status", STATUS_OPTS,
+                index=STATUS_OPTS.index(d_status) if d_status in STATUS_OPTS else 0
+            )
+            e_dead = st.date_input("Deadline", value=_parse_date(d_dead), format="DD/MM/YYYY")
+        e_desc = _md_editor(
+            value=d_desc,
+            key=f"deliv_desc_{d_id}",
+            height=220,
+            label="📝 Description (Markdown)",
+        )
+        if st.form_submit_button("💾 Save Changes", type="primary"):
+            if not e_name:
+                st.error("Name is required.")
+                return
+            try:
+                supabase.table("deliverables").update({
+                    "name":        e_name,
+                    "type":        e_type,
+                    "status":      e_status,
+                    "deadline":    e_dead.isoformat() if e_dead else None,
+                    "description": e_desc or None,
+                }).eq("id", d_id).execute()
+                st.success("Saved!")
+                st.rerun()
+            except Exception as ex:
+                st.error(f"Error: {ex}")

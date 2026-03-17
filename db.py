@@ -117,6 +117,13 @@ ALTER TABLE subtasks
 """
 
 
+DELIVERABLES_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → add description field to deliverables
+ALTER TABLE deliverables
+  ADD COLUMN IF NOT EXISTS description TEXT;
+"""
+
+
 def get_settings() -> dict:
     """Return settings row merged with defaults. Never raises."""
     try:

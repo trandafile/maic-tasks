@@ -16,7 +16,7 @@ def fmt_date(d) -> str:
         except Exception:
             return d
     if isinstance(d, (date, datetime)):
-        return d.strftime("%Y/%m/%d")
+        return d.strftime("%d/%m/%Y")
     return str(d)
 
 

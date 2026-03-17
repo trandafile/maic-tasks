@@ -1,9 +1,10 @@
 import streamlit as st
 import datetime
 from core.supabase_client import supabase
-from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html
+from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
 from db import delete_task_cascade
 from utils.notifications import send_task_assigned
+from utils.helpers import fmt_date
 
 # ─── Status / Priority badge helpers ───────────────────────────────────────────
 STATUS_COLOURS = {
@@ -78,7 +79,11 @@ def add_deliverable_modal(project_id):
     with st.form("new_deliv_form"):
         name     = st.text_input("Deliverable Name*")
         type_val = st.selectbox("Type", ["paper", "layout", "prototype"])
-        deadline = st.date_input("Deadline", value=None, format="YYYY/MM/DD")
+        deadline = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
+        description = st.text_area(
+            "Description (Markdown)", height=120,
+            placeholder="Describe the deliverable, acceptance criteria, references…"
+        )
         if st.form_submit_button("Create Deliverable", type="primary"):
             if not name:
                 st.error("Name is required.")
@@ -87,7 +92,8 @@ def add_deliverable_modal(project_id):
                 supabase.table("deliverables").insert({
                     "project_id": project_id, "name": name, "type": type_val,
                     "status": "Not started",
-                    "deadline": str(deadline) if deadline else None
+                    "deadline": str(deadline) if deadline else None,
+                    "description": description or None,
                 }).execute()
                 st.success("Created!")
                 st.rerun()
@@ -129,7 +135,7 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
             priority = st.selectbox("Priority", ["none", "low", "medium", "high", "urgent"], index=2)
         with c2:
             supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
-            deadline   = st.date_input("Deadline", value=None, format="YYYY/MM/DD")
+            deadline   = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
 
         notes = st.text_area("Notes/Description (Markdown)", height=120)
 
@@ -186,7 +192,7 @@ def add_subtask_modal(task_id, users):
                                        index=list(user_opts.values()).index(me) if me in user_opts.values() else 0)
         with c2:
             supervisor = st.selectbox("Supervisor", ["None"] + list(user_opts.keys()))
-        deadline = st.date_input("Deadline", value=None, format="YYYY/MM/DD")
+        deadline = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
 
         if st.form_submit_button("Create Subtask", type="primary"):
             if not name:
@@ -234,8 +240,8 @@ def add_project_modal():
             acronym    = st.text_input("Acronym", help="E.g. HIPA2")
             identifier = st.text_input("Task ID Template*", help="E.g. HIP → HIP-1, HIP-2…")
         with c2:
-            start_date = st.date_input("Start Date", value=datetime.date.today(), format="YYYY/MM/DD")
-            end_date   = st.date_input("Estimated End Date", value=None, format="YYYY/MM/DD")
+            start_date = st.date_input("Start Date", value=datetime.date.today(), format="DD/MM/YYYY")
+            end_date   = st.date_input("Estimated End Date", value=None, format="DD/MM/YYYY")
         funding = st.text_input("Funding Agency")
 
         if st.form_submit_button("Create Project", type="primary"):
@@ -494,18 +500,22 @@ def show_projects():
 
                 with st.container(border=True):
                     # Deliverable header
-                    h1, h2 = st.columns([8, 1])
+                    h1, h_det, h_arch = st.columns([6.5, 1.2, 0.8])
+                    d_deadline_txt = f" · {fmt_date(d.get('deadline'))}" if d.get("deadline") else ""
                     with h1:
                         st.html(
                             f"<div style='background:#F5F5F5;border-radius:6px;padding:6px 10px;"
                             f"margin-bottom:4px'>"
                             f"<b>{d_name}</b><i style='color:#888;font-size:0.85rem'>"
-                            f"  {d_type}{arch_d}</i>"
+                            f"  {d_type}{d_deadline_txt}{arch_d}</i>"
                             f"&nbsp;&nbsp;"
                             f"<span style='float:right'>{_status_badge(d_status)}</span>"
                             f"</div>"
                         )
-                    with h2:
+                    with h_det:
+                        if st.button("Details", key=f"det_del_{d_id}", use_container_width=True):
+                            deliverable_details_modal(d, can_edit=is_admin and not d.get("is_archived"))
+                    with h_arch:
                         if is_admin and not d.get("is_archived"):
                             if st.button("🗑️", key=f"arch_del_{d_id}", help="Archive Deliverable"):
                                 supabase.table("deliverables").update({"is_archived": True}).eq("id", d_id).execute()
