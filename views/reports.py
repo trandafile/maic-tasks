@@ -2,6 +2,8 @@ import streamlit as st
 import datetime
 from core.supabase_client import supabase
 from utils.pdf_generator import generate_report_pdf
+from utils.modals import person_pill_html
+from utils.helpers import fmt_date
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
 
@@ -314,27 +316,63 @@ def _render_main_report():
 # ─── Carico per Persona ────────────────────────────────────────────────────────
 
 def _render_person_card(person: dict):
-    user        = person["user"]
-    av_color    = user.get("avatar_color") or _avatar_colour(user.get("name", "?"))
-    name        = user.get("name", "?")
-    role        = user.get("role", "user")
-    notes       = user.get("notes") or ""
-    initials    = _initials(name)
+    user         = person["user"]
+    av_color     = user.get("avatar_color") or _avatar_colour(user.get("name", "?"))
+    name         = user.get("name", "?")
+    role         = user.get("role", "user")
+    notes        = user.get("notes") or ""
+    initials     = _initials(name)
 
-    tasks_active  = person["tasks_active"]
-    tasks_overdue = person["tasks_overdue"]
-    proj_count    = person["projects_count"]
-    est_hours     = person["estimate_hours"]
-    hours_str     = f"{int(est_hours)}h" if est_hours else "—"
-    overdue_col   = "#C62828" if tasks_overdue > 0 else "#1a1a1a"
+    tasks_active      = person["tasks_active"]
+    supervises_count  = person.get("supervises_count", 0)
+    tasks_overdue     = person["tasks_overdue"]
+    est_hours         = person["estimate_hours"]
+    hours_str         = f"{int(est_hours)}h" if est_hours else "—"
+    overdue_col       = "#C62828" if tasks_overdue > 0 else "#1a1a1a"
 
-    all_tasks = person["all_user_tasks"]
-    total     = len(all_tasks)
-    pct_c     = _pct(sum(1 for t in all_tasks if t.get("status") == "Completed"),  total)
-    pct_w     = _pct(sum(1 for t in all_tasks if t.get("status") == "Working on"), total)
-    pct_b     = _pct(sum(1 for t in all_tasks if t.get("status") == "Blocked"),    total)
+    owned_tasks      = person.get("owned_tasks", person["all_user_tasks"])
+    supervised_tasks = person.get("supervised_tasks", [])
+    total            = len(owned_tasks)
+    pct_c  = _pct(sum(1 for t in owned_tasks if t.get("status") == "Completed"),  total)
+    pct_w  = _pct(sum(1 for t in owned_tasks if t.get("status") == "Working on"), total)
+    pct_b  = _pct(sum(1 for t in owned_tasks if t.get("status") == "Blocked"),    total)
 
     sub_label = f"{role} · {notes}" if notes else role
+
+    # Status sort order for task lists
+    _STATUS_ORDER = {"Blocked": 0, "Working on": 1, "Not started": 2, "Completed": 3, "Cancelled": 4}
+
+    def _proj_badge(proj_id, all_projects_map) -> str:
+        p = all_projects_map.get(proj_id, {})
+        ac = p.get("acronym") or p.get("identifier", "?")
+        c  = _proj_badge_color(ac)
+        return (
+            f"<span style='background:{c};color:#fff;border-radius:4px;"
+            f"padding:1px 5px;font-size:0.7rem;font-weight:700;flex-shrink:0'>{ac}</span>"
+        )
+
+    def _task_row_html(t: dict, proj_map: dict) -> str:
+        seq    = t.get("sequence_id") or f"T-{t['id']}"
+        tname  = t.get("name", "")
+        status = t.get("status", "Not started")
+        s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
+        badge  = f"<span style='background:{s_bg};color:{s_fg};border-radius:4px;padding:1px 6px;font-size:0.7rem;font-weight:600;flex-shrink:0;white-space:nowrap'>{status}</span>"
+        proj_b = _proj_badge(t.get("project_id"), proj_map)
+        return (
+            f"<div style='display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #f5f5f5;flex-wrap:wrap'>"
+            f"<span style='font-family:monospace;color:#aaa;font-size:0.72rem;min-width:60px;flex-shrink:0'>{seq}</span>"
+            f"<span style='flex:1;font-size:0.8rem;color:#222;min-width:80px'>{tname}</span>"
+            f"{proj_b}"
+            f"{badge}"
+            f"</div>"
+        )
+
+    # Fetch projects map for badges
+    try:
+        _projs = supabase.table("projects").select("id, name, acronym, identifier").execute().data
+        proj_map = {p["id"]: p for p in _projs}
+    except Exception:
+        proj_map = {}
 
     with st.container(border=True):
         # ── Header ────────────────────────────────────────────────────────────
@@ -350,18 +388,18 @@ def _render_person_card(person: dict):
             f"<div style='font-size:0.78rem;color:#666'>{sub_label}</div>"
             f"</div></div>"
             f"<div style='display:flex;gap:22px;text-align:center'>"
-            f"<div><div style='font-size:1.15rem;font-weight:700;color:#1a1a1a'>{tasks_active}</div>"
-            f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>active tasks</div></div>"
+            f"<div><div style='font-size:1.15rem;font-weight:700;color:#3C3489'>{tasks_active}</div>"
+            f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>executes</div></div>"
+            f"<div><div style='font-size:1.15rem;font-weight:700;color:#633806'>{supervises_count}</div>"
+            f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>supervises</div></div>"
             f"<div><div style='font-size:1.15rem;font-weight:700;color:{overdue_col}'>{tasks_overdue}</div>"
             f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>overdue</div></div>"
-            f"<div><div style='font-size:1.15rem;font-weight:700;color:#1a1a1a'>{proj_count}</div>"
-            f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>projects</div></div>"
             f"<div><div style='font-size:1.15rem;font-weight:700;color:#1a1a1a'>{hours_str}</div>"
             f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>est. hours</div></div>"
             f"</div></div>"
         )
 
-        # ── Progress bars ──────────────────────────────────────────────────────
+        # ── Progress bars (owned tasks only) ───────────────────────────────────
         if total > 0:
             st.html(
                 f"<div style='padding:6px 16px'>"
@@ -371,36 +409,49 @@ def _render_person_card(person: dict):
                 f"</div>"
             )
 
-        # ── Project rows ───────────────────────────────────────────────────────
-        for proj in person["projects"]:
-            acronym   = proj["project_acronym"] or "?"
-            proj_name = proj["project_name"]
-            role_p    = proj["role"]
-            sc        = proj["status_counts"]
-            badge_col = _proj_badge_color(acronym)
-            role_fg   = "#6A1B9A" if role_p == "owner" else "#E65100"
-            role_bg   = "#F3E5F5" if role_p == "owner" else "#FFF3E0"
+        # ── Two-column body: Executes | Supervises ────────────────────────────
+        col_ex, col_sep, col_sup = st.columns([1, 0.02, 1])
 
-            chips = "".join(
-                f"<span style='background:{STATUS_SQUARE.get(s,'#888')}22;"
-                f"color:{STATUS_SQUARE.get(s,'#888')};border-radius:4px;"
-                f"padding:1px 6px;font-size:0.72rem;margin-right:3px;font-weight:600'>"
-                f"{cnt} {s.lower()}</span>"
-                for s, cnt in sorted(sc.items())
-            )
-
+        with col_ex:
             st.html(
-                f"<div style='display:flex;align-items:center;gap:10px;padding:6px 16px;"
-                f"border-top:1px solid #f0f0f0;flex-wrap:wrap'>"
-                f"<span style='background:{badge_col};color:#fff;border-radius:4px;"
-                f"padding:2px 7px;font-size:0.72rem;font-weight:700;min-width:44px;"
-                f"text-align:center;flex-shrink:0'>{acronym}</span>"
-                f"<span style='flex:1;font-size:0.85rem;color:#333;min-width:120px'>{proj_name}</span>"
-                f"<span style='display:flex;gap:2px;flex-wrap:wrap'>{chips}</span>"
-                f"<span style='background:{role_bg};color:{role_fg};border-radius:4px;"
-                f"padding:2px 8px;font-size:0.72rem;font-weight:700;flex-shrink:0'>{role_p}</span>"
+                f"<div style='padding:4px 0 6px 0;'>"
+                f"<span style='display:inline-block;width:8px;height:8px;background:#534AB7;"
+                f"border-radius:50%;margin-right:5px;vertical-align:middle'></span>"
+                f"<span style='font-size:11px;font-weight:700;color:#3C3489;"
+                f"letter-spacing:0.05em;text-transform:uppercase'>Executes (Owner)</span>"
                 f"</div>"
             )
+            sorted_owned = sorted(
+                [t for t in owned_tasks if t.get("status") != "Cancelled"],
+                key=lambda t: _STATUS_ORDER.get(t.get("status", "Not started"), 99)
+            )
+            if sorted_owned:
+                rows_html = "".join(_task_row_html(t, proj_map) for t in sorted_owned)
+                st.html(f"<div style='padding:0 4px'>{rows_html}</div>")
+            else:
+                st.html("<p style='color:#aaa;font-style:italic;font-size:0.82rem;padding:4px'>No tasks owned.</p>")
+
+        with col_sep:
+            st.html("<div style='border-left:1px solid #e8e8e8;height:100%;min-height:60px'></div>")
+
+        with col_sup:
+            st.html(
+                f"<div style='padding:4px 0 6px 0;'>"
+                f"<span style='display:inline-block;width:8px;height:8px;background:#BA7517;"
+                f"border-radius:50%;margin-right:5px;vertical-align:middle'></span>"
+                f"<span style='font-size:11px;font-weight:700;color:#633806;"
+                f"letter-spacing:0.05em;text-transform:uppercase'>Supervises</span>"
+                f"</div>"
+            )
+            sorted_sup = sorted(
+                [t for t in supervised_tasks if t.get("status") != "Cancelled"],
+                key=lambda t: _STATUS_ORDER.get(t.get("status", "Not started"), 99)
+            )
+            if sorted_sup:
+                rows_html = "".join(_task_row_html(t, proj_map) for t in sorted_sup)
+                st.html(f"<div style='padding:0 4px'>{rows_html}</div>")
+            else:
+                st.html("<p style='color:#aaa;font-style:italic;font-size:0.82rem;padding:4px'>No tasks to supervise.</p>")
 
 
 def _render_workload_report():
@@ -452,7 +503,7 @@ def _render_project_staff_card(proj_data: dict):
             if proj.get("funding_agency"):
                 parts.append(proj["funding_agency"])
             if proj.get("start_date"):
-                parts.append(f"{_fmt_date(proj.get('start_date'))} → {_fmt_date(proj.get('end_date'))}")
+                parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
             parts.append(f"{len(people)} researchers involved")
             st.caption("  ·  ".join(parts))
         with hc2:
@@ -465,26 +516,25 @@ def _render_project_staff_card(proj_data: dict):
         st.divider()
 
         # ── Column headers ────────────────────────────────────────────────────
-        ch1, ch2, ch3, ch4, ch5 = st.columns([3, 1.4, 2.8, 1.6, 1.2])
+        ch1, ch2, ch3, ch4, ch5 = st.columns([3, 1.4, 1.4, 2.8, 1.2])
         ch1.caption("Researcher")
-        ch2.caption("Active tasks")
-        ch3.caption("Status distribution")
-        ch4.caption("Prevalent role")
+        ch2.html("<span style='font-size:0.75rem;font-weight:700;color:#3C3489'>Executes</span>")
+        ch3.html("<span style='font-size:0.75rem;font-weight:700;color:#633806'>Supervises</span>")
+        ch4.caption("Status distribution")
         ch5.caption("Est. hours")
 
         for p in people:
-            user     = p["user"]
-            av_color = user.get("avatar_color") or _avatar_colour(user.get("name", "?"))
-            name     = user.get("name", "?")
-            initials = _initials(name)
-            role     = p["role_prevalent"]
-            est      = p["estimate_hours"]
-            hrs_str  = f"{int(est)}h" if est else "—"
-            role_fg  = "#6A1B9A" if role == "owner" else "#E65100"
-            role_bg  = "#F3E5F5" if role == "owner" else "#FFF3E0"
-            sq       = _squares_html(p["task_roles"])
+            user           = p["user"]
+            av_color       = user.get("avatar_color") or _avatar_colour(user.get("name", "?"))
+            name           = user.get("name", "?")
+            initials       = _initials(name)
+            owned_count    = p.get("owned_count", 0)
+            sup_count      = p.get("supervised_count", 0)
+            owned_hours    = p.get("owned_hours")
+            hrs_str        = f"{int(owned_hours)}h" if owned_hours else "—"
+            sq             = _squares_html(p["task_roles"])
 
-            c1, c2, c3, c4, c5 = st.columns([3, 1.4, 2.8, 1.6, 1.2])
+            c1, c2, c3, c4, c5 = st.columns([3, 1.4, 1.4, 2.8, 1.2])
             with c1:
                 st.html(
                     f"<div style='display:flex;align-items:center;gap:7px;padding:3px 0'>"
@@ -494,17 +544,27 @@ def _render_project_staff_card(proj_data: dict):
                     f"<span style='font-size:0.88rem'>{name}</span></div>"
                 )
             with c2:
-                st.html(f"<div style='padding:6px 0;font-size:0.88rem'>{p['tasks_active']}</div>")
+                if owned_count > 0:
+                    st.html(
+                        f"<div style='padding:4px 8px;background:#EEEDFE;border-radius:4px;"
+                        f"text-align:center;font-size:0.88rem;font-weight:700;color:#3C3489'>"
+                        f"{owned_count}</div>"
+                    )
+                else:
+                    st.html("<div style='padding:4px 8px;text-align:center;font-size:0.88rem;color:#aaa'>—</div>")
             with c3:
+                if sup_count > 0:
+                    st.html(
+                        f"<div style='padding:4px 8px;background:#FAEEDA;border-radius:4px;"
+                        f"text-align:center;font-size:0.88rem;font-weight:700;color:#633806'>"
+                        f"{sup_count}</div>"
+                    )
+                else:
+                    st.html("<div style='padding:4px 8px;text-align:center;font-size:0.88rem;color:#aaa'>—</div>")
+            with c4:
                 st.html(
                     f"<div style='padding:4px 0;display:flex;flex-wrap:wrap;"
                     f"align-items:center'>{sq}</div>"
-                )
-            with c4:
-                st.html(
-                    f"<div style='padding:4px 0'>"
-                    f"<span style='background:{role_bg};color:{role_fg};border-radius:4px;"
-                    f"padding:2px 8px;font-size:0.75rem;font-weight:700'>{role}</span></div>"
                 )
             with c5:
                 st.html(f"<div style='padding:6px 0;font-size:0.88rem;color:#555'>{hrs_str}</div>")
@@ -555,6 +615,405 @@ def _render_staff_report():
         st.write("")
 
 
+# ─── Detailed Report ──────────────────────────────────────────────────────────
+
+def _render_detailed_report():
+    """Detailed per-project report: deliverables → tasks → subtasks → activity."""
+    from utils.helpers import strip_markdown
+    from utils.pdf_generator import generate_detailed_report_pdf
+
+    try:
+        projects  = supabase.table("projects").select("*").eq("is_archived", False).order("name").execute().data
+        all_users = supabase.table("users").select("email, name, avatar_color").eq("is_approved", True).execute().data
+    except Exception as e:
+        st.error(f"Error loading projects: {e}")
+        return
+
+    if not projects:
+        st.info("No active projects.")
+        return
+
+    user_map = {u["email"]: u for u in all_users}
+    users_dict_simple = {u["email"]: u.get("name", u["email"]) for u in all_users}
+
+    proj_options = {p["name"]: p for p in projects}
+    sel_proj_name = st.selectbox("Select Project", list(proj_options.keys()), key="dr_proj")
+    proj = proj_options[sel_proj_name]
+    pid  = proj["id"]
+
+    # Fetch project data
+    try:
+        deliverables = supabase.table("deliverables").select("*").eq("project_id", pid).eq("is_archived", False).order("deadline").execute().data
+        tasks        = supabase.table("tasks").select("*").eq("project_id", pid).eq("is_archived", False).order("sort_order").execute().data
+        subtasks_all = supabase.table("subtasks").select("*").eq("is_archived", False).order("sort_order").execute().data
+        # filter subtasks belonging to tasks of this project
+        task_ids     = {t["id"] for t in tasks}
+        subtasks     = [s for s in subtasks_all if s.get("task_id") in task_ids]
+    except Exception as e:
+        st.error(f"Error loading project data: {e}")
+        return
+
+    active_tasks = [t for t in tasks if t.get("status") not in ("Cancelled",)]
+    completed    = [t for t in active_tasks if t.get("status") == "Completed"]
+    today_str    = datetime.date.today().isoformat()
+    overdue      = [t for t in active_tasks if t.get("deadline") and t["deadline"] < today_str and t.get("status") != "Completed"]
+    total_hours  = sum(t.get("estimate_hours") or 0 for t in active_tasks)
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    acronym = proj.get("acronym", "") or proj.get("identifier", "")
+    st.html(
+        f"<div style='margin-bottom:8px'>"
+        f"<span style='font-size:1.5rem;font-weight:700;color:#1a1a1a'>"
+        f"{proj.get('name')} ({acronym})</span></div>"
+    )
+    caption_parts = []
+    if proj.get("funding_agency"):
+        caption_parts.append(proj["funding_agency"])
+    if proj.get("start_date"):
+        caption_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
+    caption_parts.append(f"Generated: {datetime.date.today().strftime('%Y/%m/%d')}")
+    st.caption("  ·  ".join(caption_parts))
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Total tasks", len(active_tasks))
+    with m2:
+        st.metric("Completed", len(completed), delta=None)
+    with m3:
+        overdue_col = len(overdue)
+        st.metric("Overdue", overdue_col)
+    with m4:
+        st.metric("Est. hours", f"{int(total_hours)}h" if total_hours else "—")
+
+    st.divider()
+
+    # ── Export buttons ────────────────────────────────────────────────────────
+    col_pdf, col_md, _ = st.columns([1.5, 1.5, 5])
+
+    # Build activity comments for export
+    try:
+        comments_all = supabase.table("comments").select("*, users(name)").in_("task_id", list(task_ids)).order("created_at", desc=True).execute().data
+    except Exception:
+        comments_all = []
+    comments_by_task = {}
+    for c in comments_all:
+        tid = c.get("task_id")
+        comments_by_task.setdefault(tid, []).append(c)
+
+    with col_pdf:
+        if st.button("📄 Export PDF", type="primary", key="dr_pdf"):
+            try:
+                from utils.pdf_generator import generate_detailed_report_pdf
+                subs_by_task = {}
+                for s in subtasks:
+                    subs_by_task.setdefault(s.get("task_id"), []).append(s)
+                pdf_buf = generate_detailed_report_pdf(proj, deliverables, tasks, subs_by_task, comments_by_task, user_map)
+                st.download_button(
+                    "⬇️ Download PDF", data=pdf_buf,
+                    file_name=f"detailed_report_{acronym}_{datetime.date.today().strftime('%Y%m%d')}.pdf",
+                    mime="application/pdf", key="dr_dl_pdf"
+                )
+            except Exception as e:
+                st.error(f"PDF error: {e}")
+
+    with col_md:
+        # Build markdown export
+        md_lines = [
+            f"# {proj.get('name')} ({acronym}) — Detailed Report",
+            f"Generated: {datetime.date.today().strftime('%Y/%m/%d')}",
+        ]
+        if caption_parts:
+            md_lines.append(f"Funding: {'  ·  '.join(caption_parts)}")
+        md_lines.append("")
+        md_lines.append(
+            f"**Tasks:** {len(active_tasks)} total · {len(completed)} completed · "
+            f"{len(overdue)} overdue · {int(total_hours)}h est. hours"
+        )
+        md_lines.append("")
+        md_lines.append("---")
+        md_lines.append("")
+
+        subs_by_task = {}
+        for s in subtasks:
+            subs_by_task.setdefault(s.get("task_id"), []).append(s)
+
+        def _md_task_block(t):
+            lines = []
+            seq     = t.get("sequence_id") or f"T-{t['id']}"
+            status  = t.get("status", "Not started")
+            prio    = (t.get("priority") or "none").capitalize()
+            owner_n = users_dict_simple.get(t.get("owner_email"), t.get("owner_email") or "—")
+            sup_n   = users_dict_simple.get(t.get("supervisor_email"), t.get("supervisor_email") or "")
+            dl      = fmt_date(t.get("deadline"))
+            est     = f"{int(t['estimate_hours'])}h" if t.get("estimate_hours") else "—"
+
+            lines.append(f"### {seq} — {t.get('name', '')}")
+            lines.append(
+                f"**Status:** {status} · **Priority:** {prio} · "
+                f"**Deadline:** {dl} · **Est:** {est}"
+            )
+            lines.append(f"**Assignee:** {owner_n}" + (f" · **Supervisor:** {sup_n}" if sup_n else ""))
+            lines.append("")
+            if t.get("notes"):
+                lines.append(t["notes"])
+                lines.append("")
+
+            t_subs = subs_by_task.get(t["id"], [])
+            if t_subs:
+                lines.append("#### Subtasks")
+                for s in t_subs:
+                    s_status   = s.get("status", "Not started")
+                    s_owner_n  = users_dict_simple.get(s.get("owner_email"), s.get("owner_email") or "—")
+                    s_sup_n    = users_dict_simple.get(s.get("supervisor_email"), "") if s.get("supervisor_email") else ""
+                    s_seq      = s.get("sequence_id") or f"S-{s['id']}"
+                    chk        = "x" if s_status == "Completed" else " "
+                    lines.append(f"- [{chk}] {s_seq} — {s.get('name', '')} ({s_status})")
+                    if s_owner_n:
+                        lines.append(f"  Owner: {s_owner_n}" + (f" · Sup: {s_sup_n}" if s_sup_n else ""))
+                    if s.get("notes"):
+                        for ln in s["notes"].split("\n"):
+                            lines.append(f"  {ln}")
+                lines.append("")
+
+            t_comments = [c for c in comments_by_task.get(t["id"], []) if not c.get("is_system_event")]
+            if t_comments:
+                lines.append("#### Activity")
+                for c in t_comments:
+                    author = "?"
+                    u_rel = c.get("users")
+                    if isinstance(u_rel, dict):
+                        author = u_rel.get("name", "?")
+                    elif isinstance(u_rel, list) and u_rel:
+                        author = u_rel[0].get("name", "?")
+                    ts = c.get("created_at", "")[:16].replace("T", " ")
+                    lines.append(f"- {ts} · {author} — {c.get('body', '')}")
+                lines.append("")
+
+            lines.append("---")
+            lines.append("")
+            return lines
+
+        deliv_map = {d["id"]: d for d in deliverables}
+        sorted_delivs = sorted(deliverables, key=lambda d: d.get("deadline") or "9999-12-31")
+
+        for d in sorted_delivs:
+            did     = d["id"]
+            d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
+            total_d = len(d_tasks)
+            done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
+            md_lines.append(f"## {d.get('name')} ({d.get('type', '')} · deadline {fmt_date(d.get('deadline'))})")
+            md_lines.append(f"Progress: {done_d}/{total_d} tasks")
+            md_lines.append("")
+            for t in sorted(d_tasks, key=lambda t: t.get("sort_order") or 0):
+                md_lines.extend(_md_task_block(t))
+
+        no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
+        if no_deliv:
+            md_lines.append("## Generic Tasks (No Deliverable)")
+            md_lines.append("")
+            for t in sorted(no_deliv, key=lambda t: t.get("sort_order") or 0):
+                md_lines.extend(_md_task_block(t))
+
+        md_content = "\n".join(md_lines)
+        st.download_button(
+            "⬇️ Export Markdown", data=md_content,
+            file_name=f"detailed_report_{acronym}_{datetime.date.today().strftime('%Y%m%d')}.md",
+            mime="text/markdown", key="dr_dl_md"
+        )
+
+    st.write("")
+
+    # ── Deliverables ──────────────────────────────────────────────────────────
+    sorted_delivs = sorted(deliverables, key=lambda d: d.get("deadline") or "9999-12-31")
+    subs_by_task  = {}
+    for s in subtasks:
+        subs_by_task.setdefault(s.get("task_id"), []).append(s)
+
+    STATUS_DOT = {
+        "Completed":   "#2E7D32",
+        "Working on":  "#1565C0",
+        "Blocked":     "#E65100",
+        "Not started": "#888888",
+        "Cancelled":   "#B71C1C",
+    }
+
+    def _render_task_block(t: dict):
+        seq     = t.get("sequence_id") or f"T-{t['id']}"
+        status  = t.get("status", "Not started")
+        prio    = (t.get("priority") or "none").lower()
+        s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
+        p_fg, p_bg = PRIORITY_COLOURS.get(prio, ("#888", "#f0f0f0"))
+
+        # a) Header row
+        h_left, h_right = st.columns([5, 2])
+        with h_left:
+            st.html(
+                f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
+                f"<span style='font-family:monospace;color:#aaa;font-size:0.8rem;flex-shrink:0'>{seq}</span>"
+                f"<span style='font-size:14px;font-weight:700;color:#1a1a1a'>{t.get('name','')}</span>"
+                f"</div>"
+            )
+        with h_right:
+            st.html(
+                f"<div style='display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end'>"
+                f"<span style='background:{s_bg};color:{s_fg};border-radius:4px;"
+                f"padding:2px 8px;font-size:0.78rem;font-weight:600'>{status}</span>"
+                f"<span style='background:{p_bg};color:{p_fg};border-radius:4px;"
+                f"padding:2px 8px;font-size:0.78rem;font-weight:600'>{prio}</span>"
+                f"</div>"
+            )
+
+        # b) Metadata row
+        owner_e = t.get("owner_email")
+        sup_e   = t.get("supervisor_email")
+        meta_pills = ""
+        if owner_e:
+            u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
+            meta_pills += person_pill_html(u.get("name", owner_e), u.get("avatar_color", "#534AB7"),
+                                           role="owner", compact=False)
+        if sup_e and sup_e != owner_e:
+            u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
+            meta_pills += person_pill_html(u.get("name", sup_e), u.get("avatar_color", "#BA7517"),
+                                           role="sup", compact=False)
+        deadline_txt = f"Deadline: {fmt_date(t.get('deadline'))}" if t.get("deadline") else ""
+        compl_txt    = f"Completed: {fmt_date(t.get('completion_date'))}" if t.get("completion_date") else ""
+        est_txt      = f"Est: {int(t['estimate_hours'])}h" if t.get("estimate_hours") else ""
+        meta_text    = "  ·  ".join(x for x in [deadline_txt, compl_txt, est_txt] if x)
+
+        st.html(
+            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0'>"
+            f"{meta_pills}"
+            f"<span style='font-size:12px;color:#666'>{meta_text}</span>"
+            f"</div>"
+        )
+
+        # c) Description / notes
+        if t.get("notes"):
+            with st.container():
+                st.markdown(
+                    f"<div style='background:#FAFAFA;border-radius:6px;padding:10px 14px;"
+                    f"margin:6px 0;border:1px solid #f0f0f0'>"
+                    f"",
+                    unsafe_allow_html=True
+                )
+                st.markdown(t["notes"])
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        # d) Subtasks
+        t_subs = subs_by_task.get(t["id"], [])
+        if t_subs:
+            st.html(
+                "<div style='font-size:11px;font-weight:700;color:#888;"
+                "text-transform:uppercase;letter-spacing:0.08em;margin:8px 0 4px 0'>"
+                "SUBTASKS</div>"
+            )
+            for s in t_subs:
+                s_status   = s.get("status", "Not started")
+                s_dot_col  = STATUS_DOT.get(s_status, "#888")
+                s_seq      = s.get("sequence_id") or f"S-{s['id']}"
+                s_owner_e  = s.get("owner_email")
+                s_sup_e    = s.get("supervisor_email")
+                s_sf, s_sb = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
+                s_badge = (
+                    f"<span style='background:{s_sb};color:{s_sf};border-radius:4px;"
+                    f"padding:1px 6px;font-size:0.72rem;font-weight:600'>{s_status}</span>"
+                )
+                s_pills = ""
+                if s_owner_e:
+                    u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#534AB7"})
+                    s_pills += person_pill_html(u.get("name", s_owner_e), u.get("avatar_color", "#534AB7"),
+                                                role="owner", compact=True)
+                if s_sup_e and s_sup_e != s_owner_e:
+                    u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#BA7517"})
+                    s_pills += person_pill_html(u.get("name", s_sup_e), u.get("avatar_color", "#BA7517"),
+                                                role="sup", compact=True)
+
+                st.html(
+                    f"<div style='display:flex;align-items:center;gap:6px;"
+                    f"padding:3px 0 3px 16px;flex-wrap:wrap'>"
+                    f"<span style='width:8px;height:8px;background:{s_dot_col};"
+                    f"border-radius:50%;flex-shrink:0'></span>"
+                    f"<span style='font-family:monospace;color:#aaa;font-size:0.72rem;flex-shrink:0'>{s_seq}</span>"
+                    f"<span style='font-size:13px;flex:1;min-width:80px'>{s.get('name','')}</span>"
+                    f"{s_badge}"
+                    f"{s_pills}"
+                    f"</div>"
+                )
+                if s.get("notes"):
+                    st.markdown(
+                        f"<div style='margin-left:24px;background:#FAFAFA;border-radius:4px;"
+                        f"padding:6px 10px;margin-top:2px;font-size:0.85rem'>",
+                        unsafe_allow_html=True
+                    )
+                    st.markdown(s["notes"])
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+        # e) Activity log
+        t_comments = comments_by_task.get(t["id"], [])
+        if t_comments:
+            st.html(
+                "<div style='font-size:11px;font-weight:700;color:#888;"
+                "text-transform:uppercase;letter-spacing:0.08em;margin:8px 0 4px 0'>"
+                "ACTIVITY</div>"
+            )
+            for c in t_comments:
+                dot_col = "#2E7D32" if c.get("is_system_event") else "#1565C0"
+                author  = "?"
+                u_rel = c.get("users")
+                if isinstance(u_rel, dict):
+                    author = u_rel.get("name", "?")
+                elif isinstance(u_rel, list) and u_rel:
+                    author = u_rel[0].get("name", "?")
+                ts = (c.get("created_at") or "")[:16].replace("T", " ")
+                st.html(
+                    f"<div style='display:flex;align-items:flex-start;gap:6px;"
+                    f"padding:3px 0;font-size:0.85rem'>"
+                    f"<span style='width:8px;height:8px;background:{dot_col};"
+                    f"border-radius:50%;flex-shrink:0;margin-top:4px'></span>"
+                    f"<span style='flex:1'>{c.get('body','')}</span>"
+                    f"<span style='color:#aaa;font-size:11px;white-space:nowrap;flex-shrink:0'>"
+                    f"· {ts} · {author}</span>"
+                    f"</div>"
+                )
+
+        st.divider()
+
+    for d in sorted_delivs:
+        did     = d["id"]
+        d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
+        total_d = len(d_tasks)
+        done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
+        prog    = done_d / total_d if total_d > 0 else 0.0
+
+        st.html(
+            f"<div style='background:#F5F5F5;border-radius:6px;padding:10px 16px;margin:8px 0'>"
+            f"<span style='font-weight:700;font-size:1.05rem'>{d.get('name','')}</span>"
+            f"&nbsp;<span style='font-style:italic;color:#888;font-size:0.85rem'>{d.get('type','')}</span>"
+            f"&nbsp;&nbsp;<span style='font-size:0.85rem;color:#555'>"
+            f"Deadline: {fmt_date(d.get('deadline'))}</span>"
+            f"</div>"
+        )
+        st.progress(prog)
+        st.caption(f"{done_d} / {total_d} tasks completed")
+
+        if d_tasks:
+            for t in sorted(d_tasks, key=lambda t: t.get("sort_order") or 0):
+                _render_task_block(t)
+        else:
+            st.caption("No tasks in this deliverable.")
+
+    # ── Generic tasks (no deliverable) ────────────────────────────────────────
+    no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
+    if no_deliv:
+        st.html(
+            "<div style='border:2px dashed #cccccc;border-radius:6px;padding:10px 16px;margin:16px 0;'>"
+            "<span style='font-weight:700;color:#888;font-size:0.95rem'>"
+            "GENERIC TASKS (NO DELIVERABLE)</span></div>"
+        )
+        for t in sorted(no_deliv, key=lambda t: t.get("sort_order") or 0):
+            _render_task_block(t)
+
+
 # ─── Main entry point ──────────────────────────────────────────────────────────
 
 def show_reports():
@@ -563,10 +1022,11 @@ def show_reports():
     user_role = st.session_state.get("user_role")
 
     if user_role == "admin":
-        tab_main, tab_wl, tab_sp = st.tabs([
+        tab_main, tab_wl, tab_sp, tab_det = st.tabs([
             "📋 Project Report",
             "👤 Workload by Person",
             "🏗️ Staff by Project",
+            "📄 Detailed Report",
         ])
         with tab_main:
             _render_main_report()
@@ -574,5 +1034,7 @@ def show_reports():
             _render_workload_report()
         with tab_sp:
             _render_staff_report()
+        with tab_det:
+            _render_detailed_report()
     else:
         _render_main_report()

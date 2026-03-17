@@ -268,15 +268,23 @@ def _render_item(entry, projects, deliverables, mode, today, threshold, user_map
 
     # ── Person pills (owner + supervisor) ────────────────────────────────────
     persons_html = ""
-    umap = user_map or {}
+    umap    = user_map or {}
     owner_e = item.get("owner_email")
     sup_e   = item.get("supervisor_email")
     if owner_e:
-        u = umap.get(owner_e, {"name": owner_e, "avatar_color": "#888888"})
-        persons_html += person_pill_html(u.get("name", owner_e), u.get("avatar_color", "#888888"))
+        u = umap.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
+        persons_html += person_pill_html(
+            u.get("name", owner_e),
+            u.get("avatar_color", "#534AB7"),
+            role="owner", compact=True
+        )
     if sup_e and sup_e != owner_e:
-        u = umap.get(sup_e, {"name": sup_e, "avatar_color": "#888888"})
-        persons_html += person_pill_html(u.get("name", sup_e), u.get("avatar_color", "#888888"), "(sup)")
+        u = umap.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
+        persons_html += person_pill_html(
+            u.get("name", sup_e),
+            u.get("avatar_color", "#BA7517"),
+            role="sup", compact=True
+        )
     persons_row = (
         f"<div style='margin-top:5px;'>{persons_html}</div>" if persons_html else ""
     )

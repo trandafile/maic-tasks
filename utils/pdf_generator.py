@@ -443,3 +443,201 @@ def generate_staff_pdf(staff_data: list) -> "BytesIO":
     doc.build(elements)
     buf.seek(0)
     return buf
+
+
+# ─── Report: Detailed (per progetto) ────────────────────────────────────────
+
+def generate_detailed_report_pdf(
+    project: dict,
+    deliverables: list,
+    tasks: list,
+    subtasks_by_task: dict,
+    comments_by_task: dict,
+    users_dict: dict,
+) -> "BytesIO":
+    """PDF version of the detailed per-project report.
+
+    Args:
+        project:          full projects row
+        deliverables:     list of deliverable rows for the project
+        tasks:            list of task rows for the project
+        subtasks_by_task: {task_id: [subtask, ...]}
+        comments_by_task: {task_id: [comment, ...]}
+        users_dict:       {email: user_row}
+    """
+    from utils.helpers import strip_markdown, fmt_date as _fmt_date2
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=20*mm, rightMargin=20*mm,
+        topMargin=20*mm, bottomMargin=20*mm,
+    )
+    styles = getSampleStyleSheet()
+    h1     = ParagraphStyle("DH1", parent=styles["Heading1"], fontSize=16, spaceAfter=2)
+    h2     = ParagraphStyle("DH2", parent=styles["Heading2"], fontSize=12, spaceAfter=2)
+    h3     = ParagraphStyle("DH3", parent=styles["Heading3"], fontSize=10, spaceAfter=2)
+    normal = ParagraphStyle("DN",  parent=styles["Normal"],   fontSize=9, spaceAfter=4)
+    small  = ParagraphStyle("DS",  parent=styles["Normal"],   fontSize=8, textColor=colors.grey)
+    label  = ParagraphStyle("DL",  parent=styles["Normal"],   fontSize=7,
+                             textColor=colors.grey, fontName="Helvetica-BoldOblique", spaceAfter=3)
+    italic = ParagraphStyle("DI",  parent=styles["Normal"],   fontSize=8,
+                             textColor=colors.grey, fontName="Helvetica-Oblique")
+    body   = ParagraphStyle("DB",  parent=styles["Normal"],   fontSize=9,
+                             leftIndent=8, spaceAfter=4)
+
+    import datetime as _dt
+
+    today_str    = _dt.date.today().strftime("%Y/%m/%d")
+    active_tasks = [t for t in tasks if t.get("status") not in ("Cancelled",)]
+    today_iso    = _dt.date.today().isoformat()
+    completed    = [t for t in active_tasks if t.get("status") == "Completed"]
+    overdue      = [t for t in active_tasks if t.get("deadline") and t["deadline"] < today_iso and t.get("status") != "Completed"]
+    total_hours  = sum(t.get("estimate_hours") or 0 for t in active_tasks)
+
+    def _uname(email):
+        if not email:
+            return "—"
+        u = users_dict.get(email)
+        if u:
+            return u.get("name", email)
+        return email
+
+    elements_d = []
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    acronym = project.get("acronym", "") or project.get("identifier", "")
+    elements_d.append(Paragraph(f"{project.get('name', '')} ({acronym})", h1))
+    capt_parts = []
+    if project.get("funding_agency"):
+        capt_parts.append(project["funding_agency"])
+    if project.get("start_date"):
+        capt_parts.append(
+            f"{_fmt_date2(project.get('start_date'))} → {_fmt_date2(project.get('end_date'))}"
+        )
+    capt_parts.append(f"Generated: {today_str}")
+    elements_d.append(Paragraph("  ·  ".join(capt_parts), small))
+    elements_d.append(Spacer(1, 6))
+
+    # ── Summary table ─────────────────────────────────────────────────────────
+    sum_data = [
+        ["Total tasks", "Completed", "Overdue", "Est. hours"],
+        [
+            str(len(active_tasks)),
+            str(len(completed)),
+            str(len(overdue)),
+            f"{int(total_hours)}h" if total_hours else "—",
+        ],
+    ]
+    sum_tbl = Table(sum_data, colWidths=[40*mm, 40*mm, 40*mm, 40*mm], hAlign="LEFT")
+    sum_tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0), colors.HexColor("#F5F5F5")),
+        ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 9),
+        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elements_d.append(sum_tbl)
+    elements_d.append(Spacer(1, 10))
+
+    # ── Per-deliverable sections ───────────────────────────────────────────────
+    sorted_delivs = sorted(deliverables, key=lambda d: d.get("deadline") or "9999-12-31")
+
+    def _render_task_pdf(t: dict):
+        seq    = t.get("sequence_id") or f"T-{t['id']}"
+        status = t.get("status", "Not started")
+        prio   = (t.get("priority") or "none").capitalize()
+        dl     = _fmt_date2(t.get("deadline"))
+        est    = f"{int(t['estimate_hours'])}h" if t.get("estimate_hours") else "—"
+        owner  = _uname(t.get("owner_email"))
+        sup    = _uname(t.get("supervisor_email")) if t.get("supervisor_email") else None
+
+        stat_col = STATUS_TEXT.get(status, colors.grey)
+        elements_d.append(Spacer(1, 4))
+        elements_d.append(Paragraph(f"{seq} — {t.get('name', '')}", h3))
+
+        meta = f"Owner: {owner}"
+        if sup and sup != owner:
+            meta += f"  ·  Supervisor: {sup}"
+        meta += f"  ·  Status: <font color='{stat_col.hexval()}'>{status}</font>"
+        meta += f"  ·  Priority: {prio}  ·  Deadline: {dl}  ·  Est: {est}"
+        if t.get("completion_date"):
+            meta += f"  ·  Completed: {_fmt_date2(t['completion_date'])}"
+        elements_d.append(Paragraph(meta, small))
+
+        if t.get("notes"):
+            notes_plain = strip_markdown(t["notes"])
+            if notes_plain:
+                elements_d.append(Paragraph(notes_plain, body))
+
+        t_subs = subtasks_by_task.get(t["id"], [])
+        if t_subs:
+            elements_d.append(Paragraph("SUBTASKS", label))
+            for s in t_subs:
+                s_status = s.get("status", "Not started")
+                s_seq    = s.get("sequence_id") or f"S-{s['id']}"
+                s_owner  = _uname(s.get("owner_email"))
+                chk      = "✓" if s_status == "Completed" else "○"
+                s_stat_col = STATUS_TEXT.get(s_status, colors.grey)
+                sub_line = (
+                    f"{chk}  {s_seq} — {s.get('name', '')}  "
+                    f"<font color='{s_stat_col.hexval()}'>[{s_status}]</font>"
+                    f"  Owner: {s_owner}"
+                )
+                elements_d.append(Paragraph(sub_line, small))
+                if s.get("notes"):
+                    sn = strip_markdown(s["notes"])
+                    if sn:
+                        elements_d.append(Paragraph(sn, ParagraphStyle(
+                            "SubN", parent=body, fontSize=8, leftIndent=20
+                        )))
+
+        t_comments = [c for c in comments_by_task.get(t["id"], []) if not c.get("is_system_event")]
+        if t_comments:
+            elements_d.append(Paragraph("ACTIVITY", label))
+            for c in t_comments:
+                author = "?"
+                u_rel = c.get("users")
+                if isinstance(u_rel, dict):
+                    author = u_rel.get("name", "?")
+                elif isinstance(u_rel, list) and u_rel:
+                    author = u_rel[0].get("name", "?")
+                ts = (c.get("created_at") or "")[:16].replace("T", " ")
+                elements_d.append(Paragraph(f"{ts} · {author} — {c.get('body', '')}", italic))
+
+        elements_d.append(HRFlowable(width="100%", thickness=0.3, lineCap="butt",
+                                     color=colors.HexColor("#DDDDDD")))
+
+    for d in sorted_delivs:
+        did     = d["id"]
+        d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("status") != "Cancelled"]
+        total_d = len(d_tasks)
+        done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
+
+        elements_d.append(Paragraph(d.get("name", ""), h2))
+        elements_d.append(Paragraph(
+            f"{d.get('type', '')}  ·  Deadline: {_fmt_date2(d.get('deadline'))}  ·  "
+            f"{done_d}/{total_d} tasks completed",
+            small
+        ))
+        elements_d.append(Spacer(1, 4))
+
+        for t in sorted(d_tasks, key=lambda t: t.get("sort_order") or 0):
+            _render_task_pdf(t)
+
+        elements_d.append(HRFlowable(width="100%", thickness=1.0, lineCap="butt",
+                                     color=colors.HexColor("#CCCCCC")))
+        elements_d.append(Spacer(1, 8))
+
+    # ── Generic tasks ──────────────────────────────────────────────────────────
+    no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
+    if no_deliv:
+        elements_d.append(Paragraph("GENERIC TASKS (NO DELIVERABLE)", h2))
+        for t in sorted(no_deliv, key=lambda t: t.get("sort_order") or 0):
+            _render_task_pdf(t)
+
+    doc.build(elements_d)
+    buf.seek(0)
+    return buf

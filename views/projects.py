@@ -293,11 +293,19 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
         sup_e   = t.get("supervisor_email")
         pills   = ""
         if owner_e:
-            u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#888888"})
-            pills += person_pill_html(u.get("name", owner_e), u.get("avatar_color", "#888888"))
+            u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
+            pills += person_pill_html(
+                u.get("name", owner_e),
+                u.get("avatar_color", "#534AB7"),
+                role="owner", compact=False
+            )
         if sup_e and sup_e != owner_e:
-            u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#888888"})
-            pills += person_pill_html(u.get("name", sup_e), u.get("avatar_color", "#888888"), "(sup)")
+            u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
+            pills += person_pill_html(
+                u.get("name", sup_e),
+                u.get("avatar_color", "#BA7517"),
+                role="sup", compact=False
+            )
         if pills:
             st.html(f"<div style='opacity:{opacity}'>{pills}</div>")
     with c5:
@@ -359,11 +367,19 @@ def _render_task_row(t, subtasks, users, user_email, is_admin, key_prefix):
             s_sup_e   = s.get("supervisor_email")
             s_pills   = ""
             if s_owner_e:
-                u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#888888"})
-                s_pills += person_pill_html(u.get("name", s_owner_e), u.get("avatar_color", "#888888"))
+                u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#534AB7"})
+                s_pills += person_pill_html(
+                    u.get("name", s_owner_e),
+                    u.get("avatar_color", "#534AB7"),
+                    role="owner", compact=True
+                )
             if s_sup_e and s_sup_e != s_owner_e:
-                u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#888888"})
-                s_pills += person_pill_html(u.get("name", s_sup_e), u.get("avatar_color", "#888888"), "(sup)")
+                u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#BA7517"})
+                s_pills += person_pill_html(
+                    u.get("name", s_sup_e),
+                    u.get("avatar_color", "#BA7517"),
+                    role="sup", compact=True
+                )
             if s_pills:
                 st.html(f"<div style='opacity:{s_opacity}'>{s_pills}</div>")
         with sc5:

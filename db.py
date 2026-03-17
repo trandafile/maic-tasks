@@ -188,12 +188,15 @@ def get_workload_per_person() -> list[dict]:
 
     Each entry:
       user              – full users row
-      tasks_active      – tasks where status not in (Completed, Cancelled), not archived
-      tasks_overdue     – active tasks with deadline < today
-      projects_count    – distinct projects with active tasks
-      estimate_hours    – sum of estimate_hours on all non-cancelled tasks (or None)
-      status_counts     – {status: count} over ALL non-cancelled tasks (for bars)
-      all_user_tasks    – list of all non-cancelled, non-archived task dicts
+      tasks_active      – tasks where email == owner_email AND status not in (Completed, Cancelled)
+      supervises_count  – tasks where email == supervisor_email (not owner), status not Completed/Cancelled
+      tasks_overdue     – active owned tasks with deadline < today
+      projects_count    – distinct projects with active owned tasks
+      estimate_hours    – sum of estimate_hours on owned tasks only (non-cancelled)
+      status_counts     – {status: count} over ALL non-cancelled owned tasks (for bars)
+      all_user_tasks    – list of all non-cancelled, non-archived task dicts (owned OR supervised)
+      owned_tasks       – list of all non-cancelled, non-archived tasks where email == owner_email
+      supervised_tasks  – list where email == supervisor_email AND email != owner_email, non-cancelled
       projects          – list of per-project dicts (see below)
 
     projects entry:
@@ -219,37 +222,47 @@ def get_workload_per_person() -> list[dict]:
     for user in users:
         email = user["email"]
 
-        user_tasks = [
+        owned_tasks = [
             t for t in tasks
-            if t.get("owner_email") == email or t.get("supervisor_email") == email
+            if t.get("owner_email") == email
         ]
+        supervised_tasks = [
+            t for t in tasks
+            if t.get("supervisor_email") == email and t.get("owner_email") != email
+        ]
+        user_tasks = owned_tasks + supervised_tasks
+
         if not user_tasks:
             continue
 
-        # Active = not completed (still to do)
-        active_tasks = [t for t in user_tasks if t.get("status") != "Completed"]
+        # Active = owned and not completed
+        active_tasks = [t for t in owned_tasks if t.get("status") != "Completed"]
         overdue      = [t for t in active_tasks if t.get("deadline") and t["deadline"] < today]
         proj_ids     = {t["project_id"] for t in active_tasks if t.get("project_id")}
 
-        raw_hours  = sum(t.get("estimate_hours") or 0 for t in user_tasks)
+        supervises_count = len([t for t in supervised_tasks if t.get("status") != "Completed"])
+
+        raw_hours  = sum(t.get("estimate_hours") or 0 for t in owned_tasks)
         est_hours  = raw_hours if raw_hours > 0 else None
 
+        # status_counts over owned tasks only (for progress bars)
         status_counts: dict[str, int] = {}
-        for t in user_tasks:
+        for t in owned_tasks:
             s = t.get("status", "Not started")
             status_counts[s] = status_counts.get(s, 0) + 1
 
         projects_detail = []
-        for pid in proj_ids:
+        all_proj_ids = {t["project_id"] for t in user_tasks if t.get("project_id")}
+        for pid in all_proj_ids:
             proj = proj_map.get(pid, {})
             proj_active = [t for t in active_tasks if t.get("project_id") == pid]
-            owner_n = sum(1 for t in proj_active if t.get("owner_email") == email)
-            sup_n   = sum(1 for t in proj_active
-                          if t.get("supervisor_email") == email and t.get("owner_email") != email)
+            owner_n = len(proj_active)
+            sup_n   = sum(1 for t in supervised_tasks
+                          if t.get("project_id") == pid and t.get("status") != "Completed")
             role = "owner" if owner_n >= sup_n else "supervisor"
 
             sc: dict[str, int] = {}
-            for t in proj_active:
+            for t in [t for t in user_tasks if t.get("project_id") == pid]:
                 s = t.get("status", "Not started")
                 sc[s] = sc.get(s, 0) + 1
 
@@ -258,20 +271,23 @@ def get_workload_per_person() -> list[dict]:
                 "project_name":    proj.get("name", ""),
                 "project_acronym": proj.get("acronym") or proj.get("identifier", ""),
                 "role":            role,
-                "tasks":           proj_active,
+                "tasks":           [t for t in user_tasks if t.get("project_id") == pid],
                 "status_counts":   sc,
             })
         projects_detail.sort(key=lambda x: x["project_name"])
 
         result.append({
-            "user":           user,
-            "tasks_active":   len(active_tasks),
-            "tasks_overdue":  len(overdue),
-            "projects_count": len(proj_ids),
-            "estimate_hours": est_hours,
-            "status_counts":  status_counts,
-            "all_user_tasks": user_tasks,
-            "projects":       projects_detail,
+            "user":             user,
+            "tasks_active":     len(active_tasks),
+            "supervises_count": supervises_count,
+            "tasks_overdue":    len(overdue),
+            "projects_count":   len(proj_ids),
+            "estimate_hours":   est_hours,
+            "status_counts":    status_counts,
+            "all_user_tasks":   user_tasks,
+            "owned_tasks":      owned_tasks,
+            "supervised_tasks": supervised_tasks,
+            "projects":         projects_detail,
         })
 
     result.sort(key=lambda x: x["tasks_active"], reverse=True)
@@ -286,7 +302,8 @@ def get_staff_per_project() -> list[dict]:
       tasks_active_count – total non-cancelled, non-archived tasks
       people            – list of person dicts:
           user, task_roles, tasks_active, status_counts,
-          role_prevalent, estimate_hours
+          role_prevalent, estimate_hours,
+          owned_count, supervised_count, owned_hours
     """
     try:
         projects = supabase.table("projects").select("*").eq("is_archived", False).execute().data
@@ -330,19 +347,34 @@ def get_staff_per_project() -> list[dict]:
                 s = t.get("status", "Not started")
                 sc[s] = sc.get(s, 0) + 1
 
+            owned_tasks = [t for t in proj_tasks if t.get("owner_email") == email]
+            supervised_tasks = [
+                t for t in proj_tasks
+                if t.get("supervisor_email") == email and t.get("owner_email") != email
+            ]
+            owned_count      = len(owned_tasks)
+            supervised_count = len(supervised_tasks)
+
+            owner_hrs = [t.get("estimate_hours") for t in owned_tasks if t.get("estimate_hours")]
+            owned_hours = sum(owner_hrs) if owner_hrs else None
+
+            # keep backward-compatible estimate_hours (all tasks)
+            all_hrs = [t.get("estimate_hours") for t in person_tasks if t.get("estimate_hours")]
+            est_hours = sum(all_hrs) if all_hrs else None
+
             owner_n = sum(1 for r in task_roles if r["role"] == "owner")
             role_prev = "owner" if owner_n >= len(task_roles) - owner_n else "supervisor"
 
-            hrs = [t.get("estimate_hours") for t in person_tasks if t.get("estimate_hours")]
-            est_hours = sum(hrs) if hrs else None
-
             people.append({
-                "user":           user,
-                "task_roles":     task_roles,
-                "tasks_active":   len(person_tasks),
-                "status_counts":  sc,
-                "role_prevalent": role_prev,
-                "estimate_hours": est_hours,
+                "user":             user,
+                "task_roles":       task_roles,
+                "tasks_active":     len(person_tasks),
+                "status_counts":    sc,
+                "role_prevalent":   role_prev,
+                "estimate_hours":   est_hours,
+                "owned_count":      owned_count,
+                "supervised_count": supervised_count,
+                "owned_hours":      owned_hours,
             })
 
         people.sort(key=lambda x: x["tasks_active"], reverse=True)

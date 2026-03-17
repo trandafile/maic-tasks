@@ -40,8 +40,15 @@ def render_priority_badge(priority: str) -> str:
 
 # ── Shared person-pill helper ─────────────────────────────────────────────────
 
-def person_pill_html(name: str, color: str, role_suffix: str = "") -> str:
-    """Colored avatar-initial chip + name for owner/supervisor display."""
+def person_pill_html(name: str, color: str, role: str = "owner",
+                     compact: bool = False) -> str:
+    """
+    Colored avatar pill chip for owner/supervisor display.
+
+    role: "owner" → violet pill
+          "sup"   → amber pill
+    compact: True → avatar only, no name (for dashboard/subtask)
+    """
     parts = (name or "").split()
     if len(parts) >= 2:
         initials = (parts[0][0] + parts[-1][0]).upper()
@@ -49,20 +56,50 @@ def person_pill_html(name: str, color: str, role_suffix: str = "") -> str:
         initials = parts[0][:2].upper()
     else:
         initials = "?"
-    safe_color = color or "#888888"
-    suffix_html = (
-        f"<span style='color:#aaa;font-size:10px;margin-left:2px;'>{role_suffix}</span>"
-        if role_suffix else ""
+
+    if role == "owner":
+        bg_pill  = "#EEEDFE"
+        border   = "#AFA9EC"
+        av_bg    = "#534AB7"
+        av_fg    = "#EEEDFE"
+        lbl_col  = "#3C3489"
+        name_col = "#3C3489"
+        lbl_text = "owner"
+    else:  # sup
+        bg_pill  = "#FAEEDA"
+        border   = "#FAC775"
+        av_bg    = "#BA7517"
+        av_fg    = "#FAEEDA"
+        lbl_col  = "#633806"
+        name_col = "#633806"
+        lbl_text = "sup"
+
+    av_html = (
+        f"<span style='background:{av_bg};color:{av_fg};border-radius:50%;"
+        f"width:20px;height:20px;display:inline-flex;align-items:center;"
+        f"justify-content:center;font-size:9px;font-weight:700;"
+        f"flex-shrink:0;'>{initials}</span>"
     )
-    return (
-        f"<span style='display:inline-flex;align-items:center;gap:4px;margin-right:10px;'>"
-        f"<span style='background:{safe_color};color:white;border-radius:50%;"
-        f"width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;"
-        f"font-size:9px;font-weight:700;flex-shrink:0;'>{initials}</span>"
-        f"<span style='font-size:12px;color:#444;'>{name or ''}</span>"
-        f"{suffix_html}"
-        f"</span>"
-    )
+
+    if compact:
+        return (
+            f"<span style='display:inline-flex;align-items:center;"
+            f"padding:2px 4px;border-radius:99px;"
+            f"background:{bg_pill};border:1px solid {border};"
+            f"margin-right:4px;' title='{role}: {name}'>{av_html}</span>"
+        )
+    else:
+        return (
+            f"<span style='display:inline-flex;align-items:center;gap:4px;"
+            f"padding:3px 8px 3px 4px;border-radius:99px;"
+            f"background:{bg_pill};border:1px solid {border};"
+            f"margin-right:6px;'>"
+            f"{av_html}"
+            f"<span style='font-size:10px;font-weight:700;color:{lbl_col};"
+            f"margin:0 1px;'>{lbl_text}</span>"
+            f"<span style='font-size:12px;color:{name_col};'>{name}</span>"
+            f"</span>"
+        )
 
 
 # ── Context fetchers for modals ───────────────────────────────────────────────
@@ -169,10 +206,12 @@ def _breadcrumb_and_persons_html(
     pills = ""
     if owner_email:
         u = user_map.get(owner_email, {"name": owner_email, "avatar_color": "#888888"})
-        pills += person_pill_html(u.get("name", owner_email), u.get("avatar_color", "#888888"))
+        pills += person_pill_html(u.get("name", owner_email), u.get("avatar_color", "#888888"),
+                                  role="owner", compact=False)
     if sup_email and sup_email != owner_email:
         u = user_map.get(sup_email, {"name": sup_email, "avatar_color": "#888888"})
-        pills += person_pill_html(u.get("name", sup_email), u.get("avatar_color", "#888888"), "(sup)")
+        pills += person_pill_html(u.get("name", sup_email), u.get("avatar_color", "#888888"),
+                                  role="sup", compact=False)
 
     pills_div = f"<div style='margin-bottom:4px;'>{pills}</div>" if pills else ""
     return bc + pills_div
