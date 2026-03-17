@@ -379,12 +379,12 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
     s_badge = _badge(status, s_fg, s_bg)
     p_badge = _badge(priority, p_fg, p_bg)
 
-    col_html, col_btns = st.columns([8, 2])
+    col_html, col_btns = st.columns([6, 4])
     with col_html:
         st.html(
             f"""
             <div style='display:grid;grid-template-columns:52px 1fr auto;
-                        gap:0;padding:8px 8px 6px 8px;align-items:start;
+                        gap:0;padding:5px 8px 5px 8px;align-items:start;
                         opacity:{opacity};'>
               <span style='font-family:monospace;font-size:10px;
                            color:#aaa;padding-top:3px;'>{seq_id}</span>
@@ -405,17 +405,17 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
             """
         )
     with col_btns:
-        b1, b2, b3 = st.columns([1, 1, 1])
+        b1, b2, b3 = st.columns([2.5, 2, 1])
         with b1:
-            if st.button("Details", key=f"{key_prefix}_det_{t_id}"):
+            if st.button("Details", key=f"{key_prefix}_det_{t_id}", use_container_width=True):
                 task_details_modal(t, can_edit)
         with b2:
-            if st.button("+ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit):
+            if st.button("+ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit, use_container_width=True):
                 add_subtask_modal(t_id, users)
         with b3:
             if is_admin:
                 confirm_key = f"_confirm_del_t_{t_id}"
-                if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete"):
+                if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete", use_container_width=True):
                     st.session_state[confirm_key] = True
                     st.rerun()
 
@@ -472,12 +472,12 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
         ss_fg, ss_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
         s_badge = _badge(s_status, ss_fg, ss_bg)
 
-        scol_html, scol_btns = st.columns([8, 2])
+        scol_html, scol_btns = st.columns([6, 4])
         with scol_html:
             st.html(
                 f"""
                 <div style='display:grid;grid-template-columns:52px 1fr auto;
-                            gap:0;padding:6px 8px 4px 8px;align-items:start;
+                            gap:0;padding:5px 8px 4px 8px;align-items:start;
                             opacity:{s_opacity};padding-left:24px;'>
                   <span></span>
                   <div>
@@ -496,14 +496,14 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
                 """
             )
         with scol_btns:
-            sb1, sb2 = st.columns([1, 1])
+            sb1, sb2 = st.columns([3, 1])
             with sb1:
-                if st.button("Details", key=f"{key_prefix}_vistaS_{s_id}"):
+                if st.button("Details", key=f"{key_prefix}_vistaS_{s_id}", use_container_width=True):
                     subtask_details_modal(s, s_can_edit)
             with sb2:
                 if is_admin:
                     s_confirm_key = f"_confirm_del_s_{s_id}"
-                    if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete"):
+                    if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete", use_container_width=True):
                         st.session_state[s_confirm_key] = True
                         st.rerun()
 
@@ -678,7 +678,6 @@ def show_projects():
                                 key_prefix=f"d{d_id}",
                                 threshold=threshold,
                             )
-                            st.divider()
 
                     # Per-deliverable "+ New Task" button
                     if st.button(f"➕ New Task in «{d_name}»", key=f"add_dt_{d_id}",
@@ -693,7 +692,6 @@ def show_projects():
             unassigned = sort_tasks_by_deadline(unassigned)
 
             if unassigned:
-                st.write("")
                 st.html(
                     "<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
                     "color:#666;text-transform:uppercase'>Generic Tasks (No Deliverable)</span>"
@@ -714,4 +712,3 @@ def show_projects():
                             key_prefix=f"p{proj_id}_u",
                             threshold=threshold,
                         )
-                        st.divider()
