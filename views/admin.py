@@ -511,6 +511,61 @@ def _tab_archive():
     proj_map  = _projects_map()
     deliv_map = _deliverables_map()
 
+    # ── Bulk actions for tasks ────────────────────────────────────────────────
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🗑 Delete ALL archived tasks", key="bulk_del_arch_tasks", use_container_width=True):
+            st.session_state["_confirm_bulk_del_arch_tasks"] = True
+    with c2:
+        if st.button("📦 Archive ALL completed tasks", key="bulk_arch_completed_tasks", use_container_width=True):
+            st.session_state["_confirm_bulk_arch_completed_tasks"] = True
+
+    # Confirm delete all archived tasks
+    if st.session_state.get("_confirm_bulk_del_arch_tasks"):
+        st.warning(
+            "⚠️ This will permanently delete **all archived tasks** and their related subtasks, "
+            "comments, labels and dependencies. This action cannot be undone."
+        )
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            if st.button("Yes, delete all archived tasks", key="yes_bulk_del_arch_tasks", type="primary", use_container_width=True):
+                try:
+                    arch_tasks_all = get_archived_tasks() or []
+                    for t in arch_tasks_all:
+                        delete_task_cascade(t["id"])
+                    st.success(f"Deleted {len(arch_tasks_all)} archived tasks.")
+                except Exception as e:
+                    st.error(f"Error during bulk delete: {e}")
+                finally:
+                    st.session_state.pop("_confirm_bulk_del_arch_tasks", None)
+                    st.rerun()
+        with dc2:
+            if st.button("Cancel", key="no_bulk_del_arch_tasks", use_container_width=True):
+                st.session_state.pop("_confirm_bulk_del_arch_tasks", None)
+                st.rerun()
+
+    # Confirm archive all completed tasks
+    if st.session_state.get("_confirm_bulk_arch_completed_tasks"):
+        st.warning(
+            "Archive **all tasks with status 'Completed'** (they will move to the Archived Tasks section). "
+            "This does not delete data; it only sets is_archived = true."
+        )
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            if st.button("Yes, archive completed tasks", key="yes_bulk_arch_completed_tasks", type="primary", use_container_width=True):
+                try:
+                    supabase.table("tasks").update({"is_archived": True}).eq("status", "Completed").eq("is_archived", False).execute()
+                    st.success("All completed tasks have been archived.")
+                except Exception as e:
+                    st.error(f"Error during bulk archive: {e}")
+                finally:
+                    st.session_state.pop("_confirm_bulk_arch_completed_tasks", None)
+                    st.rerun()
+        with ac2:
+            if st.button("Cancel", key="no_bulk_arch_completed_tasks", use_container_width=True):
+                st.session_state.pop("_confirm_bulk_arch_completed_tasks", None)
+                st.rerun()
+
     arch_projs = get_archived_projects()
     _archive_section(
         label="Archived Projects",
