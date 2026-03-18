@@ -285,50 +285,78 @@ def show_calendar():
 
     # ── Long-scale text timeline ───────────────────────────────────────────────
     st.subheader("Long-scale Timeline")
-    timeline: dict[tuple[int, int], list[dict]] = {}
-    for ev in events:
-        start = ev.get("start")
-        if not start:
-            continue
-        try:
-            d = datetime.date.fromisoformat(start)
-        except Exception:
-            continue
+    timeline_by_month: dict[tuple[int, int], list[dict]] = {}
+    for item in timeline_items:
+        d = item["date"]
         key = (d.year, d.month)
-        ext = ev.get("extendedProps", {}) or {}
-        proj_name = ext.get("project", "-")
-        kind = ext.get("kind", "")
-        title = ev.get("title") or ""
-        owner_e = ext.get("owner_email")
-        sup_e = ext.get("supervisor_email")
-        owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
-        sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
-        timeline.setdefault(key, []).append(
-            {
-                "date": d,
-                "project": proj_name,
-                "kind": kind,
-                "title": title,
-                "owner": owner_name or "—",
-                "sup": sup_name or "—",
-            }
-        )
+        timeline_by_month.setdefault(key, []).append(item)
 
-    for (year, month) in sorted(timeline.keys()):
+    md_lines: list[str] = []
+
+    for (year, month) in sorted(timeline_by_month.keys()):
         month_name = datetime.date(year, month, 1).strftime("%B %Y")
         st.markdown(f"### {month_name}")
-        for item in sorted(timeline[(year, month)], key=lambda x: x["date"]):
-            # Strip leading tag like "[Deliverable]" or "[Task]" from title for readability
+        md_lines.append(f"### {month_name}")
+
+        def _kind_order(k: str) -> int:
+            return {"deliverable": 0, "task": 1, "subtask": 2}.get(k, 3)
+
+        month_items = sorted(
+            timeline_by_month[(year, month)],
+            key=lambda x: (x["date"], _kind_order(x["kind"])),
+        )
+
+        open_block = False
+        for item in month_items:
             name = item["title"]
             if name.startswith("["):
                 try:
                     name = name.split("]", 1)[1].strip()
                 except Exception:
                     pass
-            st.markdown(
-                f"**{item['project']} - {name}** - Due on {item['date'].isoformat()}\n"
-                f"Owner: {item['owner']} | Supervisor: {item['sup']}"
-            )
+
+            is_deliv = item["kind"] == "deliverable"
+
+            if is_deliv:
+                if open_block:
+                    st.markdown("---")
+                    md_lines.append("---")
+                st.markdown("---")
+                md_lines.append("---")
+                line = (
+                    f"**Deliverable: {item['project']} - {name}** - Due on {item['date'].isoformat()}"
+                )
+                meta = f"Owner: {item['owner']} | Supervisor: {item['sup']}"
+                st.markdown(line + "\n" + meta)
+                md_lines.append(line)
+                md_lines.append(meta)
+                open_block = True
+            else:
+                line = (
+                    f"&nbsp;&nbsp;**{item['project']} - {name}** - Due on {item['date'].isoformat()}"
+                )
+                meta = f"&nbsp;&nbsp;Owner: {item['owner']} | Supervisor: {item['sup']}"
+                st.markdown(line + "\n" + meta)
+                md_lines.append(
+                    f"  **{item['project']} - {name}** - Due on {item['date'].isoformat()}"
+                )
+                md_lines.append(
+                    f"  Owner: {item['owner']} | Supervisor: {item['sup']}"
+                )
+
+        if open_block:
+            st.markdown("---")
+            md_lines.append("---")
+
+    if md_lines:
+        md_content = "\n".join(md_lines)
+        st.download_button(
+            "⬇️ Export Timeline (Markdown)",
+            data=md_content,
+            file_name=f"timeline_{datetime.date.today().strftime('%Y%m%d')}.md",
+            mime="text/markdown",
+            key="timeline_md_export",
+        )
 
     clicked = (selected or {}).get("eventClick")
     if clicked:
