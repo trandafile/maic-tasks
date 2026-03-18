@@ -158,24 +158,30 @@ _TEMPLATE = """
      *     controlled-component machinery picks up the change.
      *  3. Dispatching a bubbling "input" event to trigger React's onChange.
      */
-    function syncToParent(md) {{
+    var lastSynced = null;
+
+    function syncToParent(md, force) {{
       try {{
         var parentDoc = window.parent.document;
         var sinkTA = parentDoc.querySelector('textarea[aria-label="' + SINK_LABEL + '"]');
         if (sinkTA) {{
+          if (!force && (lastSynced === md || sinkTA.value === md)) {{
+            return true;
+          }}
           var setter = Object.getOwnPropertyDescriptor(
             window.parent.HTMLTextAreaElement.prototype, 'value'
           ).set;
           setter.call(sinkTA, md);
           sinkTA.dispatchEvent(new window.parent.Event('input', {{bubbles: true}}));
+          lastSynced = md;
           return true;
         }}
       }} catch(e) {{}}
       return false;
     }}
 
-    function syncNow() {{
-      syncToParent(easyMDE.value());
+    function syncNow(force) {{
+      syncToParent(easyMDE.value(), !!force);
     }}
 
     // Sync on every editing-relevant event.
@@ -186,14 +192,14 @@ _TEMPLATE = """
     easyMDE.codemirror.on("drop", syncNow);
 
     // Keep parent value fresh even if certain UI actions skip CodeMirror events.
-    var periodicSync = setInterval(syncNow, 400);
+    var periodicSync = setInterval(syncNow, 600);
 
     // Sync on load — retry until the sink textarea appears in the parent DOM
     // (it may render slightly after the iframe).
     window.addEventListener("load", function() {{
       var attempts = 0;
       function trySync() {{
-        if (!syncToParent(easyMDE.value()) && attempts < 10) {{
+        if (!syncToParent(easyMDE.value(), attempts === 0) && attempts < 10) {{
           attempts++;
           setTimeout(trySync, 200);
         }}

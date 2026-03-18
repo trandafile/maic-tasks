@@ -395,12 +395,11 @@ def _tab_projects():
                                             "Save did not persist the new description. "
                                             "Please reopen Edit and save again."
                                         )
-                                        return
-
-                                    _reset_md_editor_state(f"edit_proj_notes_{pid}")
-                                    st.session_state.pop(edit_key, None)
-                                    st.success("Project updated.")
-                                    st.rerun()
+                                    else:
+                                        _reset_md_editor_state(f"edit_proj_notes_{pid}")
+                                        st.session_state.pop(edit_key, None)
+                                        st.success("Project updated.")
+                                        st.rerun()
                                 except Exception as ex:
                                     st.error(f"Error: {ex}")
                     with pb2:
