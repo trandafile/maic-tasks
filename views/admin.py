@@ -47,6 +47,12 @@ def _deliverables_map() -> dict:
     return {r["id"]: r for r in rows}
 
 
+def _reset_md_editor_state(editor_key: str) -> None:
+    """Clear markdown editor state to force a fresh value load on next render."""
+    st.session_state.pop(f"__mde_{editor_key}", None)
+    st.session_state.pop(f"{editor_key}_ta", None)
+
+
 def _project_markdown_export(projects: list[dict]) -> str:
     lines = ["# Project List", ""]
     for proj in projects:
@@ -309,7 +315,13 @@ def _tab_projects():
 
                 with ca:
                     if st.button("✏️ Edit", key=f"edit_proj_{pid}", use_container_width=True):
-                        st.session_state[edit_key] = not st.session_state.get(edit_key, False)
+                        editor_key = f"edit_proj_notes_{pid}"
+                        currently_open = st.session_state.get(edit_key, False)
+                        if currently_open:
+                            st.session_state.pop(edit_key, None)
+                        else:
+                            _reset_md_editor_state(editor_key)
+                            st.session_state[edit_key] = True
                         st.session_state.pop(del_key, None)
                         st.rerun()
 
@@ -355,7 +367,7 @@ def _tab_projects():
                                 st.error("Project name is required.")
                             else:
                                 try:
-                                    supabase.table("projects").update({
+                                    update_res = supabase.table("projects").update({
                                         "name":           p_name,
                                         "acronym":        p_acronym or None,
                                         "identifier":     p_idf     or None,
@@ -363,7 +375,14 @@ def _tab_projects():
                                         "start_date":     p_start.isoformat() if p_start else None,
                                         "end_date":       p_end.isoformat()   if p_end   else None,
                                         "description":    p_description.strip() or None,
-                                    }).eq("id", pid).execute()
+                                    }).eq("id", pid).select("id").execute()
+                                    if not update_res.data:
+                                        st.error(
+                                            "Project not updated. No rows were affected "
+                                            "(possible permission/policy issue)."
+                                        )
+                                        return
+                                    _reset_md_editor_state(f"edit_proj_notes_{pid}")
                                     st.session_state.pop(edit_key, None)
                                     st.success("Project updated.")
                                     st.rerun()
@@ -371,6 +390,7 @@ def _tab_projects():
                                     st.error(f"Error: {ex}")
                     with pb2:
                         if st.button("Cancel", key=f"cancel_proj_{pid}", use_container_width=True):
+                            _reset_md_editor_state(f"edit_proj_notes_{pid}")
                             st.session_state.pop(edit_key, None)
                             st.rerun()
 
@@ -433,7 +453,7 @@ def _tab_projects():
                         "is_archived":    False,
                     }).execute()
                     # clear admin new-project description editor
-                    st.session_state.pop("__mde_admin_new_proj_notes", None)
+                    _reset_md_editor_state("admin_new_proj_notes")
                     st.success(f"Project '{np_name}' created.")
                     st.rerun()
                 except Exception as e:

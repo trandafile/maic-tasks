@@ -27,13 +27,13 @@ st.markdown("""
         font-size: 1.08rem;
         font-weight: 700;
         line-height: 1.35;
-        margin: 0.55rem 0 0.35rem 0;
+        margin: 0.65rem 0 0 0;
     }
     div[data-testid="stMarkdownContainer"] h2 {
         font-size: 1rem;
         font-weight: 700;
         line-height: 1.35;
-        margin: 0.5rem 0 0.3rem 0;
+        margin: 0.6rem 0 0 0;
     }
     div[data-testid="stMarkdownContainer"] h3 {
         font-size: 1rem;
@@ -41,7 +41,12 @@ st.markdown("""
         line-height: 1.35;
         text-decoration: underline;
         text-underline-offset: 2px;
-        margin: 0.45rem 0 0.25rem 0;
+        margin: 0.55rem 0 0 0;
+    }
+    div[data-testid="stMarkdownContainer"] h1 + p,
+    div[data-testid="stMarkdownContainer"] h2 + p,
+    div[data-testid="stMarkdownContainer"] h3 + p {
+        margin-top: 0 !important;
     }
     div[data-testid="stMarkdownContainer"] p,
     div[data-testid="stMarkdownContainer"] li {
