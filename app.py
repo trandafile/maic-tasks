@@ -69,6 +69,7 @@ from views.deliverables import show_deliverables
 from views.calendar import show_calendar
 from views.reports import show_reports
 from views.admin import show_admin
+from views.master_status_report import show_master_status_report
 
 def _run_scheduler_once():
     """Run deadline check once per session (avoid repeated calls on rerender)."""
@@ -103,6 +104,7 @@ def main():
 
         if st.session_state.get('user_role') == 'admin':
             pages.append("Admin Panel")
+            pages.append("Master Status Report")
 
         current = st.session_state.get('current_page', 'Dashboard')
         
@@ -131,6 +133,8 @@ def main():
         show_reports()
     elif page == "Admin Panel":
         show_admin()
+    elif page == "Master Status Report":
+        show_master_status_report()
 
 if __name__ == "__main__":
     main()

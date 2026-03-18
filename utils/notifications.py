@@ -186,3 +186,34 @@ def send_test_email(to_email: str) -> tuple[bool, str]:
         if not cfg.get("smtp_password"):
             return False, "Password SMTP non configurata."
         return False, "Invio fallito. Controlla la console per i dettagli."
+
+
+def send_master_status_report_to_admins(subject: str, body: str) -> tuple[bool, int, int]:
+    """Send the Master Status Report to all approved admins.
+
+    Returns:
+        (all_sent_ok, sent_count, total_admins)
+    """
+    try:
+        from core.supabase_client import supabase
+        admins = (
+            supabase.table("users")
+            .select("email")
+            .eq("role", "admin")
+            .eq("is_approved", True)
+            .execute()
+            .data
+            or []
+        )
+        emails = [a.get("email") for a in admins if a.get("email")]
+    except Exception as e:
+        print(f"[notifications] Error fetching admins: {e}")
+        return False, 0, 0
+
+    sent = 0
+    ok_all = True
+    for em in emails:
+        ok = _send(subject=subject, body=body, to_email=em)
+        sent += 1 if ok else 0
+        ok_all = ok_all and ok
+    return ok_all, sent, len(emails)
