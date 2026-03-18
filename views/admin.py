@@ -62,9 +62,9 @@ def _reset_project_edit_state(pid: int) -> None:
         f"p_fund_{pid}",
         f"p_start_{pid}",
         f"p_end_{pid}",
+        f"p_desc_{pid}",
     ]:
         st.session_state.pop(k, None)
-    _reset_md_editor_state(f"p_desc_{pid}")
 
 
 def _project_markdown_export(projects: list[dict]) -> str:
@@ -372,11 +372,11 @@ def _tab_projects():
                             format="DD/MM/YYYY",
                             key=f"p_end_{pid}",
                         )
-                    p_description = markdown_editor(
+                    p_description = st.text_area(
+                        "📝 Project Description (optional, Markdown)",
                         value=st.session_state.get(f"p_desc_{pid}", ""),
                         key=f"p_desc_{pid}",
                         height=220,
-                        label="📝 Project Description (optional, Markdown)",
                     )
                     pb1, pb2 = st.columns(2)
                     with pb1:
