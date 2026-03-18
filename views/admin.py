@@ -367,6 +367,7 @@ def _tab_projects():
                                 st.error("Project name is required.")
                             else:
                                 try:
+                                    new_description = p_description.strip() or None
                                     supabase.table("projects").update({
                                         "name":           p_name,
                                         "acronym":        p_acronym or None,
@@ -374,8 +375,28 @@ def _tab_projects():
                                         "funding_agency": p_funding or None,
                                         "start_date":     p_start.isoformat() if p_start else None,
                                         "end_date":       p_end.isoformat()   if p_end   else None,
-                                        "description":    p_description.strip() or None,
+                                        "description":    new_description,
                                     }).eq("id", pid).execute()
+
+                                    # Verify persistence to surface silent failures (e.g., policy/transport issues).
+                                    readback = (
+                                        supabase.table("projects")
+                                        .select("description")
+                                        .eq("id", pid)
+                                        .limit(1)
+                                        .execute()
+                                        .data
+                                    )
+                                    db_description = None
+                                    if readback:
+                                        db_description = (readback[0].get("description") or "").strip() or None
+                                    if db_description != new_description:
+                                        st.error(
+                                            "Save did not persist the new description. "
+                                            "Please reopen Edit and save again."
+                                        )
+                                        return
+
                                     _reset_md_editor_state(f"edit_proj_notes_{pid}")
                                     st.session_state.pop(edit_key, None)
                                     st.success("Project updated.")

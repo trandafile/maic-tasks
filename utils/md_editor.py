@@ -174,10 +174,19 @@ _TEMPLATE = """
       return false;
     }}
 
-    // Sync on every EasyMDE keystroke.
-    easyMDE.codemirror.on("change", function() {{
+    function syncNow() {{
       syncToParent(easyMDE.value());
-    }});
+    }}
+
+    // Sync on every editing-relevant event.
+    easyMDE.codemirror.on("change", syncNow);
+    easyMDE.codemirror.on("blur", syncNow);
+    easyMDE.codemirror.on("keyup", syncNow);
+    easyMDE.codemirror.on("paste", syncNow);
+    easyMDE.codemirror.on("drop", syncNow);
+
+    // Keep parent value fresh even if certain UI actions skip CodeMirror events.
+    var periodicSync = setInterval(syncNow, 400);
 
     // Sync on load — retry until the sink textarea appears in the parent DOM
     // (it may render slightly after the iframe).
@@ -190,6 +199,17 @@ _TEMPLATE = """
         }}
       }}
       setTimeout(trySync, 100);
+    }});
+
+    // Extra safety around tab/app lifecycle transitions.
+    window.addEventListener("beforeunload", syncNow);
+    document.addEventListener("visibilitychange", function() {{
+      if (document.visibilityState === "hidden") syncNow();
+    }});
+
+    // Clean interval when iframe is unloaded.
+    window.addEventListener("unload", function() {{
+      clearInterval(periodicSync);
     }});
   </script>
 </body>
