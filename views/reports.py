@@ -360,8 +360,8 @@ def _render_main_report():
             caption_parts.append(f"Funding: {proj['funding_agency']}")
         if proj.get("start_date"):
             caption_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
-        st.caption("  ·  ".join(caption_parts))
-        st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+        if caption_parts:
+            st.html(f"<div style='font-size:0.75rem;color:#888;margin:-8px 0 0 0;'>{chr(160).join(caption_parts)}</div>")
 
         proj_deliverables = [
             d for d in deliverables
@@ -371,7 +371,7 @@ def _render_main_report():
 
         if proj_deliverables:
             st.html("<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
-                    "color:#666'>DELIVERABLES</span>")
+                    "color:#666;display:block;margin-top:-4px;margin-bottom:2px;'>DELIVERABLES</span>")
             for d in proj_deliverables:
                 did      = d["id"]
                 d_tasks  = [t for t in tasks if t.get("deliverable_id") == did and task_matches(t)]
@@ -484,7 +484,7 @@ def _render_main_report():
                         )
                         _render_subtask_row(s, users_meta, can_edit=can_edit_s, key_prefix=f"rp_s_un_{pid}_{t.get('id')}")
 
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
         st.divider()
 
     st.markdown("</div>", unsafe_allow_html=True)
