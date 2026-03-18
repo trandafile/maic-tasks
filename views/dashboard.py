@@ -1,21 +1,29 @@
 """
 views/dashboard.py
 ──────────────────
-Dashboard grouped by deliverable.
-Two tabs: "To Do" (owner) and "To Review" (supervisor, non owner).
-Urgency is shown on each card and no longer used as the primary grouping.
+Daily guidance dashboard:
+- Tab 1: My Tasks (owner)
+- Tab 2: Supervised Tasks (supervisor)
+
+Hierarchy:
+Project -> Deliverable -> Task -> Subtask
+
+Projects are sorted by urgency (closest deadlines first).
 """
 
 import datetime
 import streamlit as st
+
 from core.supabase_client import supabase
-from utils.modals import task_details_modal, subtask_details_modal, person_pill_html
-from utils.helpers import PRIORITY_ORDER
+from utils.helpers import PRIORITY_ORDER, strip_markdown
+from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
+
+_INACTIVE = {"Completed", "Cancelled"}
 
 _STATUS_BADGE = {
     "Not started": ("⚪", "#888888"),
-    "Working on": ("🔵", "#1a73e8"),
-    "Blocked": ("🔴", "#d93025"),
+    "Working on": ("🔵", "#1565C0"),
+    "Blocked": ("🔴", "#D93025"),
     "Completed": ("🟢", "#188038"),
     "Cancelled": ("⚫", "#444444"),
 }
@@ -28,25 +36,104 @@ _PRIORITY_BADGE = {
     "none": ("⚪", "None"),
 }
 
-_DELIVERABLE_TYPE_COLOURS = {
-    "paper": ("#1565C0", "#E3F2FD"),
-    "layout": ("#6A1B9A", "#F3E5F5"),
-    "prototype": ("#E65100", "#FFF3E0"),
-}
 
-_INACTIVE = {"Completed", "Cancelled"}
+def _parse_date(value: str | None) -> datetime.date | None:
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(value)
+    except Exception:
+        return None
 
 
-def _fetch_data(email: str):
-    """Load everything needed by dashboard, including deliverables of relevant projects."""
+def _truncate_text(value: str | None, max_len: int = 120) -> str:
+    txt = strip_markdown(value or "").strip()
+    if not txt:
+        return ""
+    if len(txt) <= max_len:
+        return txt
+    return f"{txt[: max_len - 1].rstrip()}…"
+
+
+def _deadline_sort_key(deadline_str: str | None) -> datetime.date:
+    dl = _parse_date(deadline_str)
+    return dl or datetime.date(9999, 12, 31)
+
+
+def _deadline_html(deadline_str: str | None, threshold: int) -> tuple[datetime.date | None, str]:
+    dl = _parse_date(deadline_str)
+    if not dl:
+        return None, "<span style='font-size:11px;color:#999;'>No deadline</span>"
+
+    delta = (dl - datetime.date.today()).days
+    label = dl.strftime("%Y/%m/%d")
+
+    if delta < 0:
+        return (
+            dl,
+            f"<span style='font-size:11px;color:#D93025;font-weight:700;'>📅 {label}</span>"
+            f" <span style='font-size:10px;background:#FDECEC;color:#A32020;padding:1px 6px;border-radius:3px;'>"
+            f"overdue {abs(delta)}d</span>",
+        )
+    if delta <= threshold:
+        return (
+            dl,
+            f"<span style='font-size:11px;color:#BA7517;font-weight:700;'>📅 {label}</span>"
+            f" <span style='font-size:10px;background:#FAEEDA;color:#854F0B;padding:1px 6px;border-radius:3px;'>"
+            f"due in {delta}d</span>",
+        )
+    return dl, f"<span style='font-size:11px;color:#666;'>📅 {label}</span>"
+
+
+def _status_badge_html(status: str) -> str:
+    icon, color = _STATUS_BADGE.get(status or "Not started", ("⚪", "#888888"))
+    return (
+        f"<span style='background:{color}22;color:{color};border-radius:4px;padding:2px 8px;"
+        f"font-size:11px;white-space:nowrap'>{icon} {status or 'Not started'}</span>"
+    )
+
+
+def _priority_badge_html(priority: str | None) -> str:
+    icon, lbl = _PRIORITY_BADGE.get((priority or "none").lower(), ("⚪", "None"))
+    return (
+        "<span style='background:#f5f5f5;color:#555;border:1px solid #ddd;border-radius:4px;"
+        f"padding:2px 8px;font-size:11px;white-space:nowrap'>{icon} {lbl}</span>"
+    )
+
+
+def _people_pills(owner_email: str | None, sup_email: str | None, user_map: dict) -> str:
+    pills = ""
+    if owner_email:
+        u = user_map.get(owner_email, {"name": owner_email, "avatar_color": "#534AB7"})
+        pills += person_pill_html(
+            u.get("name", owner_email),
+            u.get("avatar_color", "#534AB7"),
+            role="owner",
+            compact=True,
+        )
+    if sup_email and sup_email != owner_email:
+        u = user_map.get(sup_email, {"name": sup_email, "avatar_color": "#BA7517"})
+        pills += person_pill_html(
+            u.get("name", sup_email),
+            u.get("avatar_color", "#BA7517"),
+            role="sup",
+            compact=True,
+        )
+    return pills
+
+
+def _fetch_dashboard_data(email: str):
     try:
         s_res = supabase.table("settings").select("expiring_threshold_days").limit(1).execute()
-        threshold = s_res.data[0]["expiring_threshold_days"] if s_res.data else 7
+        threshold = int(s_res.data[0]["expiring_threshold_days"]) if s_res.data else 7
     except Exception:
         threshold = 7
 
     proj_res = supabase.table("projects").select("*").eq("is_archived", False).execute()
     projects = {p["id"]: p for p in (proj_res.data or [])}
+
+    d_res = supabase.table("deliverables").select("*").eq("is_archived", False).execute()
+    deliverables = {d["id"]: d for d in (d_res.data or [])}
 
     t_res = supabase.table("tasks").select("*").eq("is_archived", False).execute()
     all_tasks = t_res.data or []
@@ -56,423 +143,378 @@ def _fetch_data(email: str):
     all_subtasks = st_res.data or []
 
     u_res = supabase.table("users").select("email, name, avatar_color").eq("is_approved", True).execute()
-    users = u_res.data or []
-    user_map = {u["email"]: u for u in users}
+    user_map = {u["email"]: u for u in (u_res.data or [])}
 
-    proj_ids = {
-        t.get("project_id")
-        for t in all_tasks
-        if t.get("project_id")
-        and (t.get("owner_email") == email or t.get("supervisor_email") == email)
-        and t.get("status") not in _INACTIVE
-    }
-    proj_ids.update(
-        task_map.get(s.get("task_id"), {}).get("project_id")
-        for s in all_subtasks
-        if s.get("task_id")
-        and (s.get("owner_email") == email or s.get("supervisor_email") == email)
-        and s.get("status") not in _INACTIVE
-        and task_map.get(s.get("task_id"), {}).get("project_id")
-    )
+    # Keep only entities connected to active projects in scope.
+    active_project_ids = set(projects.keys())
+    all_tasks = [t for t in all_tasks if t.get("project_id") in active_project_ids]
+    all_subtasks = [s for s in all_subtasks if task_map.get(s.get("task_id"), {}).get("project_id") in active_project_ids]
 
-    all_deliverables = []
-    if proj_ids:
-        d_res = (
-            supabase.table("deliverables")
-            .select("*")
-            .in_("project_id", list(proj_ids))
-            .eq("is_archived", False)
-            .execute()
-        )
-        all_deliverables = d_res.data or []
-
-    deliverables = {d["id"]: d for d in all_deliverables}
-    return threshold, projects, deliverables, all_tasks, all_subtasks, user_map
+    return threshold, projects, deliverables, all_tasks, all_subtasks, task_map, user_map
 
 
-def _build_flat_list(email, mode, all_tasks, all_subtasks):
-    if mode == "todo":
-        user_tasks = [
+def _scope_filters(email: str, scope: str, all_tasks: list, all_subtasks: list):
+    if scope == "owner":
+        selected_tasks = [
             t for t in all_tasks
             if t.get("owner_email") == email and t.get("status") not in _INACTIVE
         ]
-        user_subtasks_active = [
+        selected_subtasks = [
             s for s in all_subtasks
             if s.get("owner_email") == email and s.get("status") not in _INACTIVE
         ]
-        user_subtasks_all = [s for s in all_subtasks if s.get("owner_email") == email]
     else:
-        user_tasks = [
+        selected_tasks = [
             t for t in all_tasks
-            if t.get("supervisor_email") == email
-            and t.get("owner_email") != email
-            and t.get("status") not in _INACTIVE
+            if t.get("supervisor_email") == email and t.get("status") not in _INACTIVE
         ]
-        user_subtasks_active = [
+        selected_subtasks = [
             s for s in all_subtasks
-            if s.get("supervisor_email") == email
-            and s.get("owner_email") != email
-            and s.get("status") not in _INACTIVE
+            if s.get("supervisor_email") == email and s.get("status") not in _INACTIVE
         ]
-        user_subtasks_all = user_subtasks_active
 
-    active_subs_by_task = {}
-    for s in user_subtasks_active:
-        active_subs_by_task.setdefault(s.get("task_id"), []).append(s)
+    return selected_tasks, selected_subtasks
 
-    all_subs_by_task = {}
-    for s in user_subtasks_all:
-        all_subs_by_task.setdefault(s.get("task_id"), []).append(s)
 
-    result = []
-    for task in user_tasks:
-        tid = task["id"]
-        active_subs = active_subs_by_task.get(tid, [])
-        if active_subs:
-            for s in active_subs:
-                result.append({
-                    "kind": "subtask",
-                    "item": s,
-                    "parent_task": task,
-                    "suggest_close": False,
-                })
+def _project_min_deadline(selected_tasks: list, selected_subtasks: list) -> datetime.date | None:
+    dates = []
+    for item in [*selected_tasks, *selected_subtasks]:
+        dl = _parse_date(item.get("deadline"))
+        if dl:
+            dates.append(dl)
+    if not dates:
+        return None
+    return min(dates)
+
+
+def _build_hierarchy(selected_tasks: list, selected_subtasks: list, task_map: dict):
+    selected_task_ids = {t["id"] for t in selected_tasks}
+
+    grouped: dict = {}
+
+    def ensure_task_node(task: dict):
+        proj_id = task.get("project_id")
+        if not proj_id:
+            return None
+
+        project_node = grouped.setdefault(
+            proj_id,
+            {
+                "deliverables": {},
+                "generic_tasks": {},
+                "task_ids": set(),
+                "subtask_ids": set(),
+            },
+        )
+
+        did = task.get("deliverable_id")
+        if did:
+            deliverable_node = project_node["deliverables"].setdefault(did, {"tasks": {}})
+            task_node = deliverable_node["tasks"].setdefault(
+                task["id"], {"task": task, "show_task": False, "subtasks": []}
+            )
         else:
-            suggest_close = False
-            if mode == "todo":
-                all_subs = all_subs_by_task.get(tid, [])
-                if all_subs and all(s.get("status") == "Completed" for s in all_subs):
-                    suggest_close = True
-            result.append({
-                "kind": "task",
-                "item": task,
-                "parent_task": None,
-                "suggest_close": suggest_close,
-            })
-    return _sort_entries(result)
+            task_node = project_node["generic_tasks"].setdefault(
+                task["id"], {"task": task, "show_task": False, "subtasks": []}
+            )
+
+        return project_node, task_node
+
+    for t in selected_tasks:
+        node_result = ensure_task_node(t)
+        if not node_result:
+            continue
+        project_node, task_node = node_result
+        task_node["show_task"] = True
+        project_node["task_ids"].add(t["id"])
+
+    for s in selected_subtasks:
+        parent_task = task_map.get(s.get("task_id"))
+        if not parent_task:
+            continue
+        node_result = ensure_task_node(parent_task)
+        if not node_result:
+            continue
+        project_node, task_node = node_result
+        task_node["subtasks"].append(s)
+        project_node["subtask_ids"].add(s["id"])
+
+    return grouped
 
 
-def _sort_entries(entries: list) -> list:
-    today = datetime.date.today()
-
-    def key(e):
-        t = e["item"]
-        dl_str = t.get("deadline")
-        prio = PRIORITY_ORDER.get((t.get("priority") or "none").lower(), 4)
-        if not dl_str:
-            return (1, datetime.date(9999, 12, 31), prio)
-        try:
-            dl = datetime.date.fromisoformat(dl_str)
-        except Exception:
-            return (1, datetime.date(9999, 12, 31), prio)
-        # overdue or future — we only need consistent ASC by date;
-        # grouping (overdue vs future) is handled by the date itself
-        return (0, dl, prio)
-
-    return sorted(entries, key=key)
-
-
-def _deadline_group(deadline_str, today, threshold):
-    if not deadline_str:
-        return "future", ""
-    try:
-        dl = datetime.date.fromisoformat(deadline_str)
-    except ValueError:
-        return "future", ""
-
-    delta = (dl - today).days
-    if delta < 0:
-        days_str = f"{abs(delta)} day{'s' if abs(delta) != 1 else ''}"
-        html = f"<span style='color:#d93025;font-size:12px;'>Overdue by {days_str}</span>"
-        return "overdue", html
-    if delta <= threshold:
-        days_str = f"{delta} day{'s' if delta != 1 else ''}"
-        html = f"<span style='color:#e37400;font-size:12px;'>Due in {days_str}</span>"
-        return "soon", html
-    html = f"<span style='color:#888;font-size:12px;'>Due on {dl.strftime('%Y/%m/%d')}</span>"
-    return "future", html
-
-
-def _deliverable_deadline_html(deadline_str, threshold):
-    if not deadline_str:
-        return "<span style='color:#888'>—</span>"
-    try:
-        dl = datetime.date.fromisoformat(deadline_str)
-    except ValueError:
-        return f"<span style='color:#888'>{deadline_str}</span>"
-    delta = (dl - datetime.date.today()).days
-    color = "#d93025" if delta < 0 else "#e37400" if delta <= threshold else "#555"
-    weight = "700" if delta <= threshold else "500"
-    return f"<span style='color:{color};font-weight:{weight}'>{dl.strftime('%Y/%m/%d')}</span>"
-
-
-def _deliverable_status_badge(status):
-    icon, color = _STATUS_BADGE.get(status or "Not started", ("⚪", "#888888"))
-    return (
-        f"<span style='background:{color}22;color:{color};border-radius:3px;padding:2px 8px;font-size:11px;'>"
-        f"{icon} {status or 'Not started'}</span>"
-    )
-
-
-def _deliverable_type_badge(type_value):
-    fg, bg = _DELIVERABLE_TYPE_COLOURS.get((type_value or "").lower(), ("#555", "#F2F2F2"))
-    label = type_value or "deliverable"
-    return (
-        f"<span style='background:{bg};color:{fg};border-radius:4px;padding:2px 8px;font-size:11px;font-weight:700;'>"
-        f"{label}</span>"
-    )
-
-
-def _people_pills(owner_email, sup_email, user_map, compact=True):
-    pills = ""
-    if owner_email:
-        u = user_map.get(owner_email, {"name": owner_email, "avatar_color": "#534AB7"})
-        pills += person_pill_html(
-            u.get("name", owner_email),
-            u.get("avatar_color", "#534AB7"),
-            role="owner",
-            compact=compact,
-        )
-    if sup_email and sup_email != owner_email:
-        u = user_map.get(sup_email, {"name": sup_email, "avatar_color": "#BA7517"})
-        pills += person_pill_html(
-            u.get("name", sup_email),
-            u.get("avatar_color", "#BA7517"),
-            role="sup",
-            compact=compact,
-        )
-    return pills
-
-
-def _render_item(entry, projects, deliverables, mode, today, threshold, user_map):
-    kind = entry["kind"]
-    item = entry["item"]
-    parent_task = entry.get("parent_task")
-    suggest_close = entry.get("suggest_close", False)
-    item_id = item["id"]
-    unique_key = f"{mode}_{kind}_{item_id}"
-
-    if kind == "task":
-        proj_id = item.get("project_id")
-        deliv_id = item.get("deliverable_id")
-    else:
-        proj_id = parent_task.get("project_id") if parent_task else None
-        deliv_id = parent_task.get("deliverable_id") if parent_task else None
-
-    proj = projects.get(proj_id, {})
-    proj_acronym = proj.get("acronym") or proj.get("name", "?")
-    deliv = deliverables.get(deliv_id)
-    deliv_name = deliv["name"] if deliv else "<em>generic task</em>"
-
-    if kind == "subtask" and parent_task:
-        breadcrumb = (
-            f"<span style='color:#888;font-size:11px;'>"
-            f"{proj_acronym} &rsaquo; {deliv_name} &rsaquo; {parent_task.get('name','')}</span>"
-        )
-    else:
-        breadcrumb = (
-            f"<span style='color:#888;font-size:11px;'>"
-            f"{proj_acronym} &rsaquo; {deliv_name}</span>"
-        )
-
-    type_color = "#7c4dff" if kind == "subtask" else "#1a73e8"
-    type_label = "subtask" if kind == "subtask" else "task"
-    type_badge = (
-        f"<span style='background:{type_color};color:white;border-radius:3px;"
-        f"padding:1px 7px;font-size:10px;font-weight:600;margin-right:7px;'>{type_label}</span>"
-    )
-
+def _render_item_row(
+    *,
+    item: dict,
+    kind: str,
+    threshold: int,
+    user_map: dict,
+    key_prefix: str,
+    indent_px: int,
+    can_edit: bool,
+    context_only: bool = False,
+):
     status = item.get("status", "Not started")
-    st_icon, st_color = _STATUS_BADGE.get(status, ("⚪", "#888"))
-    status_badge = (
-        f"<span style='background:{st_color}22;color:{st_color};"
-        f"border-radius:3px;padding:2px 8px;font-size:11px;'>{st_icon} {status}</span>"
-    )
+    title = item.get("name", "")
+    notes = _truncate_text(item.get("notes"), max_len=150)
+    _, dl_html = _deadline_html(item.get("deadline"), threshold)
 
-    prio_badge = ""
+    status_html = _status_badge_html(status)
+    prio_html = _priority_badge_html(item.get("priority")) if kind == "task" else ""
+    people_html = _people_pills(item.get("owner_email"), item.get("supervisor_email"), user_map)
+
     if kind == "task":
-        prio = (item.get("priority") or "none").lower()
-        prio_icon, prio_lbl = _PRIORITY_BADGE.get(prio, ("⚪", prio.capitalize()))
-        prio_badge = (
-            f"<span style='background:#f5f5f5;color:#555;border-radius:3px;padding:2px 8px;"
-            f"font-size:11px;border:1px solid #ddd;'>{prio_icon} {prio_lbl}</span>"
-        )
+        type_chip = "<span style='font-size:10px;background:#E8F0FE;color:#1A73E8;border-radius:3px;padding:1px 7px;'>TASK</span>"
+        icon_prefix = ""
+    else:
+        type_chip = "<span style='font-size:10px;background:#EEF7FF;color:#1565C0;border-radius:3px;padding:1px 7px;'>SUBTASK</span>"
+        icon_prefix = "↳ "
 
-    close_badge = ""
-    if suggest_close:
-        close_badge = (
-            "<span style='background:#fff3e0;color:#e65100;border-radius:3px;"
-            "padding:2px 9px;font-size:11px;border:1px solid #ffcc80;margin-left:6px;'>"
-            "✅ Subtask completati — chiudi il task?</span>"
-        )
-
-    persons_html = _people_pills(item.get("owner_email"), item.get("supervisor_email"), user_map, compact=True)
-    persons_row = (
-        persons_html
-        if persons_html
-        else "<span style='color:#888;font-size:11px;'>Owner/Supervisor: —</span>"
+    context_chip = (
+        "<span style='font-size:10px;background:#f3f3f3;color:#888;border-radius:3px;padding:1px 7px;'>context</span>"
+        if context_only
+        else ""
     )
 
-    group_key, deadline_html = _deadline_group(item.get("deadline"), today, threshold)
-    border_color = {"overdue": "#d93025", "soon": "#e37400", "future": "#cccccc"}[group_key]
-    opacity = "0.78" if group_key == "future" else "1"
+    opacity = "0.78" if context_only else "1"
 
-    # Compact two-row layout, similar to Active Tasks
-    card_html = f"""
-    <div style='border-left:3px solid {border_color};padding:8px 12px;
-                margin-bottom:6px;background:#ffffff;border-radius:0 6px 6px 0;
-                box-shadow:0 1px 3px rgba(0,0,0,.07);opacity:{opacity};'>
-      <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;'>
-        {type_badge}
-        <strong style='font-size:13px;'>{item.get('name', '')}</strong>
-        {status_badge}
-        {prio_badge}
-        <span style='margin-left:auto;'>{deadline_html}</span>
+    row_html = f"""
+    <div style='margin-left:{indent_px}px;border-left:2px solid #EFEFEF;padding:4px 0 4px 10px;opacity:{opacity};'>
+      <div style='display:flex;align-items:center;gap:7px;flex-wrap:wrap;'>
+        {type_chip}
+        {context_chip}
+        <span style='font-size:13px;font-weight:{'450' if kind == 'subtask' else '550'};line-height:1.25;'>
+          {icon_prefix}{title}
+        </span>
+        {status_html}
+        {prio_html}
+        <span style='margin-left:auto;white-space:nowrap'>{dl_html}</span>
       </div>
-      <div style='display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;'>
-        <span style='color:#888;font-size:11px;'>{breadcrumb}</span>
-        <span>{persons_row}</span>
+      <div style='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:3px;'>
+        <span style='font-size:11px;color:#777;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>
+          {notes or '—'}
+        </span>
+        <span style='white-space:nowrap'>{people_html or "<span style='font-size:11px;color:#999;'>Owner/Sup: —</span>"}</span>
       </div>
-      {close_badge}
     </div>
     """
 
-    col_card, col_actions = st.columns([7, 2])
-    with col_card:
-        st.markdown(card_html, unsafe_allow_html=True)
-    with col_actions:
-        confirm_key = f"_confirm_complete_{unique_key}"
-
-        if mode == "todo" and status != "Completed":
-            if not st.session_state.get(confirm_key):
-                if st.button("✓ Mark complete", key=f"done_{unique_key}", use_container_width=True, type="secondary"):
-                    st.session_state[confirm_key] = True
-                    st.rerun()
-            else:
-                st.warning(
-                    f"Mark **{item.get('name','')}** as completed? "
-                    "This will update its status to 'Completed'."
-                )
-                bc1, bc2 = st.columns(2)
-                with bc1:
-                    if st.button("Yes, complete", key=f"yes_done_{unique_key}", type="primary", use_container_width=True):
-                        try:
-                            update = {"status": "Completed"}
-                            if kind == "task":
-                                update["completion_date"] = today.isoformat()
-                                supabase.table("tasks").update(update).eq("id", item_id).execute()
-                            else:
-                                supabase.table("subtasks").update(update).eq("id", item_id).execute()
-                            st.session_state.pop(confirm_key, None)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-                with bc2:
-                    if st.button("Cancel", key=f"no_done_{unique_key}", use_container_width=True):
-                        st.session_state.pop(confirm_key, None)
-                        st.rerun()
-
-        # On the dashboard, the user always sees items they own or supervise,
-        # so allow editing in both To Do and To Review.
-        can_edit = True
-        if st.button("🔍 Details", key=f"det_{unique_key}", use_container_width=True):
+    col_item, col_btn = st.columns([8.4, 1.6])
+    with col_item:
+        st.html(row_html)
+    with col_btn:
+        if st.button("Details", key=f"{key_prefix}_{kind}_{item['id']}", use_container_width=True):
             if kind == "task":
                 task_details_modal(item, can_edit=can_edit)
             else:
                 subtask_details_modal(item, can_edit=can_edit)
 
 
-def _render_deliverable_header(deliverable, project, threshold, user_map):
-    type_badge = _deliverable_type_badge(deliverable.get("type"))
-    deadline_html = _deliverable_deadline_html(deliverable.get("deadline"), threshold)
-    status_badge = _deliverable_status_badge(deliverable.get("status", "Not started"))
-    pills = _people_pills(deliverable.get("owner_email"), deliverable.get("supervisor_email"), user_map, compact=True)
-    project_label = project.get("acronym") or project.get("name", "")
+def _sort_task_nodes(task_nodes: list):
+    def task_node_key(node):
+        task = node["task"]
+        prio = PRIORITY_ORDER.get((task.get("priority") or "none").lower(), 4)
+        return (_deadline_sort_key(task.get("deadline")), prio, task.get("name") or "")
 
+    return sorted(task_nodes, key=task_node_key)
+
+
+def _render_project_header(project: dict):
     st.html(
-        f"<div style='background:#F8F8F8;border-radius:6px;padding:8px 12px;margin:10px 0 4px 0;border:1px solid #EEE;'>"
-        f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
-        f"{type_badge}"
-        f"<span style='font-weight:700;font-size:14px'>{deliverable.get('name', '')}</span>"
-        f"<span style='color:#888;font-size:11px'>{project_label}</span>"
-        f"<span style='margin-left:auto'>{status_badge}</span>"
+        f"<div style='display:flex;align-items:center;gap:10px;margin:2px 0 6px 0'>"
+        f"<span style='width:16px;height:16px;background:#F59E0B;border-radius:4px;display:inline-block'></span>"
+        f"<span style='font-size:1.15rem;font-weight:700'>{project.get('name','Project')} ({project.get('acronym','')})</span>"
         f"</div>"
-        f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px'>"
-        f"<span style='font-size:12px;color:#666'>Deadline: {deadline_html}</span>"
-        f"{pills if pills else '<span style=\'color:#888;font-size:12px\'>Owner/Supervisor: —</span>'}"
-        f"</div>"
-        f"</div>",
     )
 
 
-def _render_tab(entries, projects, deliverables, mode, today, threshold, user_map):
-    grouped = {}
-    generic_entries = []
-    relevant_project_ids = set()
+def _render_deliverable_block(deliverable: dict, project: dict, task_nodes: list, threshold: int, user_map: dict, email: str, tab_key: str):
+    with st.container(border=True):
+        d_deadline = deliverable.get("deadline") or "—"
+        st.html(
+            f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;margin-bottom:6px;'>"
+            f"<span style='color: green; font-weight: bold;'>DELIVERABLE</span> "
+            f"<span style='font-size:13px;font-weight:700;color:#0F5943;'>{deliverable.get('name','')}</span>"
+            f"<span style='font-size:11px;color:#2E8B6E;'> · {deliverable.get('type') or 'generic'} · deadline {d_deadline}</span>"
+            f"<span style='float:right;font-size:11px;color:#2E8B6E'>{project.get('acronym') or project.get('name','')}</span>"
+            f"</div>"
+        )
 
-    for entry in entries:
-        item = entry["item"]
-        parent_task = entry.get("parent_task") or {}
-        proj_id = item.get("project_id") or parent_task.get("project_id")
-        deliv_id = item.get("deliverable_id") or parent_task.get("deliverable_id")
-        if proj_id:
-            relevant_project_ids.add(proj_id)
-        if deliv_id:
-            grouped.setdefault(deliv_id, []).append(entry)
-        else:
-            generic_entries.append(entry)
+        for task_node in _sort_task_nodes(task_nodes):
+            task = task_node["task"]
+            task_direct = task_node["show_task"]
+            task_can_edit = task.get("owner_email") == email or task.get("supervisor_email") == email
 
-    deliverables_in_scope = [
-        d for d in deliverables.values()
-        if d.get("project_id") in relevant_project_ids
-    ]
-    deliverables_in_scope.sort(key=lambda d: (d.get("deadline") or "9999-12-31", d.get("name") or ""))
+            _render_item_row(
+                item=task,
+                kind="task",
+                threshold=threshold,
+                user_map=user_map,
+                key_prefix=f"{tab_key}_t",
+                indent_px=0,
+                can_edit=task_can_edit,
+                context_only=not task_direct,
+            )
 
-    if not deliverables_in_scope and not generic_entries:
-        st.info("No active items. ✅")
+            for sub in sorted(task_node["subtasks"], key=lambda s: (_deadline_sort_key(s.get("deadline")), s.get("name") or "")):
+                sub_can_edit = sub.get("owner_email") == email or sub.get("supervisor_email") == email
+                _render_item_row(
+                    item=sub,
+                    kind="subtask",
+                    threshold=threshold,
+                    user_map=user_map,
+                    key_prefix=f"{tab_key}_s",
+                    indent_px=18,
+                    can_edit=sub_can_edit,
+                    context_only=False,
+                )
+
+
+def _render_scope_tab(scope_label: str, email: str, threshold: int, projects: dict, deliverables: dict, selected_tasks: list, selected_subtasks: list, task_map: dict, user_map: dict):
+    hierarchy = _build_hierarchy(selected_tasks, selected_subtasks, task_map)
+    if not hierarchy:
+        st.info("No active items for this view. ✅")
         return
 
-    for deliverable in deliverables_in_scope:
-        project = projects.get(deliverable.get("project_id"), {})
-        _render_deliverable_header(deliverable, project, threshold, user_map)
-        entries_for_deliverable = grouped.get(deliverable.get("id"), [])
-        if entries_for_deliverable:
-            for entry in entries_for_deliverable:
-                _render_item(entry, projects, deliverables, mode, today, threshold, user_map)
-        else:
-            st.caption("No tasks assigned to you in this deliverable")
+    project_priority = []
+    for proj_id, proj_node in hierarchy.items():
+        proj_tasks = [t for t in selected_tasks if t.get("project_id") == proj_id]
+        proj_subtasks = []
+        for s in selected_subtasks:
+            p_task = task_map.get(s.get("task_id"))
+            if p_task and p_task.get("project_id") == proj_id:
+                proj_subtasks.append(s)
+        min_dl = _project_min_deadline(proj_tasks, proj_subtasks)
+        project_priority.append((min_dl or datetime.date(9999, 12, 31), projects.get(proj_id, {}).get("name") or "", proj_id, proj_node))
 
-    if generic_entries:
-        st.html(
-            "<div style='border:2px dashed #cccccc;border-radius:6px;padding:10px 16px;margin:16px 0 8px 0;'>"
-            "<span style='font-weight:700;color:#888;font-size:0.95rem'>GENERIC TASKS (NO DELIVERABLE)</span></div>"
-        )
-        for entry in generic_entries:
-            _render_item(entry, projects, deliverables, mode, today, threshold, user_map)
+    project_priority.sort(key=lambda row: (row[0], row[1]))
+
+    for idx, (_, _, proj_id, proj_node) in enumerate(project_priority):
+        project = projects.get(proj_id)
+        if not project:
+            continue
+
+        with st.expander(f"📁 {project.get('name','Project')} ({project.get('acronym','')})", expanded=(idx == 0)):
+            _render_project_header(project)
+
+            deliverable_nodes = []
+            for did, d_node in proj_node["deliverables"].items():
+                d = deliverables.get(did)
+                if not d:
+                    continue
+                nearest_deadline = _deadline_sort_key(d.get("deadline"))
+                deliverable_nodes.append((nearest_deadline, d.get("name") or "", d, list(d_node["tasks"].values())))
+
+            deliverable_nodes.sort(key=lambda row: (row[0], row[1]))
+
+            for _, _, deliverable, task_nodes in deliverable_nodes:
+                st.markdown("<div class='deliverable-box'>", unsafe_allow_html=True)
+                _render_deliverable_block(deliverable, project, task_nodes, threshold, user_map, email, scope_label)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            generic_nodes = list(proj_node["generic_tasks"].values())
+            if generic_nodes:
+                st.html(
+                    "<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;color:#666;'>"
+                    "GENERIC TASKS (NO DELIVERABLE)</span>"
+                )
+                with st.container(border=True):
+                    for task_node in _sort_task_nodes(generic_nodes):
+                        task = task_node["task"]
+                        task_direct = task_node["show_task"]
+                        task_can_edit = task.get("owner_email") == email or task.get("supervisor_email") == email
+                        _render_item_row(
+                            item=task,
+                            kind="task",
+                            threshold=threshold,
+                            user_map=user_map,
+                            key_prefix=f"{scope_label}_gt",
+                            indent_px=0,
+                            can_edit=task_can_edit,
+                            context_only=not task_direct,
+                        )
+                        for sub in sorted(task_node["subtasks"], key=lambda s: (_deadline_sort_key(s.get("deadline")), s.get("name") or "")):
+                            sub_can_edit = sub.get("owner_email") == email or sub.get("supervisor_email") == email
+                            _render_item_row(
+                                item=sub,
+                                kind="subtask",
+                                threshold=threshold,
+                                user_map=user_map,
+                                key_prefix=f"{scope_label}_gs",
+                                indent_px=18,
+                                can_edit=sub_can_edit,
+                                context_only=False,
+                            )
 
 
 def show_dashboard():
     st.title("Dashboard")
 
+    st.markdown(
+        """
+        <style>
+        div[data-testid='stButton'] > button {
+            min-height: 1.75rem;
+            padding: 0.15rem 0.5rem;
+            font-size: 0.78rem;
+        }
+        div[data-testid='stHorizontalBlock'] {
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+        }
+        .deliverable-box [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid #9FD9C8 !important;
+            border-radius: 0.5rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     email = st.session_state.get("user_email")
     if not email:
-        st.error("Utente non trovato in sessione.")
+        st.error("User not found in session.")
         return
 
     try:
-        threshold, projects, deliverables, all_tasks, all_subtasks, user_map = _fetch_data(email)
+        threshold, projects, deliverables, all_tasks, all_subtasks, task_map, user_map = _fetch_dashboard_data(email)
     except Exception as e:
-        st.error(f"Errore nel caricamento dei dati: {e}")
+        st.error(f"Error while loading dashboard data: {e}")
         return
 
-    today = datetime.date.today()
-    todo_entries = _build_flat_list(email, "todo", all_tasks, all_subtasks)
-    review_entries = _build_flat_list(email, "review", all_tasks, all_subtasks)
+    my_tasks, my_subtasks = _scope_filters(email, "owner", all_tasks, all_subtasks)
+    supervised_tasks, supervised_subtasks = _scope_filters(email, "supervisor", all_tasks, all_subtasks)
 
-    tab1, tab2 = st.tabs([f"To Do ({len(todo_entries)})", f"To Review ({len(review_entries)})"])
+    my_count = len(my_tasks) + len(my_subtasks)
+    supervised_count = len(supervised_tasks) + len(supervised_subtasks)
 
-    with tab1:
-        _render_tab(todo_entries, projects, deliverables, "todo", today, threshold, user_map)
+    tab_my, tab_supervised = st.tabs([
+        f"My Tasks ({my_count})",
+        f"Supervised Tasks ({supervised_count})",
+    ])
 
-    with tab2:
-        st.caption("These tasks are assigned to others. Your role is to monitor, unblock, or approve.")
-        _render_tab(review_entries, projects, deliverables, "review", today, threshold, user_map)
+    with tab_my:
+        _render_scope_tab(
+            scope_label="my",
+            email=email,
+            threshold=threshold,
+            projects=projects,
+            deliverables=deliverables,
+            selected_tasks=my_tasks,
+            selected_subtasks=my_subtasks,
+            task_map=task_map,
+            user_map=user_map,
+        )
+
+    with tab_supervised:
+        st.caption("Tasks and subtasks where you are supervisor.")
+        _render_scope_tab(
+            scope_label="sup",
+            email=email,
+            threshold=threshold,
+            projects=projects,
+            deliverables=deliverables,
+            selected_tasks=supervised_tasks,
+            selected_subtasks=supervised_subtasks,
+            task_map=task_map,
+            user_map=user_map,
+        )
