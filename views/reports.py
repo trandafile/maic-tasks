@@ -164,12 +164,12 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
         st.html(
             f"""
             <div style='display:grid;grid-template-columns:52px 1fr auto;
-                        gap:0;padding:5px 8px 5px 8px;align-items:start;'>
+                                                gap:0;padding:3px 8px 3px 8px;align-items:start;'>
               <span style='font-family:monospace;font-size:10px;
-                           color:#aaa;padding-top:3px;'>{seq_id}</span>
+                                                     color:#aaa;padding-top:2px;'>{seq_id}</span>
               <div>
                 <div style='display:flex;align-items:center;gap:7px;
-                            flex-wrap:wrap;margin-bottom:5px;'>
+                                                        flex-wrap:wrap;margin-bottom:2px;'>
                   <span style='font-size:13px;font-weight:500;
                                color:var(--color-text-primary,#111);
                                line-height:1.3;'>{name}</span>
@@ -202,11 +202,11 @@ def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: s
         st.html(
             f"""
             <div style='display:grid;grid-template-columns:52px 1fr auto;
-                        gap:0;padding:5px 8px 4px 8px;align-items:start;padding-left:24px;'>
+                        gap:0;padding:3px 8px 2px 8px;align-items:start;padding-left:24px;'>
               <span></span>
               <div>
                 <div style='display:flex;align-items:center;gap:7px;
-                            flex-wrap:wrap;margin-bottom:5px;'>
+                            flex-wrap:wrap;margin-bottom:2px;'>
                   <span style='font-size:12px;font-weight:400;
                                color:var(--color-text-primary,#111);
                                line-height:1.3;'>↳ 🖇️ {s_name}</span>
@@ -258,6 +258,15 @@ def _render_main_report():
         .deliverable-box [data-testid="stVerticalBlockBorderWrapper"] {
             border: 1px solid #9FD9C8 !important;
             border-radius: 0.5rem !important;
+        }
+        .project-report-compact [data-testid="stElementContainer"] {
+            margin-bottom: 0.3rem !important;
+        }
+        .project-report-compact [data-testid="stHorizontalBlock"] {
+            gap: 0.5rem !important;
+        }
+        .project-report-compact [data-testid="stVerticalBlock"] > [data-testid="element-container"]:last-child {
+            margin-bottom: 0.1rem !important;
         }
         </style>
         """,
@@ -335,6 +344,8 @@ def _render_main_report():
         st.info("No tasks assigned to you in available projects.")
         return
 
+    st.markdown("<div class='project-report-compact'>", unsafe_allow_html=True)
+
     for proj in proj_list:
         pid = proj["id"]
         st.html(
@@ -350,7 +361,7 @@ def _render_main_report():
         if proj.get("start_date"):
             caption_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
         st.caption("  ·  ".join(caption_parts))
-        st.write("")
+        st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
 
         proj_deliverables = [
             d for d in deliverables
@@ -381,8 +392,8 @@ def _render_main_report():
                     h1, h2 = st.columns([8, 2])
                     with h1:
                         st.html(
-                            f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;"
-                            f"margin-bottom:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>"
+                            f"<div style='background:#E6F7F3;border-radius:6px;padding:5px 10px;"
+                            f"margin-bottom:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>"
                             f"<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;'>Deliverable</span>"
                             f"<span style='font-size:13px;font-weight:600;color:#0F5943;'>"
                             f"{d.get('name','')}"
@@ -450,7 +461,7 @@ def _render_main_report():
         if unassigned:
             st.html(
                 "<div style='border:2px dashed #FAC775;border-radius:8px;"
-                "padding:10px 14px;margin:16px 0 8px 0;background:#FFF8F0;'>"
+                "padding:8px 12px;margin:10px 0 4px 0;background:#FFF8F0;'>"
                 "<span style='font-weight:700;color:#854F0B;font-size:0.95rem'>"
                 "GENERIC TASKS (NO DELIVERABLE)</span></div>"
             )
@@ -473,7 +484,10 @@ def _render_main_report():
                         )
                         _render_subtask_row(s, users_meta, can_edit=can_edit_s, key_prefix=f"rp_s_un_{pid}_{t.get('id')}")
 
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         st.divider()
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ─── Carico per Persona ────────────────────────────────────────────────────────
