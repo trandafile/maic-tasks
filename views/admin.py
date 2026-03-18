@@ -53,6 +53,20 @@ def _reset_md_editor_state(editor_key: str) -> None:
     st.session_state.pop(f"{editor_key}_ta", None)
 
 
+def _reset_project_edit_state(pid: int) -> None:
+    """Clear project edit widget state so reopened forms always start from DB values."""
+    for k in [
+        f"p_name_{pid}",
+        f"p_acro_{pid}",
+        f"p_idf_{pid}",
+        f"p_fund_{pid}",
+        f"p_start_{pid}",
+        f"p_end_{pid}",
+        f"p_desc_{pid}",
+    ]:
+        st.session_state.pop(k, None)
+
+
 def _project_markdown_export(projects: list[dict]) -> str:
     lines = ["# Project List", ""]
     for proj in projects:
@@ -315,12 +329,19 @@ def _tab_projects():
 
                 with ca:
                     if st.button("✏️ Edit", key=f"edit_proj_{pid}", use_container_width=True):
-                        editor_key = f"edit_proj_notes_{pid}"
                         currently_open = st.session_state.get(edit_key, False)
                         if currently_open:
                             st.session_state.pop(edit_key, None)
+                            _reset_project_edit_state(pid)
                         else:
-                            _reset_md_editor_state(editor_key)
+                            _reset_project_edit_state(pid)
+                            st.session_state[f"p_name_{pid}"] = pname
+                            st.session_state[f"p_acro_{pid}"] = acronym
+                            st.session_state[f"p_idf_{pid}"] = identifier
+                            st.session_state[f"p_fund_{pid}"] = funding
+                            st.session_state[f"p_start_{pid}"] = _parse_date(proj.get("start_date"))
+                            st.session_state[f"p_end_{pid}"] = _parse_date(proj.get("end_date"))
+                            st.session_state[f"p_desc_{pid}"] = proj.get("description") or ""
                             st.session_state[edit_key] = True
                         st.session_state.pop(del_key, None)
                         st.rerun()
@@ -336,28 +357,27 @@ def _tab_projects():
                     st.markdown("---")
                     pf1, pf2 = st.columns(2)
                     with pf1:
-                        p_name    = st.text_input("Project Name*", value=pname,      key=f"p_name_{pid}")
-                        p_acronym = st.text_input("Acronym",       value=acronym,    key=f"p_acro_{pid}")
-                        p_idf     = st.text_input("Identifier",    value=identifier, key=f"p_idf_{pid}")
+                        p_name    = st.text_input("Project Name*", key=f"p_name_{pid}")
+                        p_acronym = st.text_input("Acronym",       key=f"p_acro_{pid}")
+                        p_idf     = st.text_input("Identifier",    key=f"p_idf_{pid}")
                     with pf2:
-                        p_funding = st.text_input("Funding Agency", value=funding, key=f"p_fund_{pid}")
+                        p_funding = st.text_input("Funding Agency", key=f"p_fund_{pid}")
                         p_start   = st.date_input(
                             "Start Date",
-                            value=_parse_date(proj.get("start_date")),
+                            value=st.session_state.get(f"p_start_{pid}"),
                             format="DD/MM/YYYY",
                             key=f"p_start_{pid}",
                         )
                         p_end = st.date_input(
                             "End Date",
-                            value=_parse_date(proj.get("end_date")),
+                            value=st.session_state.get(f"p_end_{pid}"),
                             format="DD/MM/YYYY",
                             key=f"p_end_{pid}",
                         )
-                    p_description = markdown_editor(
-                        value=proj.get("description") or "",
-                        key=f"edit_proj_notes_{pid}",
+                    p_description = st.text_area(
+                        "📝 Project Description (optional, Markdown)",
+                        key=f"p_desc_{pid}",
                         height=220,
-                        label="📝 Project Description (optional)",
                     )
                     pb1, pb2 = st.columns(2)
                     with pb1:
@@ -396,7 +416,7 @@ def _tab_projects():
                                             "Please reopen Edit and save again."
                                         )
                                     else:
-                                        _reset_md_editor_state(f"edit_proj_notes_{pid}")
+                                        _reset_project_edit_state(pid)
                                         st.session_state.pop(edit_key, None)
                                         st.success("Project updated.")
                                         st.rerun()
@@ -404,7 +424,7 @@ def _tab_projects():
                                     st.error(f"Error: {ex}")
                     with pb2:
                         if st.button("Cancel", key=f"cancel_proj_{pid}", use_container_width=True):
-                            _reset_md_editor_state(f"edit_proj_notes_{pid}")
+                            _reset_project_edit_state(pid)
                             st.session_state.pop(edit_key, None)
                             st.rerun()
 
