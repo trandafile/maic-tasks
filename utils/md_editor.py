@@ -73,6 +73,26 @@ _TEMPLATE = """
       font-size: 14px;
       line-height: 1.7;
     }}
+    .editor-preview h1, .editor-preview-side h1 {{
+      font-size: 1.08em;
+      font-weight: 700;
+      line-height: 1.35;
+      margin: 0.55rem 0 0.35rem 0;
+    }}
+    .editor-preview h2, .editor-preview-side h2 {{
+      font-size: 1em;
+      font-weight: 700;
+      line-height: 1.35;
+      margin: 0.5rem 0 0.3rem 0;
+    }}
+    .editor-preview h3, .editor-preview-side h3 {{
+      font-size: 1em;
+      font-weight: 500;
+      line-height: 1.35;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      margin: 0.45rem 0 0.25rem 0;
+    }}
     /* Hide EasyMDE's internal raw textarea */
     #mde_textarea {{ display: none; }}
   </style>

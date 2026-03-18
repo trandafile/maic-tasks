@@ -22,6 +22,32 @@ st.markdown("""
         font-size: 1.3rem;
         vertical-align: middle;
     }
+    /* Global markdown note typography: compact heading hierarchy */
+    div[data-testid="stMarkdownContainer"] h1 {
+        font-size: 1.08rem;
+        font-weight: 700;
+        line-height: 1.35;
+        margin: 0.55rem 0 0.35rem 0;
+    }
+    div[data-testid="stMarkdownContainer"] h2 {
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 1.35;
+        margin: 0.5rem 0 0.3rem 0;
+    }
+    div[data-testid="stMarkdownContainer"] h3 {
+        font-size: 1rem;
+        font-weight: 500;
+        line-height: 1.35;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        margin: 0.45rem 0 0.25rem 0;
+    }
+    div[data-testid="stMarkdownContainer"] p,
+    div[data-testid="stMarkdownContainer"] li {
+        line-height: 1.5;
+        margin-bottom: 0.35rem;
+    }
     div[data-testid='stHorizontalBlock'] { 
         border-bottom: 1px solid #f0f0f0; 
         padding-top: 10px; 
