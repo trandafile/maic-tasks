@@ -383,6 +383,7 @@ def _render_main_report():
                         st.html(
                             f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;"
                             f"margin-bottom:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>"
+                            f"<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;'>Deliverable</span>"
                             f"<span style='font-size:13px;font-weight:600;color:#0F5943;'>"
                             f"{d.get('name','')}"
                             f"</span>"

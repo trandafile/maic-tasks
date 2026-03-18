@@ -123,6 +123,10 @@ def _fetch_calendar_data():
 def show_calendar():
     st.title("Calendar")
 
+    user_role = st.session_state.get("user_role")
+    user_email = st.session_state.get("user_email")
+    is_admin = user_role == "admin"
+
     projects, users, deliverables, tasks, subtasks = _fetch_calendar_data()
     if not projects:
         st.info("No projects available.")
@@ -136,13 +140,33 @@ def show_calendar():
     user_map = {"All people": None}
     user_map.update({u.get("name", u.get("email")): u.get("email") for u in users})
 
+    admin_scope = "all"
+    if is_admin:
+        admin_scope = st.radio(
+            "Admin view",
+            options=["all", "personal"],
+            format_func=lambda v: "All items" if v == "all" else "Personal items only",
+            horizontal=True,
+            key="cal_admin_scope",
+        )
+
     f1, f2 = st.columns([2, 2])
     with f1:
         sel_project_label = st.selectbox("Project", list(project_map.keys()), key="cal_project")
         sel_project = project_map[sel_project_label]
     with f2:
-        sel_user_label = st.selectbox("Person (owner or supervisor)", list(user_map.keys()), key="cal_user")
-        sel_user = user_map[sel_user_label]
+        if is_admin:
+            if admin_scope == "all":
+                sel_user_label = st.selectbox("Person (owner or supervisor)", list(user_map.keys()), key="cal_user")
+                sel_user = user_map[sel_user_label]
+            else:
+                sel_user = user_email
+                user_name = next((u.get("name") for u in users if u.get("email") == user_email), user_email)
+                st.caption(f"Person: {user_name or user_email}")
+        else:
+            sel_user = user_email
+            user_name = next((u.get("name") for u in users if u.get("email") == user_email), user_email)
+            st.caption(f"Person: {user_name or user_email}")
 
     proj_by_id = {p.get("id"): p for p in projects}
     users_by_email = {u.get("email"): u.get("name", u.get("email")) for u in users}
@@ -165,6 +189,12 @@ def show_calendar():
                 continue
             if sel_project is not None and d.get("project_id") != sel_project:
                 continue
+            if not is_admin:
+                if user_email not in (d.get("owner_email"), d.get("supervisor_email")):
+                    continue
+            elif admin_scope == "personal":
+                if user_email not in (d.get("owner_email"), d.get("supervisor_email")):
+                    continue
             proj = proj_by_id.get(d.get("project_id"), {})
             status = d.get("status", "Not started")
             status_color = {
@@ -201,6 +231,12 @@ def show_calendar():
                 continue
             if sel_project is not None and t.get("project_id") != sel_project:
                 continue
+            if not is_admin:
+                if user_email not in (t.get("owner_email"), t.get("supervisor_email")):
+                    continue
+            elif admin_scope == "personal":
+                if user_email not in (t.get("owner_email"), t.get("supervisor_email")):
+                    continue
             if sel_user is not None and sel_user not in (
                 t.get("owner_email"),
                 t.get("supervisor_email"),
@@ -234,6 +270,12 @@ def show_calendar():
             pid = parent.get("project_id")
             if sel_project is not None and pid != sel_project:
                 continue
+            if not is_admin:
+                if user_email not in (s.get("owner_email"), s.get("supervisor_email")):
+                    continue
+            elif admin_scope == "personal":
+                if user_email not in (s.get("owner_email"), s.get("supervisor_email")):
+                    continue
             if sel_user is not None and sel_user not in (
                 s.get("owner_email"),
                 s.get("supervisor_email"),

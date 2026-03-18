@@ -688,6 +688,7 @@ def show_projects():
                         st.html(
                             f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;"
                             f"margin-bottom:4px'>"
+                            f"<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;'>Deliverable</span> "
                             f"<b style='color:#0F5943;'>{d_name}</b>"
                             f"<i style='color:#2E8B6E;font-size:0.85rem'>"
                             f"  {d_type}{d_deadline_txt}{arch_d}</i>"
