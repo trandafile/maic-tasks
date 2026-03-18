@@ -306,26 +306,33 @@ def _render_item(entry, projects, deliverables, mode, today, threshold, user_map
         )
 
     persons_html = _people_pills(item.get("owner_email"), item.get("supervisor_email"), user_map, compact=True)
-    persons_row = f"<div style='margin-top:5px;'>{persons_html}</div>" if persons_html else ""
+    persons_row = (
+        persons_html
+        if persons_html
+        else "<span style='color:#888;font-size:11px;'>Owner/Supervisor: —</span>"
+    )
 
     group_key, deadline_html = _deadline_group(item.get("deadline"), today, threshold)
     border_color = {"overdue": "#d93025", "soon": "#e37400", "future": "#cccccc"}[group_key]
     opacity = "0.78" if group_key == "future" else "1"
 
+    # Compact two-row layout, similar to Active Tasks
     card_html = f"""
-    <div style='border-left:3px solid {border_color};padding:10px 14px 10px 14px;
+    <div style='border-left:3px solid {border_color};padding:8px 12px;
                 margin-bottom:6px;background:#ffffff;border-radius:0 6px 6px 0;
                 box-shadow:0 1px 3px rgba(0,0,0,.07);opacity:{opacity};'>
-      <div style='margin-bottom:4px;'>
-        {type_badge}<strong style='font-size:14px;'>{item.get('name', '')}</strong>{close_badge}
-      </div>
-      <div style='margin-bottom:5px;'>{breadcrumb}</div>
-      <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>
+      <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;'>
+        {type_badge}
+        <strong style='font-size:13px;'>{item.get('name', '')}</strong>
         {status_badge}
         {prio_badge}
-        {deadline_html}
+        <span style='margin-left:auto;'>{deadline_html}</span>
       </div>
-      {persons_row}
+      <div style='display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;'>
+        <span style='color:#888;font-size:11px;'>{breadcrumb}</span>
+        <span>{persons_row}</span>
+      </div>
+      {close_badge}
     </div>
     """
 
@@ -333,18 +340,36 @@ def _render_item(entry, projects, deliverables, mode, today, threshold, user_map
     with col_card:
         st.markdown(card_html, unsafe_allow_html=True)
     with col_actions:
+        confirm_key = f"_confirm_complete_{unique_key}"
+
         if mode == "todo" and status != "Completed":
-            if st.button("✓ Mark complete", key=f"done_{unique_key}", use_container_width=True, type="secondary"):
-                try:
-                    update = {"status": "Completed"}
-                    if kind == "task":
-                        update["completion_date"] = today.isoformat()
-                        supabase.table("tasks").update(update).eq("id", item_id).execute()
-                    else:
-                        supabase.table("subtasks").update(update).eq("id", item_id).execute()
+            if not st.session_state.get(confirm_key):
+                if st.button("✓ Mark complete", key=f"done_{unique_key}", use_container_width=True, type="secondary"):
+                    st.session_state[confirm_key] = True
                     st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+            else:
+                st.warning(
+                    f"Mark **{item.get('name','')}** as completed? "
+                    "This will update its status to 'Completed'."
+                )
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    if st.button("Yes, complete", key=f"yes_done_{unique_key}", type="primary", use_container_width=True):
+                        try:
+                            update = {"status": "Completed"}
+                            if kind == "task":
+                                update["completion_date"] = today.isoformat()
+                                supabase.table("tasks").update(update).eq("id", item_id).execute()
+                            else:
+                                supabase.table("subtasks").update(update).eq("id", item_id).execute()
+                            st.session_state.pop(confirm_key, None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+                with bc2:
+                    if st.button("Cancel", key=f"no_done_{unique_key}", use_container_width=True):
+                        st.session_state.pop(confirm_key, None)
+                        st.rerun()
 
         # On the dashboard, the user always sees items they own or supervise,
         # so allow editing in both To Do and To Review.
