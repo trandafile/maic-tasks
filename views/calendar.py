@@ -285,6 +285,35 @@ def show_calendar():
 
     # ── Long-scale text timeline ───────────────────────────────────────────────
     st.subheader("Long-scale Timeline")
+    # Build normalized items directly from events to avoid state issues
+    timeline_items: list[dict] = []
+    for ev in events:
+        start = ev.get("start")
+        if not start:
+            continue
+        try:
+            d = datetime.date.fromisoformat(start)
+        except Exception:
+            continue
+        ext = ev.get("extendedProps", {}) or {}
+        proj_name = ext.get("project", "-")
+        kind = ext.get("kind", "")
+        title = ev.get("title") or ""
+        owner_e = ext.get("owner_email")
+        sup_e = ext.get("supervisor_email")
+        owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
+        sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
+        timeline_items.append(
+            {
+                "date": d,
+                "project": proj_name,
+                "kind": kind,
+                "title": title,
+                "owner": owner_name or "—",
+                "sup": sup_name or "—",
+            }
+        )
+
     timeline_by_month: dict[tuple[int, int], list[dict]] = {}
     for item in timeline_items:
         d = item["date"]
