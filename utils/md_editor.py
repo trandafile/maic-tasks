@@ -68,6 +68,21 @@ _TEMPLATE = """
     .CodeMirror-scroll {{
       min-height: {cm_height}px;
     }}
+    /* Compact heading sizes while editing markdown (CodeMirror). */
+    .CodeMirror .cm-header-1 {{
+      font-size: 1.08em;
+      font-weight: 700;
+    }}
+    .CodeMirror .cm-header-2 {{
+      font-size: 1em;
+      font-weight: 700;
+    }}
+    .CodeMirror .cm-header-3 {{
+      font-size: 1em;
+      font-weight: 500;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }}
     /* Preview pane */
     .editor-preview, .editor-preview-side {{
       font-size: 14px;

@@ -367,7 +367,7 @@ def _tab_projects():
                                 st.error("Project name is required.")
                             else:
                                 try:
-                                    update_res = supabase.table("projects").update({
+                                    supabase.table("projects").update({
                                         "name":           p_name,
                                         "acronym":        p_acronym or None,
                                         "identifier":     p_idf     or None,
@@ -375,13 +375,7 @@ def _tab_projects():
                                         "start_date":     p_start.isoformat() if p_start else None,
                                         "end_date":       p_end.isoformat()   if p_end   else None,
                                         "description":    p_description.strip() or None,
-                                    }).eq("id", pid).select("id").execute()
-                                    if not update_res.data:
-                                        st.error(
-                                            "Project not updated. No rows were affected "
-                                            "(possible permission/policy issue)."
-                                        )
-                                        return
+                                    }).eq("id", pid).execute()
                                     _reset_md_editor_state(f"edit_proj_notes_{pid}")
                                     st.session_state.pop(edit_key, None)
                                     st.success("Project updated.")
