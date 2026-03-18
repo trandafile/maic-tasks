@@ -92,7 +92,7 @@ def _fetch_calendar_data():
         )
         deliverables = (
             supabase.table("deliverables")
-            .select("id, project_id, name, deadline, status, is_archived")
+            .select("id, project_id, name, deadline, status, owner_email, supervisor_email, is_archived")
             .eq("is_archived", False)
             .execute()
             .data
@@ -128,13 +128,6 @@ def show_calendar():
         st.info("No projects available.")
         return
 
-    mode = st.radio(
-        "Calendar mode",
-        ["Tasks Calendar", "Deliverables Calendar"],
-        horizontal=True,
-        key="cal_mode",
-    )
-
     project_map = {"All projects": None}
     project_map.update(
         {f"{p.get('name')} ({p.get('acronym') or p.get('name')})": p.get("id") for p in projects}
@@ -152,10 +145,20 @@ def show_calendar():
         sel_user = user_map[sel_user_label]
 
     proj_by_id = {p.get("id"): p for p in projects}
-    events = []
+    users_by_email = {u.get("email"): u.get("name", u.get("email")) for u in users}
+    events: list[dict] = []
 
-    if mode == "Deliverables Calendar":
-        # Annual multi-month view of deliverable deadlines only
+    # Independent toggles
+    c_tasks, c_delivs = st.columns(2)
+    with c_tasks:
+        show_tasks = st.checkbox("Show Tasks & Subtasks", value=True, key="cal_show_tasks")
+    with c_delivs:
+        show_deliverables = st.checkbox("Show Deliverables", value=True, key="cal_show_deliverables")
+
+    task_map = {t.get("id"): t for t in tasks}
+
+    # Deliverables events (if enabled)
+    if show_deliverables:
         for d in deliverables:
             dl = d.get("deadline")
             if not dl:
@@ -164,17 +167,18 @@ def show_calendar():
                 continue
             proj = proj_by_id.get(d.get("project_id"), {})
             status = d.get("status", "Not started")
-            # Simple status-based colour coding
             status_color = {
                 "Completed": "#2E7D32",
                 "Working on": "#1565C0",
                 "Blocked": "#E65100",
                 "Cancelled": "#B71C1C",
             }.get(status, _EVENT_COLOUR["deliverable"])
+            owner_e = d.get("owner_email")
+            sup_e = d.get("supervisor_email")
             events.append(
                 {
                     "id": f"d_{d.get('id')}",
-                    "title": f"{d.get('name')}",
+                    "title": f"[Deliverable] {d.get('name')}",
                     "start": dl,
                     "allDay": True,
                     "color": status_color,
@@ -182,68 +186,25 @@ def show_calendar():
                         "kind": "deliverable",
                         "project": proj.get("name", "-"),
                         "status": status,
+                        "owner_email": owner_e,
+                        "supervisor_email": sup_e,
                         "description": f"Deliverable: {d.get('name')} | Project: {proj.get('name', '-')}",
                     },
                 }
             )
 
-        events.sort(key=lambda e: e.get("start") or "9999-12-31")
-        ics_data = _build_ics(events)
-        st.download_button(
-            "Export .ics",
-            data=ics_data,
-            file_name=f"maic_deliverables_calendar_{datetime.date.today().strftime('%Y%m%d')}.ics",
-            mime="text/calendar",
-            use_container_width=False,
-        )
-
-        cal_opts = {
-            "initialView": "multiMonthYear",
-            "height": 760,
-            "headerToolbar": {
-                "left": "prev,next today",
-                "center": "title",
-                "right": "",
-            },
-        }
-        selected = calendar(events=events, options=cal_opts, key="maic_calendar_deliverables")
-    else:
-        # Existing tasks/subtasks calendar (optionally showing deliverables)
-        show_deliverables = st.toggle("Show deliverables", value=True, key="cal_show_deliv")
-
-        task_map = {t.get("id"): t for t in tasks}
-
-        if show_deliverables and sel_user is None:
-            for d in deliverables:
-                dl = d.get("deadline")
-                if not dl:
-                    continue
-                if sel_project is not None and d.get("project_id") != sel_project:
-                    continue
-                proj = proj_by_id.get(d.get("project_id"), {})
-                events.append(
-                    {
-                        "id": f"d_{d.get('id')}",
-                        "title": f"[Deliverable] {d.get('name')}",
-                        "start": dl,
-                        "allDay": True,
-                        "color": _EVENT_COLOUR["deliverable"],
-                        "extendedProps": {
-                            "kind": "deliverable",
-                            "project": proj.get("name", "-"),
-                            "status": d.get("status", "Not started"),
-                            "description": f"Deliverable: {d.get('name')} | Project: {proj.get('name', '-')}",
-                        },
-                    }
-                )
-
+    # Tasks and subtasks events (if enabled)
+    if show_tasks:
         for t in tasks:
             dl = t.get("deadline")
             if not dl:
                 continue
             if sel_project is not None and t.get("project_id") != sel_project:
                 continue
-            if sel_user is not None and sel_user not in (t.get("owner_email"), t.get("supervisor_email")):
+            if sel_user is not None and sel_user not in (
+                t.get("owner_email"),
+                t.get("supervisor_email"),
+            ):
                 continue
             proj = proj_by_id.get(t.get("project_id"), {})
             seq = t.get("sequence_id") or f"T-{t.get('id')}"
@@ -258,6 +219,8 @@ def show_calendar():
                         "kind": "task",
                         "project": proj.get("name", "-"),
                         "status": t.get("status", "Not started"),
+                        "owner_email": t.get("owner_email"),
+                        "supervisor_email": t.get("supervisor_email"),
                         "description": f"Task: {seq} - {t.get('name')} | Project: {proj.get('name', '-')}",
                     },
                 }
@@ -271,7 +234,10 @@ def show_calendar():
             pid = parent.get("project_id")
             if sel_project is not None and pid != sel_project:
                 continue
-            if sel_user is not None and sel_user not in (s.get("owner_email"), s.get("supervisor_email")):
+            if sel_user is not None and sel_user not in (
+                s.get("owner_email"),
+                s.get("supervisor_email"),
+            ):
                 continue
             proj = proj_by_id.get(pid, {})
             pseq = parent.get("sequence_id") or f"T-{parent.get('id', '?')}"
@@ -286,34 +252,83 @@ def show_calendar():
                         "kind": "subtask",
                         "project": proj.get("name", "-"),
                         "status": s.get("status", "Not started"),
+                        "owner_email": s.get("owner_email"),
+                        "supervisor_email": s.get("supervisor_email"),
                         "description": f"Subtask: {s.get('name')} | Parent task: {pseq} | Project: {proj.get('name', '-')}",
                     },
                 }
             )
 
-        events.sort(key=lambda e: e.get("start") or "9999-12-31")
+    events.sort(key=lambda e: e.get("start") or "9999-12-31")
 
-        ics_data = _build_ics(events)
-        st.download_button(
-            "Export .ics",
-            data=ics_data,
-            file_name=f"maic_calendar_{datetime.date.today().strftime('%Y%m%d')}.ics",
-            mime="text/calendar",
-            use_container_width=False,
-        )
+    ics_data = _build_ics(events)
+    st.download_button(
+        "Export .ics",
+        data=ics_data,
+        file_name=f"maic_calendar_{datetime.date.today().strftime('%Y%m%d')}.ics",
+        mime="text/calendar",
+        use_container_width=False,
+    )
 
-        cal_opts = {
-            "initialView": "dayGridMonth",
-            "height": 760,
-            "headerToolbar": {
-                "left": "prev,next today",
-                "center": "title",
-                "right": "dayGridMonth,timeGridWeek,listWeek",
-            },
-        }
-        selected = calendar(events=events, options=cal_opts, key="maic_calendar_tasks")
+    cal_opts = {
+        "initialView": "dayGridMonth",
+        "height": 760,
+        "headerToolbar": {
+            "left": "prev,next today",
+            "center": "title",
+            "right": "dayGridMonth,timeGridWeek,multiMonthYear",
+        },
+    }
+    selected = calendar(events=events, options=cal_opts, key="maic_calendar_unified")
 
     st.caption(f"Visible events: {len(events)}")
+
+    # ── Long-scale text timeline ───────────────────────────────────────────────
+    st.subheader("Long-scale Timeline")
+    timeline: dict[tuple[int, int], list[dict]] = {}
+    for ev in events:
+        start = ev.get("start")
+        if not start:
+            continue
+        try:
+            d = datetime.date.fromisoformat(start)
+        except Exception:
+            continue
+        key = (d.year, d.month)
+        ext = ev.get("extendedProps", {}) or {}
+        proj_name = ext.get("project", "-")
+        kind = ext.get("kind", "")
+        title = ev.get("title") or ""
+        owner_e = ext.get("owner_email")
+        sup_e = ext.get("supervisor_email")
+        owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
+        sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
+        timeline.setdefault(key, []).append(
+            {
+                "date": d,
+                "project": proj_name,
+                "kind": kind,
+                "title": title,
+                "owner": owner_name or "—",
+                "sup": sup_name or "—",
+            }
+        )
+
+    for (year, month) in sorted(timeline.keys()):
+        month_name = datetime.date(year, month, 1).strftime("%B %Y")
+        st.markdown(f"### {month_name}")
+        for item in sorted(timeline[(year, month)], key=lambda x: x["date"]):
+            # Strip leading tag like "[Deliverable]" or "[Task]" from title for readability
+            name = item["title"]
+            if name.startswith("["):
+                try:
+                    name = name.split("]", 1)[1].strip()
+                except Exception:
+                    pass
+            st.markdown(
+                f"**{item['project']} - {name}** - Due on {item['date'].isoformat()}\n"
+                f"Owner: {item['owner']} | Supervisor: {item['sup']}"
+            )
 
     clicked = (selected or {}).get("eventClick")
     if clicked:

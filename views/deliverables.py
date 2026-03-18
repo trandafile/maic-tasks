@@ -2,9 +2,11 @@ import streamlit as st
 from core.supabase_client import supabase
 from utils.helpers import fmt_date
 from utils.modals import person_pill_html
+from utils.pdf_generator import generate_deliverables_pdf
 
 
 def _fetch_deliverables_overview():
+    """Fetch projects + deliverables + users, applying RBAC on deliverables."""
     try:
         projects = (
             supabase.table("projects")
@@ -15,15 +17,20 @@ def _fetch_deliverables_overview():
             .data
             or []
         )
-        deliverables = (
+
+        role = st.session_state.get("user_role")
+        email = st.session_state.get("user_email")
+
+        dq = (
             supabase.table("deliverables")
             .select("*")
             .eq("is_archived", False)
             .order("deadline")
-            .execute()
-            .data
-            or []
         )
+        if role != "admin" and email:
+            dq = dq.or_(f"owner_email.eq.{email},supervisor_email.eq.{email}")
+        deliverables = dq.execute().data or []
+
         users = (
             supabase.table("users")
             .select("email, name, avatar_color")
@@ -76,6 +83,20 @@ def show_deliverables():
     st.caption(
         "High-level list of deliverables by project, with owner, supervisor and deadlines."
     )
+
+    # PDF export for the currently visible (RBAC-filtered) deliverables
+    col_pdf, _ = st.columns([1, 5])
+    with col_pdf:
+        if st.button("📄 Download PDF", type="primary", use_container_width=True, key="deliv_pdf_btn"):
+            buf = generate_deliverables_pdf(projects, deliverables, user_map)
+            st.download_button(
+                "⬇️ Download PDF",
+                data=buf,
+                file_name=f"deliverables_overview_{fmt_date(str(st.session_state.get('today', ''))).replace('/', '')}.pdf",
+                mime="application/pdf",
+                key="deliv_pdf_dl",
+            )
+
     st.write("")
 
     for proj in projects:

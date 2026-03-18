@@ -39,6 +39,129 @@ def _fmt_date(d: str | None) -> str:
         return d or "—"
 
 
+def generate_deliverables_pdf(
+    projects: list[dict],
+    deliverables: list[dict],
+    users_by_email: dict[str, dict],
+) -> "BytesIO":
+    """Generate a high-level Deliverables overview PDF grouped by project.
+
+    Args:
+        projects:       full list of (active) projects
+        deliverables:   RBAC-filtered list of deliverables
+        users_by_email: {email: user_row} for owner/supervisor names
+    """
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+        topMargin=20 * mm,
+        bottomMargin=20 * mm,
+    )
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("DH1", parent=styles["Heading1"], fontSize=16, spaceAfter=4)
+    h2 = ParagraphStyle("DH2", parent=styles["Heading2"], fontSize=11, spaceAfter=2)
+    small = ParagraphStyle("DS", parent=styles["Normal"], fontSize=8, textColor=colors.grey)
+    label = ParagraphStyle(
+        "DL",
+        parent=styles["Normal"],
+        fontSize=7,
+        textColor=colors.grey,
+        fontName="Helvetica-BoldOblique",
+        spaceAfter=3,
+    )
+
+    elements: list = []
+    today_str = datetime.date.today().strftime("%d/%m/%Y")
+
+    elements.append(Paragraph("Deliverables Overview — MAIC LAB", h1))
+    elements.append(Paragraph(f"Generated on {today_str}", small))
+    elements.append(Spacer(1, 8))
+
+    proj_by_id = {p["id"]: p for p in projects}
+
+    # Group deliverables by project id
+    by_proj: dict[int, list[dict]] = {}
+    for d in deliverables:
+        pid = d.get("project_id")
+        if not pid:
+            continue
+        by_proj.setdefault(pid, []).append(d)
+
+    TABLE_HEADER = ["Deliverable", "Type", "Status", "Deadline", "Owner", "Supervisor"]
+    COL_WIDTHS = [56 * mm, 24 * mm, 22 * mm, 22 * mm, 30 * mm, 30 * mm]
+
+    for idx, (pid, dels) in enumerate(sorted(by_proj.items(), key=lambda x: proj_by_id.get(x[0], {}).get("name", ""))):
+        proj = proj_by_id.get(pid, {})
+        if idx > 0:
+            elements.append(PageBreak())
+
+        pname = proj.get("name", "Project")
+        acr = proj.get("acronym") or proj.get("identifier") or ""
+        elements.append(Paragraph(f"{pname} ({acr})", h2))
+
+        caption_parts = []
+        if proj.get("funding_agency"):
+            caption_parts.append(proj["funding_agency"])
+        if proj.get("start_date"):
+            caption_parts.append(
+                f"{_fmt_date(proj.get('start_date'))} → {_fmt_date(proj.get('end_date'))}"
+            )
+        if caption_parts:
+            elements.append(Paragraph("  ·  ".join(caption_parts), small))
+        elements.append(Spacer(1, 4))
+
+        elements.append(Paragraph("DELIVERABLES", label))
+
+        table_data = [TABLE_HEADER]
+        for d in sorted(dels, key=lambda dd: dd.get("deadline") or "9999-12-31"):
+            status = d.get("status", "Not started")
+            stat_col = STATUS_TEXT.get(status, colors.grey)
+            owner_e = d.get("owner_email")
+            sup_e = d.get("supervisor_email")
+            owner_name = users_by_email.get(owner_e, {}).get("name", owner_e or "—")
+            sup_name = users_by_email.get(sup_e, {}).get("name", sup_e or "—") if sup_e else "—"
+
+            row = [
+                Paragraph(d.get("name") or "—", styles["Normal"]),
+            ]
+            row.append(Paragraph(d.get("type") or "—", small))
+            row.append(
+                Paragraph(
+                    f"<font color='{stat_col.hexval()}'>{status}</font>",
+                    small,
+                )
+            )
+            row.append(Paragraph(_fmt_date(d.get("deadline")), small))
+            row.append(Paragraph(owner_name or "—", small))
+            row.append(Paragraph(sup_name or "—", small))
+            table_data.append(row)
+
+        tbl = Table(table_data, colWidths=COL_WIDTHS, repeatRows=1)
+        tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F5F5F5")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 8),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
+                    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        elements.append(tbl)
+        elements.append(Spacer(1, 6))
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf
+
+
 def generate_report_pdf(
     projects, deliverables, tasks, subtasks, users_dict,
     filter_proj=None, filter_user=None, filter_status=None,
