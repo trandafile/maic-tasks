@@ -245,7 +245,14 @@ def markdown_editor(
     """
     # Reserve a session_state slot so the value survives reruns.
     sk = f"__mde_{key}"
-    if sk not in st.session_state:
+    ta_key = f"{key}_ta"
+    # If the user has already typed in the editor (ta_key exists in session_state),
+    # keep that value as the EasyMDE initialValue.  This prevents the iframe from
+    # reinitialising with the stale DB value on each Streamlit rerun and overwriting
+    # whatever the user has typed via the force-sync on load.
+    if ta_key in st.session_state:
+        st.session_state[sk] = st.session_state[ta_key]
+    elif sk not in st.session_state:
         st.session_state[sk] = value
 
     st.caption(label)
