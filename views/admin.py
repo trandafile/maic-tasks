@@ -355,77 +355,83 @@ def _tab_projects():
                 # ── Inline edit form ──────────────────────────────────────
                 if st.session_state.get(edit_key):
                     st.markdown("---")
-                    pf1, pf2 = st.columns(2)
-                    with pf1:
-                        p_name    = st.text_input("Project Name*", key=f"p_name_{pid}")
-                        p_acronym = st.text_input("Acronym",       key=f"p_acro_{pid}")
-                        p_idf     = st.text_input("Identifier",    key=f"p_idf_{pid}")
-                    with pf2:
-                        p_funding = st.text_input("Funding Agency", key=f"p_fund_{pid}")
-                        p_start   = st.date_input(
-                            "Start Date",
-                            format="DD/MM/YYYY",
-                            key=f"p_start_{pid}",
+                    with st.form(f"edit_proj_form_{pid}"):
+                        pf1, pf2 = st.columns(2)
+                        with pf1:
+                            p_name    = st.text_input("Project Name*", key=f"p_name_{pid}")
+                            p_acronym = st.text_input("Acronym",       key=f"p_acro_{pid}")
+                            p_idf     = st.text_input("Identifier",    key=f"p_idf_{pid}")
+                        with pf2:
+                            p_funding = st.text_input("Funding Agency", key=f"p_fund_{pid}")
+                            p_start   = st.date_input(
+                                "Start Date",
+                                format="DD/MM/YYYY",
+                                key=f"p_start_{pid}",
+                            )
+                            p_end = st.date_input(
+                                "End Date",
+                                format="DD/MM/YYYY",
+                                key=f"p_end_{pid}",
+                            )
+                        p_description = markdown_editor(
+                            value=st.session_state.get(f"p_desc_{pid}", ""),
+                            key=f"p_desc_{pid}",
+                            height=220,
+                            label="📝 Project Description (optional, Markdown)",
                         )
-                        p_end = st.date_input(
-                            "End Date",
-                            format="DD/MM/YYYY",
-                            key=f"p_end_{pid}",
-                        )
-                    p_description = st.text_area(
-                        "📝 Project Description (optional, Markdown)",
-                        value=st.session_state.get(f"p_desc_{pid}", ""),
-                        key=f"p_desc_{pid}",
-                        height=220,
-                    )
-                    pb1, pb2 = st.columns(2)
-                    with pb1:
-                        if st.button("💾 Save", key=f"save_proj_{pid}",
-                                     type="primary", use_container_width=True):
-                            if not p_name:
-                                st.error("Project name is required.")
-                            else:
-                                try:
-                                    new_description = p_description.strip() or None
-                                    supabase.table("projects").update({
-                                        "name":           p_name,
-                                        "acronym":        p_acronym or None,
-                                        "identifier":     p_idf     or None,
-                                        "funding_agency": p_funding or None,
-                                        "start_date":     p_start.isoformat() if p_start else None,
-                                        "end_date":       p_end.isoformat()   if p_end   else None,
-                                        "description":    new_description,
-                                    }).eq("id", pid).execute()
+                        pb1, pb2 = st.columns(2)
+                        with pb1:
+                            save_clicked = st.form_submit_button(
+                                "💾 Save", type="primary", use_container_width=True
+                            )
+                        with pb2:
+                            cancel_clicked = st.form_submit_button(
+                                "Cancel", use_container_width=True
+                            )
+                    if cancel_clicked:
+                        _reset_project_edit_state(pid)
+                        st.session_state.pop(edit_key, None)
+                        st.rerun()
+                    if save_clicked:
+                        if not p_name:
+                            st.error("Project name is required.")
+                        else:
+                            try:
+                                new_description = p_description.strip() or None
+                                supabase.table("projects").update({
+                                    "name":           p_name,
+                                    "acronym":        p_acronym or None,
+                                    "identifier":     p_idf     or None,
+                                    "funding_agency": p_funding or None,
+                                    "start_date":     p_start.isoformat() if p_start else None,
+                                    "end_date":       p_end.isoformat()   if p_end   else None,
+                                    "description":    new_description,
+                                }).eq("id", pid).execute()
 
-                                    # Verify persistence to surface silent failures (e.g., policy/transport issues).
-                                    readback = (
-                                        supabase.table("projects")
-                                        .select("description")
-                                        .eq("id", pid)
-                                        .limit(1)
-                                        .execute()
-                                        .data
+                                # Verify persistence to surface silent failures.
+                                readback = (
+                                    supabase.table("projects")
+                                    .select("description")
+                                    .eq("id", pid)
+                                    .limit(1)
+                                    .execute()
+                                    .data
+                                )
+                                db_description = None
+                                if readback:
+                                    db_description = (readback[0].get("description") or "").strip() or None
+                                if db_description != new_description:
+                                    st.error(
+                                        "Save did not persist the new description. "
+                                        "Please reopen Edit and save again."
                                     )
-                                    db_description = None
-                                    if readback:
-                                        db_description = (readback[0].get("description") or "").strip() or None
-                                    if db_description != new_description:
-                                        st.error(
-                                            "Save did not persist the new description. "
-                                            "Please reopen Edit and save again."
-                                        )
-                                    else:
-                                        _reset_project_edit_state(pid)
-                                        st.session_state.pop(edit_key, None)
-                                        st.success("Project updated.")
-                                        st.rerun()
-                                except Exception as ex:
-                                    st.error(f"Error: {ex}")
-                    with pb2:
-                        if st.button("Cancel", key=f"cancel_proj_{pid}", use_container_width=True):
-                            _reset_project_edit_state(pid)
-                            st.session_state.pop(edit_key, None)
-                            st.rerun()
+                                else:
+                                    _reset_project_edit_state(pid)
+                                    st.session_state.pop(edit_key, None)
+                                    st.success("Project updated.")
+                                    st.rerun()
+                            except Exception as ex:
+                                st.error(f"Error: {ex}")
 
                 # ── Inline delete confirmation ────────────────────────────
                 if st.session_state.get(del_key):
