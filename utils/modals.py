@@ -410,6 +410,9 @@ def task_details_modal(task, can_edit, deliverables=None):
                         send_task_assigned(enriched, new_sup_email, assigner)
 
                     st.success("Saved!")
+                    _mde_key = f"task_notes_{task['id']}"
+                    st.session_state.pop(f"__mde_{_mde_key}", None)
+                    st.session_state.pop(f"{_mde_key}_ta", None)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -539,6 +542,9 @@ def subtask_details_modal(subtask, can_edit):
                         send_task_assigned(enriched, new_sup_email, assigner)
 
                     st.success("Saved!")
+                    _mde_key = f"subtask_notes_{subtask['id']}"
+                    st.session_state.pop(f"__mde_{_mde_key}", None)
+                    st.session_state.pop(f"{_mde_key}_ta", None)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
