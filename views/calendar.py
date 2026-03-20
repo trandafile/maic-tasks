@@ -486,8 +486,8 @@ def show_calendar():
         owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
         sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
 
-                # Stable modal-like overlay (works consistently on Streamlit Cloud).
-                overlay_html = f"""
+        # Stable modal-like overlay (works consistently on Streamlit Cloud).
+        overlay_html = f"""
 <div style="
         position: fixed;
         inset: 0;
@@ -517,4 +517,4 @@ def show_calendar():
     </div>
 </div>
 """
-                st.markdown(overlay_html, unsafe_allow_html=True)
+        st.markdown(overlay_html, unsafe_allow_html=True)
