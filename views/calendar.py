@@ -487,15 +487,15 @@ def show_calendar():
         owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
         sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
 
-                popup_text = (
-                        f"<div style='font-weight:700; margin-bottom:4px;'>{html.escape(proj_acr or '-')}</div>"
-                        f"<div style='margin-bottom:6px;'>{html.escape(title or '-')}</div>"
-                        f"<div style='font-size:0.9rem; color:#374151;'>Owner: {html.escape(owner_name or '—')}</div>"
-                        f"<div style='font-size:0.9rem; color:#374151;'>Supervisor: {html.escape(sup_name or '—')}</div>"
-                )
+        popup_text = (
+            f"<div style='font-weight:700; margin-bottom:4px;'>{html.escape(proj_acr or '-')}</div>"
+            f"<div style='margin-bottom:6px;'>{html.escape(title or '-')}</div>"
+            f"<div style='font-size:0.9rem; color:#374151;'>Owner: {html.escape(owner_name or '—')}</div>"
+            f"<div style='font-size:0.9rem; color:#374151;'>Supervisor: {html.escape(sup_name or '—')}</div>"
+        )
 
-                # Try to anchor a popup to the clicked event element in the parent DOM.
-                anchor_script = f"""
+        # Try to anchor a popup to the clicked event element in the parent DOM.
+        anchor_script = f"""
 <script>
 (() => {{
     const popupId = "maic-event-details-popup";
@@ -521,10 +521,10 @@ def show_calendar():
 
     const events = Array.from(root.querySelectorAll(".fc-event"));
     let anchor = null;
-    for (const ev of events) {{
-        const txt = (ev.textContent || "").trim();
+    for (const evEl of events) {{
+        const txt = (evEl.textContent || "").trim();
         if (targetText && txt.includes(targetText)) {{
-            anchor = ev;
+            anchor = evEl;
             break;
         }}
     }}
@@ -551,6 +551,4 @@ def show_calendar():
 }})();
 </script>
 """
-                components.html(anchor_script, height=0, width=0)
-
-                st.caption("Se non vedi il pop-up ancorato all'evento, aggiorna la pagina una volta.")
+        components.html(anchor_script, height=0, width=0)
