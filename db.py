@@ -107,7 +107,7 @@ SETTINGS_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → Settings tab
 ALTER TABLE settings
     ADD COLUMN IF NOT EXISTS deliverable_types      TEXT    DEFAULT '["paper", "layout", "prototype"]',
-    ADD COLUMN IF NOT EXISTS deliverable_tag_styles JSONB   DEFAULT '[{"name":"paper","color":"#0F766E"},{"name":"layout","color":"#1E3A8A"},{"name":"prototype","color":"#4A044E"},{"name":"generic","color":"#334155"},{"name":"other","color":"#7F1D1D"}]'::jsonb,
+    ADD COLUMN IF NOT EXISTS deliverable_tag_styles JSONB   DEFAULT '[{"name":"paper","color":"#0F766E"},{"name":"layout","color":"#1E3A8A"},{"name":"prototype","color":"#4A044E"}]'::jsonb,
   ADD COLUMN IF NOT EXISTS smtp_host             TEXT    DEFAULT 'smtp.gmail.com',
   ADD COLUMN IF NOT EXISTS smtp_port             INTEGER DEFAULT 587,
   ADD COLUMN IF NOT EXISTS smtp_user             TEXT    DEFAULT 'maiclab@unical.it',

@@ -103,7 +103,7 @@ def add_deliverable_modal(project_id, users):
     cfg = get_settings()
     type_options = [
         s["name"].strip()
-        for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
+        for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"), fallback_to_default=False)
         if str(s.get("name", "")).strip()
     ]
     if not type_options:

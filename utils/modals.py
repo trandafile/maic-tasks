@@ -590,7 +590,7 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
     cfg = get_settings()
     TYPE_OPTS = [
         s["name"].strip()
-        for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
+        for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"), fallback_to_default=False)
         if str(s.get("name", "")).strip()
     ]
     if not TYPE_OPTS:

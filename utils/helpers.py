@@ -19,8 +19,6 @@ DEFAULT_DELIVERABLE_TAG_STYLES = [
     {"name": "paper", "color": "#0F766E"},
     {"name": "layout", "color": "#1E3A8A"},
     {"name": "prototype", "color": "#4A044E"},
-    {"name": "generic", "color": "#334155"},
-    {"name": "other", "color": "#7F1D1D"},
 ]
 
 
@@ -69,7 +67,7 @@ def get_contrast_text_color(bg_hex: str) -> str:
     return "#111111" if luminance >= 160 else "#FFFFFF"
 
 
-def parse_deliverable_tag_styles(raw_value) -> list[dict]:
+def parse_deliverable_tag_styles(raw_value, fallback_to_default: bool = True) -> list[dict]:
     """Parse settings value into [{name, color}, ...] using palette-constrained fallback."""
     parsed = raw_value
     if isinstance(raw_value, str):
@@ -90,7 +88,9 @@ def parse_deliverable_tag_styles(raw_value) -> list[dict]:
 
     if styles:
         return styles
-    return [dict(item) for item in DEFAULT_DELIVERABLE_TAG_STYLES]
+    if fallback_to_default:
+        return [dict(item) for item in DEFAULT_DELIVERABLE_TAG_STYLES]
+    return []
 
 
 def get_deliverable_tag_map(settings: dict | None = None) -> dict[str, str]:
