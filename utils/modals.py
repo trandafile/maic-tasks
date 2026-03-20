@@ -588,17 +588,20 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
 
     STATUS_OPTS = ["Not started", "Working on", "Blocked", "Completed", "Cancelled"]
     cfg = get_settings()
-    raw_types = cfg.get("deliverable_types")
-    TYPE_OPTS = []
-    if isinstance(raw_types, str):
-        try:
-            parsed = json.loads(raw_types)
-            if isinstance(parsed, list):
-                TYPE_OPTS = [str(v).strip() for v in parsed if str(v).strip()]
-        except Exception:
-            TYPE_OPTS = []
+    TYPE_OPTS = [
+        s["name"].strip()
+        for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
+        if str(s.get("name", "")).strip()
+    ]
     if not TYPE_OPTS:
-        TYPE_OPTS = [s["name"] for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))]
+        raw_types = cfg.get("deliverable_types")
+        if isinstance(raw_types, str):
+            try:
+                parsed = json.loads(raw_types)
+                if isinstance(parsed, list):
+                    TYPE_OPTS = [str(v).strip() for v in parsed if str(v).strip()]
+            except Exception:
+                TYPE_OPTS = []
     if not TYPE_OPTS:
         TYPE_OPTS = ["paper", "layout", "prototype"]
     _SC = {

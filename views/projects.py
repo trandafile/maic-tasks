@@ -101,19 +101,20 @@ def fetch_hierarchy(show_archived=False, user_email=None, is_admin=False):
 @st.dialog("Add New Deliverable")
 def add_deliverable_modal(project_id, users):
     cfg = get_settings()
-    raw_types = cfg.get("deliverable_types")
-    type_options = []
-    if isinstance(raw_types, str):
-        try:
-            parsed = json.loads(raw_types)
-            if isinstance(parsed, list):
-                type_options = [str(v).strip() for v in parsed if str(v).strip()]
-        except Exception:
-            type_options = []
+    type_options = [
+        s["name"].strip()
+        for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
+        if str(s.get("name", "")).strip()
+    ]
     if not type_options:
-        type_options = [
-            s["name"] for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
-        ]
+        raw_types = cfg.get("deliverable_types")
+        if isinstance(raw_types, str):
+            try:
+                parsed = json.loads(raw_types)
+                if isinstance(parsed, list):
+                    type_options = [str(v).strip() for v in parsed if str(v).strip()]
+            except Exception:
+                type_options = []
     if not type_options:
         type_options = ["paper", "layout", "prototype"]
 

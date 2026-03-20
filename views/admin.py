@@ -690,8 +690,9 @@ def _tab_archive():
 # ─── TAB 4: Settings & Notifications ─────────────────────────────────────────
 
 def _tab_settings():
-    st.subheader("Configuration")
-    st.caption("Deliverable tag management is now available in the dedicated 'Deliverable Tags' tab.")
+    st.subheader("Deliverable Tags")
+    st.caption("Manage deliverable tag names and colors used across Dashboard, Active Tasks, Deliverables, Reports and Calendar.")
+    _tab_deliverable_tags()
 
     st.divider()
 
@@ -789,14 +790,6 @@ def _tab_settings():
         else:
             st.error(msg)
 
-    st.divider()
-    st.subheader("SQL Schema — Migrations")
-    with st.expander("Show required SQL for Supabase", expanded=False):
-        st.code(SETTINGS_MIGRATION_SQL, language="sql")
-        st.code(DELIVERABLES_MIGRATION_SQL, language="sql")
-        st.code(PROJECTS_MIGRATION_SQL, language="sql")
-
-
 def _tab_deliverable_tags():
     cfg = get_settings()
 
@@ -833,7 +826,11 @@ def _tab_deliverable_tags():
         num_rows="dynamic",
         key="admin_deliverable_tag_editor",
         column_config={
-            "Tag": st.column_config.TextColumn("Tag", required=True),
+            "Tag": st.column_config.TextColumn(
+                "Tag",
+                required=False,
+                help="Leave empty to disable this row.",
+            ),
             "Palette": st.column_config.SelectboxColumn(
                 "Palette",
                 required=True,
@@ -889,11 +886,10 @@ def show_admin():
 
     st.title("⚙️ Admin Panel")
 
-    tab_users, tab_projects, tab_archive, tab_tags, tab_settings = st.tabs([
+    tab_users, tab_projects, tab_archive, tab_settings = st.tabs([
         "👥 Users",
         "🗂️ Projects",
         "🗄️ Archive",
-        "🏷️ Deliverable Tags",
         "📧 Settings & Notifications",
     ])
 
@@ -905,9 +901,6 @@ def show_admin():
 
     with tab_archive:
         _tab_archive()
-
-    with tab_tags:
-        _tab_deliverable_tags()
 
     with tab_settings:
         _tab_settings()
