@@ -1,4 +1,5 @@
 import datetime
+import html
 import streamlit as st
 from streamlit_calendar import calendar
 
@@ -485,13 +486,29 @@ def show_calendar():
         owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
         sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
 
-        # Lightweight overlay on click for quick event details.
-        st.toast(
-            f"{proj_acr} | {title} | Owner: {owner_name or '—'} | Supervisor: {sup_name or '—'}",
-            icon="ℹ️",
-        )
-        st.info(
-            f"Project: {proj_acr}\n"
-            f"Item: {title}\n"
-            f"Owner: {owner_name or '—'} | Supervisor: {sup_name or '—'}"
-        )
+        js_evt = clicked.get("jsEvent") or ev.get("jsEvent") or {}
+        x_raw = js_evt.get("pageX", js_evt.get("clientX", js_evt.get("x")))
+        y_raw = js_evt.get("pageY", js_evt.get("clientY", js_evt.get("y")))
+
+        has_coords = isinstance(x_raw, (int, float)) and isinstance(y_raw, (int, float))
+        if has_coords:
+            x = max(12, int(x_raw) + 12)
+            y = max(12, int(y_raw) + 12)
+            popup_html = f"""
+<div style=\"position:fixed; left:{x}px; top:{y}px; z-index:99999; max-width:360px;
+            background:#ffffff; border:1px solid #d1d5db; border-radius:10px;
+            box-shadow:0 12px 28px rgba(0,0,0,0.18); padding:10px 12px; line-height:1.35;\">
+  <div style=\"font-weight:700; margin-bottom:4px;\">{html.escape(proj_acr or '-')}</div>
+  <div style=\"margin-bottom:6px;\">{html.escape(title or '-')}</div>
+  <div style=\"font-size:0.9rem; color:#374151;\">Owner: {html.escape(owner_name or '—')}</div>
+  <div style=\"font-size:0.9rem; color:#374151;\">Supervisor: {html.escape(sup_name or '—')}</div>
+</div>
+"""
+            st.markdown(popup_html, unsafe_allow_html=True)
+        else:
+            st.caption("Selected event details")
+            st.info(
+                f"Project: {proj_acr}\n"
+                f"Item: {title}\n"
+                f"Owner: {owner_name or '—'} | Supervisor: {sup_name or '—'}"
+            )
