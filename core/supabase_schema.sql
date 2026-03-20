@@ -6,13 +6,14 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     role TEXT,
     is_approved BOOLEAN DEFAULT FALSE,
-    avatar_color TEXT
+    avatar_color TEXT,
+    last_reminder_sent DATE
 );
 
 -- 2. Settings
 CREATE TABLE IF NOT EXISTS settings (
     id SERIAL PRIMARY KEY,
-    expiring_threshold_days INTEGER DEFAULT 7,
+    expiring_threshold_days INTEGER DEFAULT 14,
     deliverable_types JSONB DEFAULT '["paper", "layout", "prototype"]'::jsonb
 );
 
@@ -59,7 +60,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     completion_date DATE,
     notes TEXT,
     sort_order INTEGER,
-    is_archived BOOLEAN DEFAULT FALSE
+    is_archived BOOLEAN DEFAULT FALSE,
+    last_reminder_sent DATE
 );
 
 -- 6. Subtasks
@@ -73,7 +75,8 @@ CREATE TABLE IF NOT EXISTS subtasks (
     deadline DATE,
     notes TEXT,
     sort_order INTEGER,
-    is_archived BOOLEAN DEFAULT FALSE
+    is_archived BOOLEAN DEFAULT FALSE,
+    last_reminder_sent DATE
 );
 
 -- 7. Labels
@@ -120,5 +123,5 @@ ON CONFLICT (email) DO NOTHING;
 
 -- Seed Default Settings
 INSERT INTO settings (id, expiring_threshold_days, deliverable_types)
-VALUES (1, 7, '["paper", "layout", "prototype"]'::jsonb)
+VALUES (1, 14, '["paper", "layout", "prototype"]'::jsonb)
 ON CONFLICT (id) DO NOTHING;

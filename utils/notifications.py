@@ -217,3 +217,185 @@ def send_master_status_report_to_admins(subject: str, body: str) -> tuple[bool, 
         sent += 1 if ok else 0
         ok_all = ok_all and ok
     return ok_all, sent, len(emails)
+
+
+_MONTHS_IT = {
+    1: "gennaio",
+    2: "febbraio",
+    3: "marzo",
+    4: "aprile",
+    5: "maggio",
+    6: "giugno",
+    7: "luglio",
+    8: "agosto",
+    9: "settembre",
+    10: "ottobre",
+    11: "novembre",
+    12: "dicembre",
+}
+
+
+def _fmt_date_slash(d: str | None) -> str:
+    if not d:
+        return "—"
+    try:
+        return datetime.date.fromisoformat(d).strftime("%Y/%m/%d")
+    except Exception:
+        return d
+
+
+def _fmt_date_it_long(value: datetime.date) -> str:
+    return f"{value.day:02d} {_MONTHS_IT[value.month]} {value.year}"
+
+
+def _delta_label(dl_str: str | None) -> str:
+    if not dl_str:
+        return "senza scadenza"
+    try:
+        delta = (datetime.date.fromisoformat(dl_str) - datetime.date.today()).days
+    except Exception:
+        return "scadenza non valida"
+    if delta < 0:
+        return f"scaduto da {abs(delta)} giorni"
+    if delta == 0:
+        return "scade oggi"
+    return f"tra {delta} giorni"
+
+
+def _task_sort_key(item: dict) -> tuple[int, str, str]:
+    deadline = item.get("deadline") or "9999-12-31"
+    return (0 if item.get("deadline") else 1, deadline, str(item.get("sequence_id") or ""))
+
+
+def _sequence_label(item: dict) -> str:
+    if item.get("sequence_id"):
+        return str(item["sequence_id"])
+    return f"T-{item.get('id', '?')}"
+
+
+def send_weekly_briefing(
+    to_email: str,
+    name: str,
+    overdue: list[dict],
+    upcoming: list[dict],
+    active: list[dict],
+    supervised_blocked: list[dict],
+    threshold: int = 14,
+) -> bool:
+    """Build and send the weekly plain-text digest."""
+    if not to_email:
+        return False
+
+    cfg = _get_settings()
+    app_url = cfg.get("app_url", "http://localhost:8501")
+    today = datetime.date.today()
+    monday = today - datetime.timedelta(days=today.weekday())
+    friday = monday + datetime.timedelta(days=4)
+    first_name = (name or to_email).split()[0]
+
+    overdue_sorted = sorted(overdue, key=_task_sort_key)
+    upcoming_sorted = sorted(upcoming, key=_task_sort_key)
+    active_sorted = sorted(active, key=_task_sort_key)
+    supervised_sorted = sorted(supervised_blocked, key=_task_sort_key)
+
+    combined = []
+    seen = set()
+    for item in overdue_sorted + upcoming_sorted + active_sorted:
+        key = (item.get("id"), item.get("task_id"), item.get("sequence_id"), item.get("name"))
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append(item)
+    combined.sort(key=_task_sort_key)
+
+    if overdue_sorted or upcoming_sorted:
+        intro = f"Hai {len(overdue_sorted)} task scaduti e {len(upcoming_sorted)} in scadenza da gestire."
+    else:
+        intro = (
+            "Non hai scadenze imminenti questa settimana. "
+            "Di seguito trovi tutti i tuoi task attivi."
+        )
+
+    lines = [
+        f"Ciao {first_name},",
+        "",
+        f"Ecco il tuo riepilogo per la settimana del {_fmt_date_it_long(monday)} - {_fmt_date_it_long(friday)}.",
+        intro,
+        "",
+    ]
+
+    if overdue_sorted:
+        lines.append(f"-- SCADUTI ({len(overdue_sorted)}) --")
+        for item in overdue_sorted:
+            lines.append(f"• {_sequence_label(item)} — {item.get('name', '')}")
+            lines.append(
+                f"  {_delta_label(item.get('deadline'))} · Status: {item.get('status') or '—'} · Progetto: {item.get('project_acronym') or '—'}"
+            )
+        lines.append("")
+
+    if upcoming_sorted:
+        lines.append(f"-- IN SCADENZA ENTRO {threshold} GIORNI ({len(upcoming_sorted)}) --")
+        for item in upcoming_sorted:
+            lines.append(f"• {_sequence_label(item)} — {item.get('name', '')}")
+            lines.append(
+                f"  Scadenza: {_fmt_date_slash(item.get('deadline'))} · {_delta_label(item.get('deadline'))} · Status: {item.get('status') or '—'}"
+            )
+            lines.append(f"  Progetto: {item.get('project_acronym') or '—'}")
+        lines.append("")
+
+    if supervised_sorted:
+        lines.append(f"-- DA SBLOCCARE - IN SUPERVISIONE ({len(supervised_sorted)}) --")
+        for item in supervised_sorted:
+            owner_label = item.get("owner_name") or item.get("owner_email") or "—"
+            lines.append(f"• {_sequence_label(item)} — {item.get('name', '')}")
+            lines.append(
+                f"  Progetto: {item.get('project_acronym') or '—'} · Assegnato a: {owner_label}"
+            )
+        lines.append("")
+
+    lines.append(f"-- TUTTI I TUOI TASK ATTIVI ({len(combined)}) --")
+    for item in combined:
+        lines.append(f"• {_sequence_label(item)} — {item.get('name', '')}")
+        lines.append(
+            f"  [{item.get('status') or '—'}] scadenza {_fmt_date_slash(item.get('deadline'))} · {item.get('project_acronym') or '—'}"
+        )
+
+    lines.extend([
+        "",
+        "----------------------------------------",
+        f"Accedi all'app: {app_url}",
+        "----------------------------------------",
+        "",
+        "— MAIC LAB Task Manager",
+        "Università della Calabria",
+    ])
+
+    subject = f"[MAIC LAB] Riepilogo settimanale — {today.strftime('%Y/%m/%d')}"
+    body = "\n".join(lines)
+    return _send(subject, body, to_email)
+
+
+def send_overdue_alert(task: dict, to_email: str) -> bool:
+    """Send the one-shot alert when a task becomes overdue."""
+    if not to_email:
+        return False
+
+    cfg = _get_settings()
+    app_url = cfg.get("app_url", "http://localhost:8501")
+    seq_id = _sequence_label(task)
+    task_name = task.get("name", "")
+    project_name = task.get("project_name") or task.get("project_acronym") or ""
+    deadline = _fmt_date_slash(task.get("deadline"))
+    status = task.get("status") or "—"
+
+    subject = f"[MAIC LAB] Task scaduto: {seq_id} — {task_name}"
+    body = (
+        "Il task seguente è scaduto ieri e non risulta completato.\n\n"
+        f"Task: {seq_id} — {task_name}\n"
+        f"Progetto: {project_name}\n"
+        f"Scadenza: {deadline}\n"
+        f"Status attuale: {status}\n\n"
+        f"Aggiorna lo status sull'app: {app_url}\n\n"
+        "— MAIC LAB Task Manager"
+    )
+    return _send(subject, body, to_email)

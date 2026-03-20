@@ -14,6 +14,9 @@ ALTER TABLE settings
   ADD COLUMN IF NOT EXISTS notifications_enabled BOOLEAN DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS app_url            TEXT    DEFAULT 'http://localhost:8501';
 
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS last_reminder_sent DATE;
+
 ALTER TABLE tasks
   ADD COLUMN IF NOT EXISTS last_reminder_sent DATE;
 
@@ -91,7 +94,7 @@ def get_users(approved_only: bool = True) -> list:
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 _SETTINGS_DEFAULTS = {
-    "expiring_threshold_days": 7,
+    "expiring_threshold_days": 14,
     "deliverable_types": json.dumps([s["name"] for s in DEFAULT_DELIVERABLE_TAG_STYLES]),
     "deliverable_tag_styles": json.dumps(DEFAULT_DELIVERABLE_TAG_STYLES),
     "smtp_host": "smtp.gmail.com",
@@ -115,6 +118,9 @@ ALTER TABLE settings
   ADD COLUMN IF NOT EXISTS smtp_from_name        TEXT    DEFAULT 'MAIC LAB',
   ADD COLUMN IF NOT EXISTS notifications_enabled BOOLEAN DEFAULT FALSE,
   ADD COLUMN IF NOT EXISTS app_url               TEXT    DEFAULT 'http://localhost:8501';
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS last_reminder_sent DATE;
 
 ALTER TABLE tasks
   ADD COLUMN IF NOT EXISTS last_reminder_sent DATE;

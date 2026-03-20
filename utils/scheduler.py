@@ -1,163 +1,186 @@
-"""utils/scheduler.py — Daily deadline reminder check.
+"""utils/scheduler.py — Weekly briefing and overdue alert scheduler.
 
 Call check_and_send_deadline_reminders() once per session from app.py.
-Requires columns last_reminder_sent (DATE) on tasks and subtasks tables.
-See db.py for the required ALTER TABLE migration SQL.
+Users.last_reminder_sent deduplicates Monday briefings.
+Tasks/Subtasks.last_reminder_sent deduplicate the one-shot overdue alert.
 """
 
 import datetime
-from utils.notifications import send_deadline_reminder, send_task_overdue
+
 from db import get_settings
+from utils.notifications import send_overdue_alert, send_weekly_briefing
 
 
-# Statuses that are considered "closed" (no reminders needed)
 _CLOSED = {"Completed", "Cancelled"}
 
 
-def _enrich(item: dict, projects: list, deliverables: list) -> dict:
-    """Add project_name and deliverable_name to a task/subtask dict."""
-    proj_id = item.get("project_id")
-    deliv_id = item.get("deliverable_id")
-    item = dict(item)
-    item["project_name"] = next(
-        (p["name"] for p in projects if p["id"] == proj_id), ""
-    )
-    item["deliverable_name"] = next(
-        (d["name"] for d in deliverables if d["id"] == deliv_id), ""
-    ) if deliv_id else ""
-    return item
-
-
 def check_and_send_deadline_reminders():
-    """
-    For all active tasks/subtasks:
-    - If deadline is within [today, today + threshold_days]: send reminder
-      (once per day, tracked via last_reminder_sent column).
-    - If deadline < today and status not closed: send overdue notice
-      (once per day).
-
-    Silently ignores DB errors for last_reminder_sent (column may not exist yet).
-    """
     try:
         from core.supabase_client import supabase
 
-        cfg       = get_settings()
-        threshold = int(cfg.get("expiring_threshold_days", 7))
-        today     = datetime.date.today()
-        future    = today + datetime.timedelta(days=threshold)
+        today = datetime.date.today()
         today_str = today.isoformat()
+        cfg = get_settings()
 
-        # Load supporting data for enrichment
-        projects     = supabase.table("projects").select("id, name").execute().data
-        deliverables = supabase.table("deliverables").select("id, name").execute().data
+        if not cfg.get("notifications_enabled"):
+            return
+        if not cfg.get("smtp_password"):
+            return
 
-        # ── Tasks ────────────────────────────────────────────────────────────
-        tasks = (
-            supabase.table("tasks")
-            .select("*")
-            .eq("is_archived", False)
-            .not_.is_("deadline", "null")
+        threshold = int(cfg.get("expiring_threshold_days", 14))
+        is_monday = today.weekday() == 0
+        yesterday = (today - datetime.timedelta(days=1)).isoformat()
+
+        users = (
+            supabase.table("users")
+            .select("email, name, last_reminder_sent, avatar_color")
+            .eq("is_approved", True)
             .execute()
             .data
+            or []
         )
+        tasks = supabase.table("tasks").select("*").eq("is_archived", False).execute().data or []
+        subtasks = supabase.table("subtasks").select("*").eq("is_archived", False).execute().data or []
+        projects = supabase.table("projects").select("id, name, acronym").execute().data or []
+        deliverables = supabase.table("deliverables").select("id, name").execute().data or []
 
-        for t in tasks:
-            if t.get("status") in _CLOSED:
-                continue
-            deadline_str = t.get("deadline")
-            if not deadline_str:
-                continue
-            try:
-                deadline = datetime.date.fromisoformat(deadline_str)
-            except Exception:
-                continue
+        proj_map = {project["id"]: project for project in projects}
+        deliv_map = {deliverable["id"]: deliverable for deliverable in deliverables}
+        task_map = {task["id"]: task for task in tasks}
+        user_map = {user.get("email"): user for user in users}
+        approved_emails = {user.get("email") for user in users if user.get("email")}
 
-            last_sent = t.get("last_reminder_sent")
-            if last_sent == today_str:
-                continue  # already sent today
+        def enrich(item: dict, is_subtask: bool = False) -> dict:
+            enriched = dict(item)
+            if is_subtask:
+                parent = task_map.get(enriched.get("task_id"), {})
+                proj = proj_map.get(parent.get("project_id"), {})
+                deliv = deliv_map.get(parent.get("deliverable_id"), {})
+                enriched["project_id"] = parent.get("project_id")
+                enriched["deliverable_id"] = parent.get("deliverable_id")
+                enriched["sequence_id"] = enriched.get("sequence_id") or f"SUB-{enriched['id']}"
+            else:
+                proj = proj_map.get(enriched.get("project_id"), {})
+                deliv = deliv_map.get(enriched.get("deliverable_id"), {})
+                enriched["sequence_id"] = enriched.get("sequence_id") or f"T-{enriched['id']}"
 
-            enriched = _enrich(t, projects, deliverables)
-            sent = False
+            enriched["project_name"] = proj.get("name", "")
+            enriched["project_acronym"] = proj.get("acronym") or proj.get("name", "")
+            enriched["deliverable_name"] = deliv.get("name", "")
 
-            if deadline < today:
-                # Overdue
-                for email in _emails(t):
-                    send_task_overdue(enriched, email)
-                sent = True
-            elif today <= deadline <= future:
-                # Upcoming
-                days_left = (deadline - today).days
-                for email in _emails(t):
-                    send_deadline_reminder(enriched, email, days_left)
-                sent = True
+            owner = user_map.get(enriched.get("owner_email"), {})
+            enriched["owner_name"] = owner.get("name") or enriched.get("owner_email") or ""
+            return enriched
 
-            if sent:
-                _update_last_reminder(supabase, "tasks", t["id"], today_str)
+        all_active = [
+            enrich(task)
+            for task in tasks
+            if task.get("status") not in _CLOSED
+        ] + [
+            enrich(subtask, is_subtask=True)
+            for subtask in subtasks
+            if subtask.get("status") not in _CLOSED
+        ]
 
-        # ── Subtasks ─────────────────────────────────────────────────────────
-        subtasks = (
-            supabase.table("subtasks")
-            .select("*")
-            .eq("is_archived", False)
-            .not_.is_("deadline", "null")
-            .execute()
-            .data
-        )
+        if is_monday:
+            for user in users:
+                email = user.get("email")
+                if not email or user.get("last_reminder_sent") == today_str:
+                    continue
 
-        # Build task → project mapping for subtasks
-        task_map = {t["id"]: t for t in tasks}
+                owned_items = [item for item in all_active if item.get("owner_email") == email]
+                overdue = [item for item in owned_items if _deadline_before(item.get("deadline"), today)]
+                upcoming = [
+                    item for item in owned_items
+                    if _deadline_within(item.get("deadline"), today, threshold)
+                ]
+                overdue_keys = {_item_key(item) for item in overdue}
+                upcoming_keys = {_item_key(item) for item in upcoming}
+                active = [
+                    item for item in owned_items
+                    if _item_key(item) not in overdue_keys and _item_key(item) not in upcoming_keys
+                ]
+                supervised_blocked = [
+                    item for item in all_active
+                    if item.get("supervisor_email") == email
+                    and item.get("status") == "Blocked"
+                    and item.get("owner_email") != email
+                ]
 
-        for s in subtasks:
-            if s.get("status") in _CLOSED:
-                continue
-            deadline_str = s.get("deadline")
-            if not deadline_str:
-                continue
-            try:
-                deadline = datetime.date.fromisoformat(deadline_str)
-            except Exception:
-                continue
+                if send_weekly_briefing(
+                    to_email=email,
+                    name=user.get("name") or email,
+                    overdue=overdue,
+                    upcoming=upcoming,
+                    active=active,
+                    supervised_blocked=supervised_blocked,
+                    threshold=threshold,
+                ):
+                    _update_user_last_reminder(supabase, email, today_str)
 
-            last_sent = s.get("last_reminder_sent")
-            if last_sent == today_str:
-                continue
+        for table_name, records, is_subtask in (
+            ("tasks", tasks, False),
+            ("subtasks", subtasks, True),
+        ):
+            for record in records:
+                if record.get("status") in _CLOSED:
+                    continue
+                if record.get("deadline") != yesterday:
+                    continue
+                if record.get("last_reminder_sent") == today_str:
+                    continue
 
-            # Inherit project info from parent task
-            parent = task_map.get(s.get("task_id"), {})
-            enriched_s = dict(s)
-            enriched_s["project_id"] = parent.get("project_id")
-            enriched_s["deliverable_id"] = parent.get("deliverable_id")
-            enriched_s["sequence_id"] = s.get("sequence_id") or f"SUB-{s['id']}"
-            enriched_s = _enrich(enriched_s, projects, deliverables)
+                enriched = enrich(record, is_subtask=is_subtask)
+                recipients = [
+                    email
+                    for email in {record.get("owner_email"), record.get("supervisor_email")}
+                    if email and email in approved_emails
+                ]
+                if not recipients:
+                    continue
 
-            sent = False
-            if deadline < today:
-                for email in _emails(s):
-                    send_task_overdue(enriched_s, email)
-                sent = True
-            elif today <= deadline <= future:
-                days_left = (deadline - today).days
-                for email in _emails(s):
-                    send_deadline_reminder(enriched_s, email, days_left)
-                sent = True
+                sent_any = False
+                for email in recipients:
+                    sent_any = send_overdue_alert(enriched, email) or sent_any
 
-            if sent:
-                _update_last_reminder(supabase, "subtasks", s["id"], today_str)
+                if sent_any:
+                    _update_item_last_reminder(supabase, table_name, record["id"], today_str)
 
     except Exception as e:
         print(f"[scheduler] Errore durante il check scadenze: {e}")
 
 
-def _emails(item: dict) -> list[str]:
-    out = []
-    for field in ("owner_email", "supervisor_email"):
-        v = item.get(field)
-        if v:
-            out.append(v)
-    return out
+def _item_key(item: dict) -> tuple:
+    return (item.get("id"), item.get("task_id"), item.get("sequence_id"), item.get("name"))
 
 
-def _update_last_reminder(supabase, table: str, record_id: int, date_str: str):
+def _deadline_before(deadline_str: str | None, today: datetime.date) -> bool:
+    if not deadline_str:
+        return False
+    try:
+        return datetime.date.fromisoformat(deadline_str) < today
+    except Exception:
+        return False
+
+
+def _deadline_within(deadline_str: str | None, today: datetime.date, threshold: int) -> bool:
+    if not deadline_str:
+        return False
+    try:
+        delta = (datetime.date.fromisoformat(deadline_str) - today).days
+    except Exception:
+        return False
+    return 0 <= delta <= threshold
+
+
+def _update_user_last_reminder(supabase, email: str, date_str: str):
+    try:
+        supabase.table("users").update({"last_reminder_sent": date_str}).eq("email", email).execute()
+    except Exception as e:
+        print(f"[scheduler] Impossibile aggiornare last_reminder_sent per user {email}: {e}")
+
+
+def _update_item_last_reminder(supabase, table: str, record_id: int, date_str: str):
     try:
         supabase.table(table).update({"last_reminder_sent": date_str}).eq("id", record_id).execute()
     except Exception as e:

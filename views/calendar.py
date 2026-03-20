@@ -232,6 +232,7 @@ def show_calendar():
             ):
                 continue
             proj = proj_by_id.get(d.get("project_id"), {})
+            proj_acr = proj.get("acronym") or proj.get("name", "-")
             status = d.get("status", "Not started")
             status_color = {
                 "Completed": "#2E7D32",
@@ -252,10 +253,11 @@ def show_calendar():
                         "kind": "deliverable",
                         "tag": d_tag,
                         "project": proj.get("name", "-"),
+                        "project_acronym": proj_acr,
                         "status": status,
                         "owner_email": owner_e,
                         "supervisor_email": sup_e,
-                        "description": f"Deliverable: {d.get('name')} | Tag: {d_tag} | Project: {proj.get('name', '-')}",
+                        "description": f"Deliverable: {d.get('name')} | Tag: {d_tag} | Project: {proj_acr}",
                     },
                 }
             )
@@ -280,6 +282,7 @@ def show_calendar():
             ):
                 continue
             proj = proj_by_id.get(t.get("project_id"), {})
+            proj_acr = proj.get("acronym") or proj.get("name", "-")
             seq = t.get("sequence_id") or f"T-{t.get('id')}"
             events.append(
                 {
@@ -291,10 +294,11 @@ def show_calendar():
                     "extendedProps": {
                         "kind": "task",
                         "project": proj.get("name", "-"),
+                        "project_acronym": proj_acr,
                         "status": t.get("status", "Not started"),
                         "owner_email": t.get("owner_email"),
                         "supervisor_email": t.get("supervisor_email"),
-                        "description": f"Task: {seq} - {t.get('name')} | Project: {proj.get('name', '-')}",
+                        "description": f"Task: {seq} - {t.get('name')} | Project: {proj_acr}",
                     },
                 }
             )
@@ -319,6 +323,7 @@ def show_calendar():
             ):
                 continue
             proj = proj_by_id.get(pid, {})
+            proj_acr = proj.get("acronym") or proj.get("name", "-")
             pseq = parent.get("sequence_id") or f"T-{parent.get('id', '?')}"
             events.append(
                 {
@@ -330,10 +335,11 @@ def show_calendar():
                     "extendedProps": {
                         "kind": "subtask",
                         "project": proj.get("name", "-"),
+                        "project_acronym": proj_acr,
                         "status": s.get("status", "Not started"),
                         "owner_email": s.get("owner_email"),
                         "supervisor_email": s.get("supervisor_email"),
-                        "description": f"Subtask: {s.get('name')} | Parent task: {pseq} | Project: {proj.get('name', '-')}",
+                        "description": f"Subtask: {s.get('name')} | Parent task: {pseq} | Project: {proj_acr}",
                     },
                 }
             )
@@ -375,7 +381,7 @@ def show_calendar():
         except Exception:
             continue
         ext = ev.get("extendedProps", {}) or {}
-        proj_name = ext.get("project", "-")
+        proj_name = ext.get("project_acronym") or ext.get("project", "-")
         kind = ext.get("kind", "")
         title = ev.get("title") or ""
         owner_e = ext.get("owner_email")
@@ -468,9 +474,24 @@ def show_calendar():
 
     clicked = (selected or {}).get("eventClick")
     if clicked:
-        ext = clicked.get("event", {}).get("extendedProps", {})
-        st.info(
-            f"{clicked.get('event', {}).get('title', '')}\n"
-            f"Type: {ext.get('kind', '-')} | Status: {ext.get('status', '-')} | Project: {ext.get('project', '-')}"
+        ev = clicked.get("event", {})
+        ext = ev.get("extendedProps", {})
+        title = ev.get("title", "")
+        if title.startswith("[") and "]" in title:
+            title = title.split("]", 1)[1].strip()
+        proj_acr = ext.get("project_acronym") or ext.get("project", "-")
+        owner_e = ext.get("owner_email")
+        sup_e = ext.get("supervisor_email")
+        owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
+        sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
+
+        # Lightweight overlay on click for quick event details.
+        st.toast(
+            f"{proj_acr} | {title} | Owner: {owner_name or '—'} | Supervisor: {sup_name or '—'}",
+            icon="ℹ️",
         )
-        st.caption(ext.get("description", ""))
+        st.info(
+            f"Project: {proj_acr}\n"
+            f"Item: {title}\n"
+            f"Owner: {owner_name or '—'} | Supervisor: {sup_name or '—'}"
+        )

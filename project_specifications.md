@@ -69,10 +69,11 @@ users
 - role TEXT (admin|user)
 - is_approved BOOLEAN
 - avatar_color TEXT
+- last_reminder_sent DATE
 
 settings
 - id INTEGER/SERIAL PRIMARY KEY
-- expiring_threshold_days INTEGER (default 7)
+- expiring_threshold_days INTEGER (default 14)
 - deliverable_types JSONB/TEXT depending on migration state
 
 projects
@@ -231,12 +232,14 @@ Capabilities:
 Notifications:
 - SMTP send logic in utils/notifications.py.
 - Controlled by settings.notifications_enabled and smtp_password presence.
-- Supports assignment, upcoming deadline, overdue, and test email.
+- Supports assignment, weekly briefing, overdue alerts, test email, and admin reports.
 
 Scheduler:
 - utils/scheduler.py executed once per session after login from app.py.
-- Checks tasks/subtasks deadlines and sends reminders.
-- Uses last_reminder_sent to avoid duplicate daily notifications.
+- Sends one weekly digest every Monday to approved users.
+- Sends a one-shot overdue alert the day after a deadline if the item is still open.
+- Uses users.last_reminder_sent to avoid duplicate Monday briefings.
+- Uses tasks/subtasks.last_reminder_sent to avoid duplicate overdue alerts.
 
 ---
 

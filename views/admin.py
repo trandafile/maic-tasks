@@ -722,11 +722,12 @@ def _tab_settings():
         )
 
         st.divider()
-        st.markdown("**Deadline threshold**")
+        st.markdown("**Weekly briefing**")
         threshold = st.number_input(
-            "Send deadline reminder X days before due date",
-            value=int(cfg.get("expiring_threshold_days", 7)),
-            min_value=1, max_value=90, step=1,
+            "Weekly briefing: show tasks due within X days",
+            value=int(cfg.get("expiring_threshold_days", 14)),
+            min_value=1, max_value=30, step=1,
+            key="threshold_input",
         )
 
         save_btn = st.form_submit_button("💾 Save Configuration", type="primary")
@@ -789,6 +790,11 @@ def _tab_settings():
             st.success(msg)
         else:
             st.error(msg)
+
+    st.divider()
+    st.subheader("SQL Migrations")
+    st.caption("Run this SQL in Supabase to align the notification schema with the weekly briefing system.")
+    st.code(SETTINGS_MIGRATION_SQL, language="sql")
 
 def _tab_deliverable_tags():
     cfg = get_settings()
