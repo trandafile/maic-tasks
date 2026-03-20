@@ -801,6 +801,7 @@ def _render_detailed_report():
     """Detailed per-project report: deliverables → tasks → subtasks → activity."""
     from utils.helpers import strip_markdown
     from utils.pdf_generator import generate_detailed_report_pdf
+    settings = get_settings()
 
     try:
         projects  = supabase.table("projects").select("*").eq("is_archived", False).order("name").execute().data
@@ -982,7 +983,11 @@ def _render_detailed_report():
             d_tasks = sort_tasks_by_deadline(d_tasks)
             total_d = len(d_tasks)
             done_d  = len([t for t in d_tasks if t.get("status") == "Completed"])
-            md_lines.append(f"## {d.get('name')} ({d.get('type', '')} · deadline {fmt_date(d.get('deadline'))})")
+            d_tag = d.get("type") or "generic"
+            d_owner = users_dict_simple.get(d.get("owner_email"), d.get("owner_email") or "—")
+            md_lines.append(
+                f"## Deliverable ({d_tag}): {d.get('name')} (Deadline {fmt_date(d.get('deadline'))}, {d_owner})"
+            )
             md_lines.append(f"Progress: {done_d}/{total_d} tasks")
             md_lines.append("")
             for t in d_tasks:
@@ -991,7 +996,7 @@ def _render_detailed_report():
         no_deliv = [t for t in tasks if not t.get("deliverable_id") and t.get("status") != "Cancelled"]
         no_deliv = sort_tasks_by_deadline(no_deliv)
         if no_deliv:
-            md_lines.append("## Generic Tasks (No Deliverable)")
+            md_lines.append("## Tasks without deliverable")
             md_lines.append("")
             for t in no_deliv:
                 md_lines.extend(_md_task_block(t))
@@ -1175,6 +1180,7 @@ def _render_detailed_report():
         d_sl_fg, d_sl_bg = STATUS_COLOURS.get(d_status, ("#888", "#f0f0f0"))
         d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), user_map)
         d_deadline_txt = fmt_date(d.get("deadline"))
+        d_type_chip = deliverable_chip_html(d.get("type") or "generic", settings)
 
         st.html(
             f"""
@@ -1186,7 +1192,7 @@ def _render_detailed_report():
                   {d.get('name','')}
                 </span>
                 <span style='font-size:11px;color:#2E8B6E;'>
-                  {d.get('type','')} · deadline {d_deadline_txt}
+                                    {d_type_chip} · deadline {d_deadline_txt}
                 </span>
                 <span style='margin-left:auto;display:flex;align-items:center;gap:10px;'>
                   <span style='font-size:11px;color:#2E8B6E;font-weight:600;white-space:nowrap;'>
@@ -1241,7 +1247,7 @@ def _render_detailed_report():
             "<div style='border:2px dashed #FAC775;border-radius:8px;"
             "padding:10px 14px;margin:16px 0 8px 0;background:#FFF8F0;'>"
             "<span style='font-weight:700;color:#854F0B;font-size:0.95rem'>"
-            "GENERIC TASKS (NO DELIVERABLE)</span></div>"
+            "Tasks without deliverable</span></div>"
         )
         for t in no_deliv:
             can_edit_t = is_admin or (

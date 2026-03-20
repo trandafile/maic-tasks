@@ -5,7 +5,7 @@ from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
 from db import delete_task_cascade
 from utils.notifications import send_task_assigned
-from utils.helpers import fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles
+from utils.helpers import fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles, deliverable_chip_html
 from utils.md_editor import markdown_editor
 from db import get_settings
 
@@ -702,6 +702,7 @@ def show_projects():
                     # Deliverable header
                     h1, h_det, h_arch = st.columns([6.5, 1.2, 0.8])
                     d_deadline_txt = f" · {fmt_date(d.get('deadline'))}" if d.get("deadline") else ""
+                    d_type_chip = deliverable_chip_html(d_type or "generic", settings)
                     with h1:
                         st.html(
                             f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;"
@@ -709,7 +710,7 @@ def show_projects():
                             f"<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;'>Deliverable</span> "
                             f"<b style='color:#0F5943;'>{d_name}</b>"
                             f"<i style='color:#2E8B6E;font-size:0.85rem'>"
-                            f"  {d_type}{d_deadline_txt}{arch_d}</i>"
+                            f"  {d_type_chip}{d_deadline_txt}{arch_d}</i>"
                             f"&nbsp;&nbsp;"
                             f"<span style='float:right'>{_status_badge(d_status)}</span>"
                             f"</div>"
@@ -756,12 +757,12 @@ def show_projects():
             if unassigned:
                 st.html(
                     "<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
-                    "color:#666;text-transform:uppercase'>Generic Tasks (No Deliverable)</span>"
+                    "color:#666;text-transform:uppercase'>Tasks without deliverable</span>"
                 )
                 with st.container(border=True):
                     st.html(
                         "<p style='font-style:italic;color:#888;font-size:0.83rem;margin:0 0 6px 0'>"
-                        "General tasks — not linked to a specific deliverable</p>"
+                        "General tasks not linked to a specific deliverable</p>"
                     )
                     for t in unassigned:
                         _render_task_row(

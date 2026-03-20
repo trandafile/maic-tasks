@@ -165,11 +165,12 @@ def build_master_status_report_markdown(show_archived: bool = False) -> MasterSt
 
         for d in p_delivs:
             d_name = d.get("name", "Deliverable")
+            d_tag = (d.get("type") or "generic").strip() or "generic"
             d_dead = d.get("deadline") or "—"
             d_owner = _uname(users_by_email, d.get("owner_email"))
             d_desc = (d.get("description") or "").strip()
 
-            lines.append(f"## Deliverable: {d_name} (Deadline {d_dead}, {d_owner})")
+            lines.append(f"## Deliverable ({d_tag}): {d_name} (Deadline {d_dead}, {d_owner})")
             lines.append("")
             lines.append(d_desc if d_desc else "No deliverable description provided.")
             lines.append("")
@@ -180,7 +181,7 @@ def build_master_status_report_markdown(show_archived: bool = False) -> MasterSt
 
         orphans = _sort_tasks(orphan_tasks_by_project.get(pid, []))
         if orphans:
-            lines.append("## Orphan Tasks (No Deliverable)")
+            lines.append("## Tasks without deliverable")
             lines.append("")
             for t in orphans:
                 _append_task_block(lines, t)

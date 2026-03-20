@@ -1,6 +1,7 @@
 import streamlit as st
 from core.supabase_client import supabase
-from utils.helpers import fmt_date
+from db import get_settings
+from utils.helpers import fmt_date, deliverable_chip_html
 from utils.modals import person_pill_html
 from utils.pdf_generator import generate_deliverables_pdf
 
@@ -72,6 +73,7 @@ def _owner_sup_html(d: dict, user_map: dict) -> str:
 
 def show_deliverables():
     st.title("Deliverables Overview")
+    settings = get_settings()
 
     projects, deliverables, user_map = _fetch_deliverables_overview()
     if not projects or not deliverables:
@@ -127,7 +129,7 @@ def show_deliverables():
                 with c1:
                     st.write(d.get("name") or "—")
                 with c2:
-                    st.write(d.get("type") or "—")
+                    st.html(deliverable_chip_html(d.get("type") or "generic", settings))
                 with c3:
                     st.write(d.get("status") or "Not started")
                 with c4:
