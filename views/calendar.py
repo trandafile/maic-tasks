@@ -1,6 +1,7 @@
 import datetime
 import html
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit_calendar import calendar
 
 from core.supabase_client import supabase
@@ -486,29 +487,70 @@ def show_calendar():
         owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
         sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
 
-        js_evt = clicked.get("jsEvent") or ev.get("jsEvent") or {}
-        x_raw = js_evt.get("pageX", js_evt.get("clientX", js_evt.get("x")))
-        y_raw = js_evt.get("pageY", js_evt.get("clientY", js_evt.get("y")))
+                popup_text = (
+                        f"<div style='font-weight:700; margin-bottom:4px;'>{html.escape(proj_acr or '-')}</div>"
+                        f"<div style='margin-bottom:6px;'>{html.escape(title or '-')}</div>"
+                        f"<div style='font-size:0.9rem; color:#374151;'>Owner: {html.escape(owner_name or '—')}</div>"
+                        f"<div style='font-size:0.9rem; color:#374151;'>Supervisor: {html.escape(sup_name or '—')}</div>"
+                )
 
-        has_coords = isinstance(x_raw, (int, float)) and isinstance(y_raw, (int, float))
-        if has_coords:
-            x = max(12, int(x_raw) + 12)
-            y = max(12, int(y_raw) + 12)
-            popup_html = f"""
-<div style=\"position:fixed; left:{x}px; top:{y}px; z-index:99999; max-width:360px;
-            background:#ffffff; border:1px solid #d1d5db; border-radius:10px;
-            box-shadow:0 12px 28px rgba(0,0,0,0.18); padding:10px 12px; line-height:1.35;\">
-  <div style=\"font-weight:700; margin-bottom:4px;\">{html.escape(proj_acr or '-')}</div>
-  <div style=\"margin-bottom:6px;\">{html.escape(title or '-')}</div>
-  <div style=\"font-size:0.9rem; color:#374151;\">Owner: {html.escape(owner_name or '—')}</div>
-  <div style=\"font-size:0.9rem; color:#374151;\">Supervisor: {html.escape(sup_name or '—')}</div>
-</div>
+                # Try to anchor a popup to the clicked event element in the parent DOM.
+                anchor_script = f"""
+<script>
+(() => {{
+    const popupId = "maic-event-details-popup";
+    const popupContent = `{popup_text}`;
+    const targetText = {title!r};
+    const root = window.parent.document;
+
+    let popup = root.getElementById(popupId);
+    if (!popup) {{
+        popup = root.createElement("div");
+        popup.id = popupId;
+        popup.style.position = "fixed";
+        popup.style.zIndex = "99999";
+        popup.style.maxWidth = "360px";
+        popup.style.background = "#ffffff";
+        popup.style.border = "1px solid #d1d5db";
+        popup.style.borderRadius = "10px";
+        popup.style.boxShadow = "0 12px 28px rgba(0,0,0,0.18)";
+        popup.style.padding = "10px 12px";
+        popup.style.lineHeight = "1.35";
+        root.body.appendChild(popup);
+    }}
+
+    const events = Array.from(root.querySelectorAll(".fc-event"));
+    let anchor = null;
+    for (const ev of events) {{
+        const txt = (ev.textContent || "").trim();
+        if (targetText && txt.includes(targetText)) {{
+            anchor = ev;
+            break;
+        }}
+    }}
+    if (!anchor && events.length) anchor = events[0];
+    if (!anchor) return;
+
+    const rect = anchor.getBoundingClientRect();
+    let left = rect.right + 10;
+    let top = rect.top;
+
+    popup.innerHTML = popupContent;
+    root.body.appendChild(popup);
+
+    const vw = window.parent.innerWidth;
+    const vh = window.parent.innerHeight;
+    const pw = popup.offsetWidth || 320;
+    const ph = popup.offsetHeight || 120;
+
+    if (left + pw > vw - 12) left = Math.max(12, rect.left - pw - 10);
+    if (top + ph > vh - 12) top = Math.max(12, vh - ph - 12);
+
+    popup.style.left = `${{left}}px`;
+    popup.style.top = `${{top}}px`;
+}})();
+</script>
 """
-            st.markdown(popup_html, unsafe_allow_html=True)
-        else:
-            st.caption("Selected event details")
-            st.info(
-                f"Project: {proj_acr}\n"
-                f"Item: {title}\n"
-                f"Owner: {owner_name or '—'} | Supervisor: {sup_name or '—'}"
-            )
+                components.html(anchor_script, height=0, width=0)
+
+                st.caption("Se non vedi il pop-up ancorato all'evento, aggiorna la pagina una volta.")

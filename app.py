@@ -77,7 +77,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.auth import check_login, logout
 
-APP_BUILD_LABEL = "beta 1.16.61"
+APP_BUILD_LABEL = "beta 1.16.63"
 
 def init_session_state():
     """Inizializza tutte le chiavi necessarie nello stato della sessione"""
