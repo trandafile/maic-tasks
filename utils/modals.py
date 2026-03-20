@@ -1,8 +1,11 @@
 import streamlit as st
 import datetime
+import json
 from core.supabase_client import supabase
+from db import get_settings
 from utils.md_editor import markdown_editor
 from utils.notifications import send_task_assigned
+from utils.helpers import parse_deliverable_tag_styles
 
 
 def _fmt_date(d: str | None) -> str:
@@ -584,7 +587,20 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
     users_map = {u["email"]: u.get("name", u["email"]) for u in (users_rows or [])}
 
     STATUS_OPTS = ["Not started", "Working on", "Blocked", "Completed", "Cancelled"]
-    TYPE_OPTS   = ["paper", "layout", "prototype"]
+    cfg = get_settings()
+    raw_types = cfg.get("deliverable_types")
+    TYPE_OPTS = []
+    if isinstance(raw_types, str):
+        try:
+            parsed = json.loads(raw_types)
+            if isinstance(parsed, list):
+                TYPE_OPTS = [str(v).strip() for v in parsed if str(v).strip()]
+        except Exception:
+            TYPE_OPTS = []
+    if not TYPE_OPTS:
+        TYPE_OPTS = [s["name"] for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))]
+    if not TYPE_OPTS:
+        TYPE_OPTS = ["paper", "layout", "prototype"]
     _SC = {
         "Not started": ("#888888", "#f0f0f0"),
         "Working on":  ("#1565C0", "#E3F2FD"),

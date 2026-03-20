@@ -15,7 +15,8 @@ import datetime
 import streamlit as st
 
 from core.supabase_client import supabase
-from utils.helpers import PRIORITY_ORDER, strip_markdown
+from db import get_settings
+from utils.helpers import PRIORITY_ORDER, strip_markdown, deliverable_chip_html
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
 
 _INACTIVE = {"Completed", "Cancelled"}
@@ -327,14 +328,24 @@ def _render_project_header(project: dict):
     )
 
 
-def _render_deliverable_block(deliverable: dict, project: dict, task_nodes: list, threshold: int, user_map: dict, email: str, tab_key: str):
+def _render_deliverable_block(
+    deliverable: dict,
+    project: dict,
+    task_nodes: list,
+    threshold: int,
+    user_map: dict,
+    email: str,
+    tab_key: str,
+    settings: dict,
+):
     with st.container(border=True):
         d_deadline = deliverable.get("deadline") or "—"
+        type_chip = deliverable_chip_html(deliverable.get("type") or "generic", settings)
         st.html(
             f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;margin-bottom:6px;'>"
             f"<span style='color: green; font-weight: bold;'>DELIVERABLE</span> "
             f"<span style='font-size:13px;font-weight:700;color:#0F5943;'>{deliverable.get('name','')}</span>"
-            f"<span style='font-size:11px;color:#2E8B6E;'> · {deliverable.get('type') or 'generic'} · deadline {d_deadline}</span>"
+            f"<span style='font-size:11px;color:#2E8B6E;'> · {type_chip} · deadline {d_deadline}</span>"
             f"<span style='float:right;font-size:11px;color:#2E8B6E'>{project.get('acronym') or project.get('name','')}</span>"
             f"</div>"
         )
@@ -369,7 +380,18 @@ def _render_deliverable_block(deliverable: dict, project: dict, task_nodes: list
                 )
 
 
-def _render_scope_tab(scope_label: str, email: str, threshold: int, projects: dict, deliverables: dict, selected_tasks: list, selected_subtasks: list, task_map: dict, user_map: dict):
+def _render_scope_tab(
+    scope_label: str,
+    email: str,
+    threshold: int,
+    projects: dict,
+    deliverables: dict,
+    selected_tasks: list,
+    selected_subtasks: list,
+    task_map: dict,
+    user_map: dict,
+    settings: dict,
+):
     hierarchy = _build_hierarchy(selected_tasks, selected_subtasks, task_map)
     if not hierarchy:
         st.info("No active items for this view. ✅")
@@ -408,7 +430,16 @@ def _render_scope_tab(scope_label: str, email: str, threshold: int, projects: di
 
             for _, _, deliverable, task_nodes in deliverable_nodes:
                 st.markdown("<div class='deliverable-box'>", unsafe_allow_html=True)
-                _render_deliverable_block(deliverable, project, task_nodes, threshold, user_map, email, scope_label)
+                _render_deliverable_block(
+                    deliverable,
+                    project,
+                    task_nodes,
+                    threshold,
+                    user_map,
+                    email,
+                    scope_label,
+                    settings,
+                )
                 st.markdown("</div>", unsafe_allow_html=True)
 
             generic_nodes = list(proj_node["generic_tasks"].values())
@@ -491,6 +522,7 @@ def show_dashboard():
         f"My Tasks ({my_count})",
         f"Supervised Tasks ({supervised_count})",
     ])
+    settings = get_settings()
 
     with tab_my:
         _render_scope_tab(
@@ -503,6 +535,7 @@ def show_dashboard():
             selected_subtasks=my_subtasks,
             task_map=task_map,
             user_map=user_map,
+            settings=settings,
         )
 
     with tab_supervised:
@@ -517,4 +550,5 @@ def show_dashboard():
             selected_subtasks=supervised_subtasks,
             task_map=task_map,
             user_map=user_map,
+            settings=settings,
         )

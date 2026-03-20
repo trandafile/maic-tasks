@@ -3,6 +3,8 @@ import streamlit as st
 from streamlit_calendar import calendar
 
 from core.supabase_client import supabase
+from db import get_settings
+from utils.helpers import get_deliverable_tag_color
 
 
 _EVENT_COLOUR = {
@@ -92,7 +94,7 @@ def _fetch_calendar_data():
         )
         deliverables = (
             supabase.table("deliverables")
-            .select("id, project_id, name, deadline, status, owner_email, supervisor_email, is_archived")
+            .select("id, project_id, name, type, deadline, status, owner_email, supervisor_email, is_archived")
             .eq("is_archived", False)
             .execute()
             .data
@@ -126,6 +128,7 @@ def show_calendar():
     user_role = st.session_state.get("user_role")
     user_email = st.session_state.get("user_email")
     is_admin = user_role == "admin"
+    settings = get_settings()
 
     projects, users, deliverables, tasks, subtasks = _fetch_calendar_data()
     if not projects:
@@ -168,16 +171,41 @@ def show_calendar():
             user_name = next((u.get("name") for u in users if u.get("email") == user_email), user_email)
             st.caption(f"Person: {user_name or user_email}")
 
+    all_tags = sorted(
+        {
+            ((d.get("type") or "generic").strip() or "generic")
+            for d in deliverables
+        }
+    )
+
+    f3, f4 = st.columns([2, 2])
+    with f3:
+        event_scope = st.radio(
+            "Event scope",
+            options=["all", "deliverables_only", "tasks_only"],
+            format_func=lambda v: {
+                "all": "All events",
+                "deliverables_only": "Deliverables only",
+                "tasks_only": "Tasks & Subtasks only",
+            }[v],
+            horizontal=True,
+            key="cal_event_scope",
+        )
+    with f4:
+        sel_tags = st.multiselect(
+            "Deliverable tags",
+            options=all_tags,
+            default=[],
+            key="cal_deliverable_tags",
+            help="Leave empty to show all tags.",
+        )
+
     proj_by_id = {p.get("id"): p for p in projects}
     users_by_email = {u.get("email"): u.get("name", u.get("email")) for u in users}
     events: list[dict] = []
 
-    # Independent toggles
-    c_tasks, c_delivs = st.columns(2)
-    with c_tasks:
-        show_tasks = st.checkbox("Show Tasks & Subtasks", value=True, key="cal_show_tasks")
-    with c_delivs:
-        show_deliverables = st.checkbox("Show Deliverables", value=True, key="cal_show_deliverables")
+    show_deliverables = event_scope in ("all", "deliverables_only")
+    show_tasks = event_scope in ("all", "tasks_only")
 
     task_map = {t.get("id"): t for t in tasks}
 
@@ -187,6 +215,9 @@ def show_calendar():
             dl = d.get("deadline")
             if not dl:
                 continue
+            d_tag = (d.get("type") or "generic").strip() or "generic"
+            if sel_tags and d_tag not in sel_tags:
+                continue
             if sel_project is not None and d.get("project_id") != sel_project:
                 continue
             if not is_admin:
@@ -195,6 +226,11 @@ def show_calendar():
             elif admin_scope == "personal":
                 if user_email not in (d.get("owner_email"), d.get("supervisor_email")):
                     continue
+            if sel_user is not None and sel_user not in (
+                d.get("owner_email"),
+                d.get("supervisor_email"),
+            ):
+                continue
             proj = proj_by_id.get(d.get("project_id"), {})
             status = d.get("status", "Not started")
             status_color = {
@@ -202,23 +238,24 @@ def show_calendar():
                 "Working on": "#1565C0",
                 "Blocked": "#E65100",
                 "Cancelled": "#B71C1C",
-            }.get(status, _EVENT_COLOUR["deliverable"])
+            }.get(status, get_deliverable_tag_color(d_tag, settings))
             owner_e = d.get("owner_email")
             sup_e = d.get("supervisor_email")
             events.append(
                 {
                     "id": f"d_{d.get('id')}",
-                    "title": f"[Deliverable] {d.get('name')}",
+                    "title": f"[Deliverable] {d.get('name')} ({d_tag})",
                     "start": dl,
                     "allDay": True,
                     "color": status_color,
                     "extendedProps": {
                         "kind": "deliverable",
+                        "tag": d_tag,
                         "project": proj.get("name", "-"),
                         "status": status,
                         "owner_email": owner_e,
                         "supervisor_email": sup_e,
-                        "description": f"Deliverable: {d.get('name')} | Project: {proj.get('name', '-')}",
+                        "description": f"Deliverable: {d.get('name')} | Tag: {d_tag} | Project: {proj.get('name', '-')}",
                     },
                 }
             )

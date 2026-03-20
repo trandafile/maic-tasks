@@ -1,10 +1,11 @@
 import streamlit as st
 import datetime as _dt
+import json
 from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
 from db import delete_task_cascade
 from utils.notifications import send_task_assigned
-from utils.helpers import fmt_date, sort_tasks_by_deadline
+from utils.helpers import fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles
 from utils.md_editor import markdown_editor
 from db import get_settings
 
@@ -99,9 +100,26 @@ def fetch_hierarchy(show_archived=False, user_email=None, is_admin=False):
 
 @st.dialog("Add New Deliverable")
 def add_deliverable_modal(project_id, users):
+    cfg = get_settings()
+    raw_types = cfg.get("deliverable_types")
+    type_options = []
+    if isinstance(raw_types, str):
+        try:
+            parsed = json.loads(raw_types)
+            if isinstance(parsed, list):
+                type_options = [str(v).strip() for v in parsed if str(v).strip()]
+        except Exception:
+            type_options = []
+    if not type_options:
+        type_options = [
+            s["name"] for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
+        ]
+    if not type_options:
+        type_options = ["paper", "layout", "prototype"]
+
     with st.form("new_deliv_form"):
         name     = st.text_input("Deliverable Name*")
-        type_val = st.selectbox("Type", ["paper", "layout", "prototype"])
+        type_val = st.selectbox("Type", type_options)
         deadline = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
         user_opts = {f"{u['name']} ({u['email']})": u['email'] for u in users}
         me = st.session_state.get('user_email')

@@ -6,6 +6,8 @@ Tabs: Users | Projects | Archive | Settings & Notifications
 
 import streamlit as st
 import datetime
+import json
+import pandas as pd
 from core.supabase_client import supabase
 from db import (
     get_archived_projects, get_archived_deliverables,
@@ -15,6 +17,7 @@ from db import (
     PROJECTS_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
+from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -687,13 +690,95 @@ def _tab_archive():
 # ─── TAB 4: Settings & Notifications ─────────────────────────────────────────
 
 def _tab_settings():
+    cfg = get_settings()
+
+    st.subheader("Deliverable Tags")
+    st.caption(
+        "Manage deliverable tag names and assign one color from the fixed palette. "
+        "These tags are used in Active Tasks, Reports and Calendar."
+    )
+
+    palette_labels = {
+        f"Type 1 - Dark Teal ({DELIVERABLE_TAG_PALETTE['Dark Teal']})": DELIVERABLE_TAG_PALETTE["Dark Teal"],
+        f"Type 2 - Navy Blue ({DELIVERABLE_TAG_PALETTE['Navy Blue']})": DELIVERABLE_TAG_PALETTE["Navy Blue"],
+        f"Type 3 - Deep Eggplant ({DELIVERABLE_TAG_PALETTE['Deep Eggplant']})": DELIVERABLE_TAG_PALETTE["Deep Eggplant"],
+        f"Type 4 - Charcoal Gray ({DELIVERABLE_TAG_PALETTE['Charcoal Gray']})": DELIVERABLE_TAG_PALETTE["Charcoal Gray"],
+        f"Type 5 - Dark Burgundy ({DELIVERABLE_TAG_PALETTE['Dark Burgundy']})": DELIVERABLE_TAG_PALETTE["Dark Burgundy"],
+    }
+    color_to_label = {v.upper(): k for k, v in palette_labels.items()}
+
+    raw_styles = parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
+    table_rows = []
+    for style in raw_styles:
+        color = (style.get("color") or "#334155").upper()
+        table_rows.append(
+            {
+                "Tag": style.get("name", ""),
+                "Palette": color_to_label.get(color, list(palette_labels.keys())[0]),
+            }
+        )
+
+    edited_df = st.data_editor(
+        pd.DataFrame(table_rows, columns=["Tag", "Palette"]),
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="admin_deliverable_tag_editor",
+        column_config={
+            "Tag": st.column_config.TextColumn("Tag", required=True),
+            "Palette": st.column_config.SelectboxColumn(
+                "Palette",
+                required=True,
+                options=list(palette_labels.keys()),
+            ),
+        },
+    )
+
+    if st.button("💾 Save Deliverable Tags", type="primary", use_container_width=True):
+        new_styles = []
+        seen = set()
+        for row in edited_df.to_dict("records"):
+            tag_name = str(row.get("Tag", "")).strip()
+            if not tag_name:
+                continue
+            key = tag_name.lower()
+            if key in seen:
+                st.error(f"Duplicate tag: {tag_name}")
+                return
+            seen.add(key)
+            color_label = row.get("Palette")
+            color_value = palette_labels.get(color_label, DELIVERABLE_TAG_PALETTE["Charcoal Gray"])
+            new_styles.append({"name": tag_name, "color": color_value})
+
+        if not new_styles:
+            st.error("Add at least one deliverable tag.")
+            return
+
+        updates = {
+            "deliverable_types": json.dumps([s["name"] for s in new_styles]),
+            "deliverable_tag_styles": json.dumps(new_styles),
+        }
+        ok, err = save_settings(updates)
+        if ok:
+            st.success("Deliverable tag settings saved.")
+            if err:
+                st.warning(err)
+        else:
+            st.error(f"Save error: {err}")
+            with st.expander("🔧 Required SQL Migration", expanded=True):
+                st.caption(
+                    "Settings columns are missing in Supabase. "
+                    "Run this SQL in Supabase → SQL Editor:"
+                )
+                st.code(SETTINGS_MIGRATION_SQL, language="sql")
+
+    st.divider()
+
     st.subheader("SMTP Configuration")
     st.info(
         "⚠️ Store this configuration securely. "
         "The password is saved in the database."
     )
-
-    cfg = get_settings()
 
     with st.form("smtp_form"):
         s1, s2 = st.columns(2)

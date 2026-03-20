@@ -23,6 +23,9 @@ ALTER TABLE subtasks
 """
 
 from core.supabase_client import supabase
+import json
+
+from utils.helpers import DEFAULT_DELIVERABLE_TAG_STYLES
 
 # ── Projects ─────────────────────────────────────────────────────────────────
 
@@ -89,6 +92,8 @@ def get_users(approved_only: bool = True) -> list:
 
 _SETTINGS_DEFAULTS = {
     "expiring_threshold_days": 7,
+    "deliverable_types": json.dumps([s["name"] for s in DEFAULT_DELIVERABLE_TAG_STYLES]),
+    "deliverable_tag_styles": json.dumps(DEFAULT_DELIVERABLE_TAG_STYLES),
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,
     "smtp_user": "maiclab@unical.it",
@@ -101,6 +106,8 @@ _SETTINGS_DEFAULTS = {
 SETTINGS_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → Settings tab
 ALTER TABLE settings
+    ADD COLUMN IF NOT EXISTS deliverable_types      TEXT    DEFAULT '["paper", "layout", "prototype"]',
+    ADD COLUMN IF NOT EXISTS deliverable_tag_styles JSONB   DEFAULT '[{"name":"paper","color":"#0F766E"},{"name":"layout","color":"#1E3A8A"},{"name":"prototype","color":"#4A044E"},{"name":"generic","color":"#334155"},{"name":"other","color":"#7F1D1D"}]'::jsonb,
   ADD COLUMN IF NOT EXISTS smtp_host             TEXT    DEFAULT 'smtp.gmail.com',
   ADD COLUMN IF NOT EXISTS smtp_port             INTEGER DEFAULT 587,
   ADD COLUMN IF NOT EXISTS smtp_user             TEXT    DEFAULT 'maiclab@unical.it',

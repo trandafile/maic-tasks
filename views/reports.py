@@ -1,9 +1,10 @@
 import streamlit as st
 import datetime
 from core.supabase_client import supabase
+from db import get_settings
 from utils.pdf_generator import generate_report_pdf
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
-from utils.helpers import fmt_date, sort_tasks_by_deadline
+from utils.helpers import fmt_date, sort_tasks_by_deadline, deliverable_chip_html
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
 
@@ -244,6 +245,7 @@ def _render_main_report():
     is_admin   = user_role == "admin"
 
     projects, deliverables, tasks, subtasks, users = _fetch()
+    settings = get_settings()
     if not projects:
         st.info("No projects available.")
         return
@@ -385,6 +387,7 @@ def _render_main_report():
                 # Wrap deliverable header, progress and tasks in a single bordered container
                 d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), users_meta)
                 d_deadline_txt = fmt_date(d.get("deadline"))
+                d_type_chip = deliverable_chip_html(d.get("type") or "generic", settings)
 
                 st.markdown("<div class='deliverable-box'>", unsafe_allow_html=True)
                 with st.container(border=True):
@@ -399,7 +402,7 @@ def _render_main_report():
                             f"{d.get('name','')}"
                             f"</span>"
                             f"<span style='font-size:11px;color:#2E8B6E;'>"
-                            f"{d.get('type','')} · deadline {d_deadline_txt}"
+                            f"{d_type_chip} · deadline {d_deadline_txt}"
                             f"</span>"
                             f"<span style='margin-left:auto;display:flex;align-items:center;gap:10px;'>"
                             f"<span style='font-size:11px;color:#2E8B6E;font-weight:600;white-space:nowrap;'>"
