@@ -1,7 +1,6 @@
 import datetime
 import html
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit_calendar import calendar
 
 from core.supabase_client import supabase
@@ -487,68 +486,35 @@ def show_calendar():
         owner_name = users_by_email.get(owner_e, owner_e) if owner_e else "—"
         sup_name = users_by_email.get(sup_e, sup_e) if sup_e else "—"
 
-        popup_text = (
-            f"<div style='font-weight:700; margin-bottom:4px;'>{html.escape(proj_acr or '-')}</div>"
-            f"<div style='margin-bottom:6px;'>{html.escape(title or '-')}</div>"
-            f"<div style='font-size:0.9rem; color:#374151;'>Owner: {html.escape(owner_name or '—')}</div>"
-            f"<div style='font-size:0.9rem; color:#374151;'>Supervisor: {html.escape(sup_name or '—')}</div>"
-        )
-
-        # Try to anchor a popup to the clicked event element in the parent DOM.
-        anchor_script = f"""
-<script>
-(() => {{
-    const popupId = "maic-event-details-popup";
-    const popupContent = `{popup_text}`;
-    const targetText = {title!r};
-    const root = window.parent.document;
-
-    let popup = root.getElementById(popupId);
-    if (!popup) {{
-        popup = root.createElement("div");
-        popup.id = popupId;
-        popup.style.position = "fixed";
-        popup.style.zIndex = "99999";
-        popup.style.maxWidth = "360px";
-        popup.style.background = "#ffffff";
-        popup.style.border = "1px solid #d1d5db";
-        popup.style.borderRadius = "10px";
-        popup.style.boxShadow = "0 12px 28px rgba(0,0,0,0.18)";
-        popup.style.padding = "10px 12px";
-        popup.style.lineHeight = "1.35";
-        root.body.appendChild(popup);
-    }}
-
-    const events = Array.from(root.querySelectorAll(".fc-event"));
-    let anchor = null;
-    for (const evEl of events) {{
-        const txt = (evEl.textContent || "").trim();
-        if (targetText && txt.includes(targetText)) {{
-            anchor = evEl;
-            break;
-        }}
-    }}
-    if (!anchor && events.length) anchor = events[0];
-    if (!anchor) return;
-
-    const rect = anchor.getBoundingClientRect();
-    let left = rect.right + 10;
-    let top = rect.top;
-
-    popup.innerHTML = popupContent;
-    root.body.appendChild(popup);
-
-    const vw = window.parent.innerWidth;
-    const vh = window.parent.innerHeight;
-    const pw = popup.offsetWidth || 320;
-    const ph = popup.offsetHeight || 120;
-
-    if (left + pw > vw - 12) left = Math.max(12, rect.left - pw - 10);
-    if (top + ph > vh - 12) top = Math.max(12, vh - ph - 12);
-
-    popup.style.left = `${{left}}px`;
-    popup.style.top = `${{top}}px`;
-}})();
-</script>
+                # Stable modal-like overlay (works consistently on Streamlit Cloud).
+                overlay_html = f"""
+<div style="
+        position: fixed;
+        inset: 0;
+        background: rgba(17, 24, 39, 0.32);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+">
+    <div style="
+            width: min(560px, 92vw);
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 12px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+            padding: 14px 16px;
+            line-height: 1.4;
+            pointer-events: auto;
+    ">
+        <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 8px;">Event details</div>
+        <div style="font-weight: 700; margin-bottom: 4px;">{html.escape(proj_acr or '-')}</div>
+        <div style="margin-bottom: 8px;">{html.escape(title or '-')}</div>
+        <div style="font-size: 0.92rem; color: #374151;">Owner: {html.escape(owner_name or '—')}</div>
+        <div style="font-size: 0.92rem; color: #374151;">Supervisor: {html.escape(sup_name or '—')}</div>
+        <div style="margin-top: 10px; font-size: 0.8rem; color: #6b7280;">Click another event to update this overlay.</div>
+    </div>
+</div>
 """
-        components.html(anchor_script, height=0, width=0)
+                st.markdown(overlay_html, unsafe_allow_html=True)
