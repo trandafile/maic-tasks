@@ -296,36 +296,122 @@ def _render_main_report():
             sel_status  = st.selectbox("Task Status", status_opts, key="rp_status")
             filt_status = None if sel_status == "All" else sel_status
 
-    def task_matches(t):
-        if t.get("is_archived"):
-            return False
-        if rbac_email:
-            if t.get("owner_email") != rbac_email and t.get("supervisor_email") != rbac_email:
-                return False
-        if filt_proj and t.get("project_id") != filt_proj:
-            return False
-        if filt_user:
-            if t.get("owner_email") != filt_user and t.get("supervisor_email") != filt_user:
-                return False
+    tasks_by_id = {t.get("id"): t for t in tasks if t.get("id") is not None}
+
+    def _is_assignee_match(item: dict, email: str | None) -> bool:
+        if not email:
+            return True
+        return item.get("owner_email") == email or item.get("supervisor_email") == email
+
+    def _status_matches(item_status: str | None) -> bool:
+        if not filt_status:
+            return True
+        status_val = item_status or "Not started"
         if filt_status == "Active":
-            if t.get("status") in ("Completed", "Cancelled"):
-                return False
-        elif filt_status == "Completed":
-            if t.get("status") != "Completed":
-                return False
-        elif filt_status == "Blocked":
-            if t.get("status") != "Blocked":
-                return False
+            return status_val not in ("Completed", "Cancelled")
+        if filt_status == "Completed":
+            return status_val == "Completed"
+        if filt_status == "Blocked":
+            return status_val == "Blocked"
         return True
 
-    visible_tasks     = [t for t in tasks if task_matches(t)]
-    visible_deliv_ids = {t["deliverable_id"] for t in visible_tasks if t.get("deliverable_id")}
-    visible_proj_ids  = {t["project_id"]     for t in visible_tasks if t.get("project_id")}
+    def _base_task_visible(t: dict) -> bool:
+        if t.get("is_archived"):
+            return False
+        if filt_proj and t.get("project_id") != filt_proj:
+            return False
+        if not _is_assignee_match(t, rbac_email):
+            return False
+        if not _is_assignee_match(t, filt_user):
+            return False
+        return True
+
+    def _base_deliverable_visible(d: dict) -> bool:
+        if d.get("is_archived"):
+            return False
+        if filt_proj and d.get("project_id") != filt_proj:
+            return False
+        if not _is_assignee_match(d, rbac_email):
+            return False
+        if not _is_assignee_match(d, filt_user):
+            return False
+        return True
+
+    def _base_subtask_visible(s: dict) -> bool:
+        if s.get("is_archived"):
+            return False
+        parent = tasks_by_id.get(s.get("task_id"))
+        if not parent or not _base_task_visible(parent):
+            return False
+        if not _is_assignee_match(s, rbac_email):
+            return False
+        if not _is_assignee_match(s, filt_user):
+            return False
+        return True
+
+    base_task_ids = {t.get("id") for t in tasks if t.get("id") is not None and _base_task_visible(t)}
+    base_deliv_ids = {d.get("id") for d in deliverables if d.get("id") is not None and _base_deliverable_visible(d)}
+    base_subtask_ids = {s.get("id") for s in subtasks if s.get("id") is not None and _base_subtask_visible(s)}
+
+    if filt_status:
+        status_task_ids = {
+            t.get("id")
+            for t in tasks
+            if t.get("id") in base_task_ids and _status_matches(t.get("status"))
+        }
+        status_subtask_ids = {
+            s.get("id")
+            for s in subtasks
+            if s.get("id") in base_subtask_ids and _status_matches(s.get("status"))
+        }
+        status_deliv_ids = {
+            d.get("id")
+            for d in deliverables
+            if d.get("id") in base_deliv_ids and _status_matches(d.get("status"))
+        }
+
+        parent_task_ids_from_subtasks = {
+            s.get("task_id") for s in subtasks if s.get("id") in status_subtask_ids and s.get("task_id") in base_task_ids
+        }
+        visible_task_ids = status_task_ids.union(parent_task_ids_from_subtasks)
+        visible_subtask_ids = {
+            s.get("id")
+            for s in subtasks
+            if s.get("id") in status_subtask_ids and s.get("task_id") in visible_task_ids
+        }
+        deliverable_ids_from_tasks = {
+            t.get("deliverable_id")
+            for t in tasks
+            if t.get("id") in visible_task_ids and t.get("deliverable_id")
+        }
+        visible_deliv_ids = status_deliv_ids.union(deliverable_ids_from_tasks)
+    else:
+        visible_task_ids = set(base_task_ids)
+        visible_subtask_ids = set(base_subtask_ids)
+        visible_deliv_ids = set(base_deliv_ids)
+
+    if filt_user:
+        # Requested behavior: with person filter, show only projects where that person has tasks.
+        visible_proj_ids = {
+            t.get("project_id")
+            for t in tasks
+            if t.get("id") in visible_task_ids and t.get("project_id") is not None
+        }
+    else:
+        visible_proj_ids = {
+            d.get("project_id")
+            for d in deliverables
+            if d.get("id") in visible_deliv_ids and d.get("project_id") is not None
+        }.union({
+            t.get("project_id")
+            for t in tasks
+            if t.get("id") in visible_task_ids and t.get("project_id") is not None
+        })
 
     proj_list = [
         p for p in projects
         if (filt_proj is None or p["id"] == filt_proj)
-        and (rbac_email is None or p["id"] in visible_proj_ids)
+        and p.get("id") in visible_proj_ids
     ]
 
     if st.button("📄 Export PDF", type="primary", key="rp_pdf"):
@@ -342,8 +428,8 @@ def _render_main_report():
 
     st.divider()
 
-    if rbac_email and not proj_list:
-        st.info("No tasks assigned to you in available projects.")
+    if not proj_list:
+        st.info("No elements match the selected filters.")
         return
 
     st.markdown("<div class='project-report-compact'>", unsafe_allow_html=True)
@@ -368,7 +454,7 @@ def _render_main_report():
         proj_deliverables = [
             d for d in deliverables
             if d.get("project_id") == pid
-            and (rbac_email is None or d["id"] in visible_deliv_ids)
+            and d.get("id") in visible_deliv_ids
         ]
 
         if proj_deliverables:
@@ -376,7 +462,7 @@ def _render_main_report():
                     "color:#666;display:block;margin-top:-4px;margin-bottom:2px;'>DELIVERABLES</span>")
             for d in proj_deliverables:
                 did      = d["id"]
-                d_tasks  = [t for t in tasks if t.get("deliverable_id") == did and task_matches(t)]
+                d_tasks  = [t for t in tasks if t.get("deliverable_id") == did and t.get("id") in visible_task_ids]
                 d_tasks  = sort_tasks_by_deadline(d_tasks)
                 total    = len(d_tasks)
                 done     = len([t for t in d_tasks if t.get("status") == "Completed"])
@@ -439,7 +525,7 @@ def _render_main_report():
                             t_subtasks = [
                                 s for s in subtasks
                                 if s.get("task_id") == t.get("id")
-                                and not s.get("is_archived", False)
+                                and s.get("id") in visible_subtask_ids
                             ]
                             for s in t_subtasks:
                                 can_edit_s = is_admin or (
@@ -458,7 +544,9 @@ def _render_main_report():
 
         unassigned = [
             t for t in tasks
-            if t.get("project_id") == pid and not t.get("deliverable_id") and task_matches(t)
+            if t.get("project_id") == pid
+            and not t.get("deliverable_id")
+            and t.get("id") in visible_task_ids
         ]
         unassigned = sort_tasks_by_deadline(unassigned)
         if unassigned:
@@ -478,7 +566,7 @@ def _render_main_report():
                     t_subtasks = [
                         s for s in subtasks
                         if s.get("task_id") == t.get("id")
-                        and not s.get("is_archived", False)
+                        and s.get("id") in visible_subtask_ids
                     ]
                     for s in t_subtasks:
                         can_edit_s = is_admin or (

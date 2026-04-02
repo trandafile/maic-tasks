@@ -185,40 +185,75 @@ def generate_report_pdf(
 
     elements = []
     
+    def _assignee_match(item: dict, email: str | None) -> bool:
+        if not email:
+            return True
+        return item.get("owner_email") == email or item.get("supervisor_email") == email
+
+    def _status_match(status_value: str | None) -> bool:
+        if not filter_status:
+            return True
+        status = status_value or "Not started"
+        if filter_status == "Active":
+            return status not in ("Completed", "Cancelled")
+        if filter_status == "Completed":
+            return status == "Completed"
+        if filter_status == "Blocked":
+            return status == "Blocked"
+        return True
+
     # Helper to filter tasks (includes RBAC)
     def task_matches(t):
         if t.get("is_archived"):
             return False
-        # RBAC filter: user sees only tasks where they are owner or supervisor
-        if rbac_email:
-            if t.get("owner_email") != rbac_email and t.get("supervisor_email") != rbac_email:
-                return False
         if filter_proj and t.get("project_id") != filter_proj:
             return False
-        if filter_user:
-            if t.get("owner_email") != filter_user and t.get("supervisor_email") != filter_user:
-                return False
-        if filter_status == "Attivi":
-            if t.get("status") in ("Completed", "Cancelled"):
-                return False
-        elif filter_status == "Completati":
-            if t.get("status") != "Completed":
-                return False
-        elif filter_status == "Blocked":
-            if t.get("status") != "Blocked":
-                return False
+        if not _assignee_match(t, rbac_email):
+            return False
+        if not _assignee_match(t, filter_user):
+            return False
+        if not _status_match(t.get("status")):
+            return False
         return True
 
-    # RBAC-aware project list: only projects that have visible tasks
-    if rbac_email:
-        visible_proj_ids = {t["project_id"] for t in tasks if task_matches(t)}
-        proj_list = [
-            p for p in projects
-            if (filter_proj is None or p["id"] == filter_proj)
-            and p["id"] in visible_proj_ids
-        ]
+    visible_task_ids = {t.get("id") for t in tasks if t.get("id") is not None and task_matches(t)}
+
+    visible_deliv_ids = {
+        d.get("id")
+        for d in deliverables
+        if d.get("id") is not None
+        and not d.get("is_archived")
+        and (not filter_proj or d.get("project_id") == filter_proj)
+        and _assignee_match(d, rbac_email)
+        and _assignee_match(d, filter_user)
+        and (_status_match(d.get("status")) or any(
+            t.get("deliverable_id") == d.get("id") and t.get("id") in visible_task_ids
+            for t in tasks
+        ))
+    }
+
+    if filter_user:
+        visible_proj_ids = {
+            t.get("project_id")
+            for t in tasks
+            if t.get("id") in visible_task_ids and t.get("project_id") is not None
+        }
     else:
-        proj_list = [p for p in projects if filter_proj is None or p["id"] == filter_proj]
+        visible_proj_ids = {
+            t.get("project_id")
+            for t in tasks
+            if t.get("id") in visible_task_ids and t.get("project_id") is not None
+        }.union({
+            d.get("project_id")
+            for d in deliverables
+            if d.get("id") in visible_deliv_ids and d.get("project_id") is not None
+        })
+
+    proj_list = [
+        p for p in projects
+        if (filter_proj is None or p["id"] == filter_proj)
+        and p.get("id") in visible_proj_ids
+    ]
 
     TABLE_HEADER = ["ID", "Nome Task", "Stato", "Priorità", "Owner", "Scadenza"]
     # Usable width ≈ A4 – margins = 170mm
@@ -243,10 +278,7 @@ def generate_report_pdf(
         proj_deliverables = [
             d for d in deliverables
             if d.get("project_id") == pid
-            and (rbac_email is None or any(
-                t.get("deliverable_id") == d["id"] and task_matches(t)
-                for t in tasks
-            ))
+            and d.get("id") in visible_deliv_ids
         ]
 
         if proj_deliverables:
@@ -254,7 +286,7 @@ def generate_report_pdf(
 
             for d in proj_deliverables:
                 did     = d["id"]
-                d_tasks = [t for t in tasks if t.get("deliverable_id") == did and task_matches(t)]
+                d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("id") in visible_task_ids]
                 total   = len(d_tasks)
                 done    = len([t for t in d_tasks if t.get("status") == "Completed"])
                 d_status = d.get("status", "Not started")
@@ -311,7 +343,7 @@ def generate_report_pdf(
         # ── Unassigned tasks ───────────────────────────────────────────────────
         unassigned = [
             t for t in tasks
-            if t.get("project_id") == pid and not t.get("deliverable_id") and task_matches(t)
+            if t.get("project_id") == pid and not t.get("deliverable_id") and t.get("id") in visible_task_ids
         ]
 
         if unassigned:

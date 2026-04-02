@@ -122,8 +122,6 @@ def build_master_status_report_markdown(show_archived: bool = False) -> MasterSt
         if t_notes:
             for ln in t_notes.splitlines():
                 lines.append(f"> {ln}")
-        else:
-            lines.append("> No task notes provided.")
         lines.append("> ")
 
         t_subs = _sort_subtasks(subtasks_by_task.get(t.get("id") or 0, []))
@@ -154,7 +152,11 @@ def build_master_status_report_markdown(show_archived: bool = False) -> MasterSt
         lines: list[str] = []
         lines.append(f"# {p_name}")
         lines.append("")
-        lines.append(f"*{p_desc}*" if p_desc else "*No description provided.*")
+        if p_desc:
+            lines.append(f"*{p_desc}*")
+            lines.append("")
+        else:
+            lines.append("")
         lines.append("")
 
         p_delivs = deliverables_by_project.get(pid, [])
@@ -172,8 +174,9 @@ def build_master_status_report_markdown(show_archived: bool = False) -> MasterSt
 
             lines.append(f"## Deliverable ({d_tag}): {d_name} (Deadline {d_dead}, {d_owner})")
             lines.append("")
-            lines.append(d_desc if d_desc else "No deliverable description provided.")
-            lines.append("")
+            if d_desc:
+                lines.append(d_desc)
+                lines.append("")
 
             d_tasks = _sort_tasks(tasks_by_deliverable.get(d.get("id") or 0, []))
             for t in d_tasks:
