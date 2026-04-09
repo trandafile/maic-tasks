@@ -609,15 +609,33 @@ def _tab_archive():
     # Confirm archive all completed tasks
     if st.session_state.get("_confirm_bulk_arch_completed_tasks"):
         st.warning(
-            "Archive **all tasks with status 'Completed'** (they will move to the Archived Tasks section). "
+            "Archive **all tasks with status 'Completed'** and related completed subtasks "
+            "(they will move to the Archived sections). "
             "This does not delete data; it only sets is_archived = true."
         )
         ac1, ac2 = st.columns(2)
         with ac1:
             if st.button("Yes, archive completed tasks", key="yes_bulk_arch_completed_tasks", type="primary", use_container_width=True):
                 try:
-                    supabase.table("tasks").update({"is_archived": True}).eq("status", "Completed").eq("is_archived", False).execute()
-                    st.success("All completed tasks have been archived.")
+                    completed_tasks = (
+                        supabase.table("tasks")
+                        .select("id")
+                        .eq("status", "Completed")
+                        .eq("is_archived", False)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    completed_task_ids = [t["id"] for t in completed_tasks if t.get("id") is not None]
+
+                    if completed_task_ids:
+                        supabase.table("tasks").update({"is_archived": True}).in_("id", completed_task_ids).execute()
+                        supabase.table("subtasks").update({"is_archived": True}).in_("task_id", completed_task_ids).eq("is_archived", False).execute()
+
+                    # Also archive standalone completed subtasks that may belong to still-active tasks.
+                    supabase.table("subtasks").update({"is_archived": True}).eq("status", "Completed").eq("is_archived", False).execute()
+
+                    st.success("Completed tasks and subtasks have been archived.")
                 except Exception as e:
                     st.error(f"Error during bulk archive: {e}")
                 finally:
