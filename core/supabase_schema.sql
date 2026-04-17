@@ -39,8 +39,8 @@ CREATE TABLE IF NOT EXISTS deliverables (
     status TEXT,
     deadline DATE,
     description TEXT,
-    owner_email TEXT REFERENCES users(email),
-    supervisor_email TEXT REFERENCES users(email),
+    owner_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL,
+    supervisor_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL,
     is_archived BOOLEAN DEFAULT FALSE
 );
 
@@ -51,8 +51,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
     deliverable_id INTEGER REFERENCES deliverables(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
-    owner_email TEXT REFERENCES users(email),
-    supervisor_email TEXT REFERENCES users(email),
+    owner_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL,
+    supervisor_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL,
     status TEXT,
     priority TEXT,
     estimate_hours REAL,
@@ -69,8 +69,8 @@ CREATE TABLE IF NOT EXISTS subtasks (
     id SERIAL PRIMARY KEY,
     task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    owner_email TEXT REFERENCES users(email),
-    supervisor_email TEXT REFERENCES users(email),
+    owner_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL,
+    supervisor_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL,
     status TEXT,
     deadline DATE,
     notes TEXT,
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 CREATE TABLE IF NOT EXISTS comments (
     id SERIAL PRIMARY KEY,
     task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
-    author_email TEXT REFERENCES users(email),
+    author_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL,
     body TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     is_system_event BOOLEAN DEFAULT FALSE

@@ -479,6 +479,7 @@ def _render_scope_tab(
 
 def show_dashboard():
     st.title("Dashboard")
+    st.markdown("**Most urgent tasks to work on**")
 
     st.markdown(
         """

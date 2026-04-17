@@ -142,6 +142,122 @@ def _render_people_pills(owner_email: str | None, sup_email: str | None, users_m
     return pills
 
 
+def _build_main_report_markdown(
+    proj_list: list,
+    deliverables: list,
+    tasks: list,
+    subtasks: list,
+    users_dict: dict,
+    visible_deliv_ids: set,
+    visible_task_ids: set,
+    visible_subtask_ids: set,
+) -> str:
+    """Build Markdown export for the Project Report tab with active filters applied."""
+    lines = [
+        "# Project Report",
+        f"Generated: {datetime.date.today().strftime('%Y/%m/%d')}",
+        "",
+    ]
+
+    subtasks_by_task: dict[int, list] = {}
+    for s in subtasks:
+        sid = s.get("id")
+        if sid not in visible_subtask_ids:
+            continue
+        subtasks_by_task.setdefault(s.get("task_id"), []).append(s)
+
+    def _task_lines(t: dict) -> list[str]:
+        seq = t.get("sequence_id") or f"T-{t.get('id')}"
+        status = t.get("status", "Not started")
+        priority = (t.get("priority") or "none").capitalize()
+        owner_name = users_dict.get(t.get("owner_email"), t.get("owner_email") or "-")
+        sup_name = users_dict.get(t.get("supervisor_email"), t.get("supervisor_email") or "")
+        deadline = fmt_date(t.get("deadline"))
+
+        block = [
+            f"#### {seq} - {t.get('name', '')}",
+            f"Status: {status} | Priority: {priority} | Deadline: {deadline}",
+            f"Owner: {owner_name}" + (f" | Supervisor: {sup_name}" if sup_name else ""),
+        ]
+
+        if t.get("notes"):
+            block.extend(["", t.get("notes")])
+
+        t_subs = sorted(
+            subtasks_by_task.get(t.get("id"), []),
+            key=lambda s: (s.get("deadline") or "9999-12-31", s.get("name") or ""),
+        )
+        if t_subs:
+            block.append("")
+            block.append("Subtasks:")
+            for s in t_subs:
+                s_owner = users_dict.get(s.get("owner_email"), s.get("owner_email") or "-")
+                s_sup = users_dict.get(s.get("supervisor_email"), s.get("supervisor_email") or "")
+                s_deadline = fmt_date(s.get("deadline"))
+                block.append(
+                    f"- {s.get('name', '')} ({s.get('status', 'Not started')}) - {s_deadline}"
+                )
+                block.append(
+                    f"  Owner: {s_owner}" + (f" | Supervisor: {s_sup}" if s_sup else "")
+                )
+
+        block.append("")
+        return block
+
+    for proj in proj_list:
+        pname = proj.get("name") or "Unnamed project"
+        acronym = proj.get("acronym") or ""
+        title = f"{pname} ({acronym})" if acronym else pname
+        lines.append(f"## {title}")
+
+        if proj.get("funding_agency"):
+            lines.append(f"- Funding: {proj.get('funding_agency')}")
+        if proj.get("start_date") or proj.get("end_date"):
+            lines.append(f"- Period: {fmt_date(proj.get('start_date'))} -> {fmt_date(proj.get('end_date'))}")
+        lines.append("")
+
+        pid = proj.get("id")
+        proj_deliverables = [
+            d for d in deliverables
+            if d.get("project_id") == pid and d.get("id") in visible_deliv_ids
+        ]
+        proj_deliverables = sorted(proj_deliverables, key=lambda d: d.get("deadline") or "9999-12-31")
+
+        for d in proj_deliverables:
+            d_name = d.get("name") or "Unnamed deliverable"
+            d_type = d.get("type") or "generic"
+            d_deadline = fmt_date(d.get("deadline"))
+            lines.append(f"### Deliverable ({d_type}): {d_name}")
+            lines.append(f"Deadline: {d_deadline}")
+            lines.append("")
+
+            d_tasks = [
+                t for t in tasks
+                if t.get("deliverable_id") == d.get("id") and t.get("id") in visible_task_ids
+            ]
+            d_tasks = sort_tasks_by_deadline(d_tasks)
+
+            if not d_tasks:
+                lines.append("No tasks matching filters.")
+                lines.append("")
+            else:
+                for t in d_tasks:
+                    lines.extend(_task_lines(t))
+
+        generic_tasks = [
+            t for t in tasks
+            if t.get("project_id") == pid and not t.get("deliverable_id") and t.get("id") in visible_task_ids
+        ]
+        generic_tasks = sort_tasks_by_deadline(generic_tasks)
+        if generic_tasks:
+            lines.append("### Tasks without deliverable")
+            lines.append("")
+            for t in generic_tasks:
+                lines.extend(_task_lines(t))
+
+    return "\n".join(lines).strip() + "\n"
+
+
 def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_t"):
     """Render a task row visually aligned with Active Tasks view."""
     seq_id   = t.get("sequence_id") or f"T-{t['id']}"
@@ -414,23 +530,44 @@ def _render_main_report():
         and p.get("id") in visible_proj_ids
     ]
 
-    if st.button("📄 Export PDF", type="primary", key="rp_pdf"):
-        pdf_buf = generate_report_pdf(
-            proj_list, deliverables, tasks, subtasks, users_dict,
-            filt_proj, filt_user, filt_status, rbac_email=rbac_email,
-        )
-        st.download_button(
-            label="⬇️ Download PDF",
-            data=pdf_buf,
-            file_name=f"report_maic_{datetime.datetime.now().strftime('%Y%m%d')}.pdf",
-            mime="application/pdf",
-        )
-
-    st.divider()
-
     if not proj_list:
         st.info("No elements match the selected filters.")
         return
+
+    md_content = _build_main_report_markdown(
+        proj_list=proj_list,
+        deliverables=deliverables,
+        tasks=tasks,
+        subtasks=subtasks,
+        users_dict=users_dict,
+        visible_deliv_ids=visible_deliv_ids,
+        visible_task_ids=visible_task_ids,
+        visible_subtask_ids=visible_subtask_ids,
+    )
+
+    exp_pdf, exp_md, _ = st.columns([1.5, 1.6, 4.9])
+    with exp_pdf:
+        if st.button("📄 Export PDF", type="primary", key="rp_pdf"):
+            pdf_buf = generate_report_pdf(
+                proj_list, deliverables, tasks, subtasks, users_dict,
+                filt_proj, filt_user, filt_status, rbac_email=rbac_email,
+            )
+            st.download_button(
+                label="⬇️ Download PDF",
+                data=pdf_buf,
+                file_name=f"report_maic_{datetime.datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+            )
+    with exp_md:
+        st.download_button(
+            label="⬇️ Export Markdown",
+            data=md_content,
+            file_name=f"project_report_{datetime.datetime.now().strftime('%Y%m%d')}.md",
+            mime="text/markdown",
+            key="rp_md",
+        )
+
+    st.divider()
 
     st.markdown("<div class='project-report-compact'>", unsafe_allow_html=True)
 

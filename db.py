@@ -173,6 +173,48 @@ ALTER TABLE projects
 """
 
 
+USER_EMAIL_FK_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → allow user email update/delete without FK errors
+-- This keeps task/deliverable/subtask/comment rows, updates references on email change,
+-- and sets references to NULL when a user is deleted.
+
+ALTER TABLE deliverables DROP CONSTRAINT IF EXISTS deliverables_owner_email_fkey;
+ALTER TABLE deliverables ADD CONSTRAINT deliverables_owner_email_fkey
+    FOREIGN KEY (owner_email) REFERENCES users(email)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+
+ALTER TABLE deliverables DROP CONSTRAINT IF EXISTS deliverables_supervisor_email_fkey;
+ALTER TABLE deliverables ADD CONSTRAINT deliverables_supervisor_email_fkey
+    FOREIGN KEY (supervisor_email) REFERENCES users(email)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_owner_email_fkey;
+ALTER TABLE tasks ADD CONSTRAINT tasks_owner_email_fkey
+    FOREIGN KEY (owner_email) REFERENCES users(email)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+
+ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_supervisor_email_fkey;
+ALTER TABLE tasks ADD CONSTRAINT tasks_supervisor_email_fkey
+    FOREIGN KEY (supervisor_email) REFERENCES users(email)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+
+ALTER TABLE subtasks DROP CONSTRAINT IF EXISTS subtasks_owner_email_fkey;
+ALTER TABLE subtasks ADD CONSTRAINT subtasks_owner_email_fkey
+    FOREIGN KEY (owner_email) REFERENCES users(email)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+
+ALTER TABLE subtasks DROP CONSTRAINT IF EXISTS subtasks_supervisor_email_fkey;
+ALTER TABLE subtasks ADD CONSTRAINT subtasks_supervisor_email_fkey
+    FOREIGN KEY (supervisor_email) REFERENCES users(email)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+
+ALTER TABLE comments DROP CONSTRAINT IF EXISTS comments_author_email_fkey;
+ALTER TABLE comments ADD CONSTRAINT comments_author_email_fkey
+    FOREIGN KEY (author_email) REFERENCES users(email)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+"""
+
+
 def get_settings() -> dict:
     """Return settings row merged with defaults. Never raises."""
     try:

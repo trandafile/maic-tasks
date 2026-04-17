@@ -14,7 +14,7 @@ from db import (
     get_archived_tasks, get_archived_subtasks,
     delete_task_cascade, delete_deliverable_cascade, delete_project_cascade,
     get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
-    PROJECTS_MIGRATION_SQL,
+    PROJECTS_MIGRATION_SQL, USER_EMAIL_FK_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
 from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
@@ -68,6 +68,32 @@ def _reset_project_edit_state(pid: int) -> None:
         f"p_desc_{pid}",
     ]:
         st.session_state.pop(k, None)
+
+
+def _normalize_email(raw: str) -> str:
+    return (raw or "").strip().lower()
+
+
+def _reassign_user_references(old_email: str, new_email: str) -> None:
+    """Move all FK references from old_email to new_email."""
+    supabase.table("deliverables").update({"owner_email": new_email}).eq("owner_email", old_email).execute()
+    supabase.table("deliverables").update({"supervisor_email": new_email}).eq("supervisor_email", old_email).execute()
+    supabase.table("tasks").update({"owner_email": new_email}).eq("owner_email", old_email).execute()
+    supabase.table("tasks").update({"supervisor_email": new_email}).eq("supervisor_email", old_email).execute()
+    supabase.table("subtasks").update({"owner_email": new_email}).eq("owner_email", old_email).execute()
+    supabase.table("subtasks").update({"supervisor_email": new_email}).eq("supervisor_email", old_email).execute()
+    supabase.table("comments").update({"author_email": new_email}).eq("author_email", old_email).execute()
+
+
+def _clear_user_references(email: str) -> None:
+    """Nullify all FK references to a user before deletion when DB FK is strict."""
+    supabase.table("deliverables").update({"owner_email": None}).eq("owner_email", email).execute()
+    supabase.table("deliverables").update({"supervisor_email": None}).eq("supervisor_email", email).execute()
+    supabase.table("tasks").update({"owner_email": None}).eq("owner_email", email).execute()
+    supabase.table("tasks").update({"supervisor_email": None}).eq("supervisor_email", email).execute()
+    supabase.table("subtasks").update({"owner_email": None}).eq("owner_email", email).execute()
+    supabase.table("subtasks").update({"supervisor_email": None}).eq("supervisor_email", email).execute()
+    supabase.table("comments").update({"author_email": None}).eq("author_email", email).execute()
 
 
 def _project_markdown_export(projects: list[dict]) -> str:
@@ -197,17 +223,47 @@ def _tab_users():
                                 st.error("Name and email are required.")
                             else:
                                 try:
-                                    supabase.table("users").update({
-                                        "name":         e_name,
-                                        "email":        e_email,
-                                        "role":         e_role,
-                                        "avatar_color": e_color,
-                                    }).eq("email", email).execute()
-                                    st.session_state.pop(edit_key, None)
-                                    st.success("User updated.")
-                                    st.rerun()
+                                    target_email = _normalize_email(e_email)
+                                    current_email = _normalize_email(email)
+
+                                    if target_email != current_email:
+                                        exists = (
+                                            supabase.table("users")
+                                            .select("email")
+                                            .eq("email", target_email)
+                                            .limit(1)
+                                            .execute()
+                                            .data
+                                        )
+                                        if exists:
+                                            st.error(f"Email {target_email} is already registered.")
+                                        else:
+                                            supabase.table("users").insert({
+                                                "email": target_email,
+                                                "name": e_name,
+                                                "role": e_role,
+                                                "is_approved": approved,
+                                                "avatar_color": e_color,
+                                                "last_reminder_sent": u.get("last_reminder_sent"),
+                                            }).execute()
+
+                                            _reassign_user_references(current_email, target_email)
+                                            supabase.table("users").delete().eq("email", current_email).execute()
+                                    else:
+                                        supabase.table("users").update({
+                                            "name": e_name,
+                                            "role": e_role,
+                                            "avatar_color": e_color,
+                                        }).eq("email", current_email).execute()
+
+                                    if target_email == current_email or not exists:
+                                        st.session_state.pop(edit_key, None)
+                                        st.success("User updated.")
+                                        st.rerun()
                                 except Exception as ex:
                                     st.error(f"Error: {ex}")
+                                    with st.expander("Run SQL migration to enable safe FK cascade", expanded=False):
+                                        st.code(USER_EMAIL_FK_MIGRATION_SQL, language="sql")
                     with sb2:
                         if st.button("Cancel", key=f"cancel_edit_{safe_key}", use_container_width=True):
                             st.session_state.pop(edit_key, None)
@@ -224,11 +280,14 @@ def _tab_users():
                     if st.button("Yes, delete", key=f"yes_del_{safe_key}",
                                  type="primary", use_container_width=True):
                         try:
+                            _clear_user_references(email)
                             supabase.table("users").delete().eq("email", email).execute()
                             st.session_state.pop(del_key, None)
                             st.rerun()
                         except Exception as ex:
                             st.error(f"Error: {ex}")
+                            with st.expander("Run SQL migration to enable safe FK cascade", expanded=False):
+                                st.code(USER_EMAIL_FK_MIGRATION_SQL, language="sql")
                 with dn:
                     if st.button("Cancel", key=f"no_del_{safe_key}", use_container_width=True):
                         st.session_state.pop(del_key, None)
@@ -813,6 +872,8 @@ def _tab_settings():
     st.subheader("SQL Migrations")
     st.caption("Run this SQL in Supabase to align the notification schema with the weekly briefing system.")
     st.code(SETTINGS_MIGRATION_SQL, language="sql")
+    st.caption("Run this SQL in Supabase to allow user email update/delete with automatic FK handling.")
+    st.code(USER_EMAIL_FK_MIGRATION_SQL, language="sql")
 
 def _tab_deliverable_tags():
     cfg = get_settings()
