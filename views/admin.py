@@ -14,7 +14,7 @@ from db import (
     get_archived_tasks, get_archived_subtasks,
     delete_task_cascade, delete_deliverable_cascade, delete_project_cascade,
     get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
-    PROJECTS_MIGRATION_SQL, USER_EMAIL_FK_MIGRATION_SQL,
+    PROJECTS_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
 from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
@@ -244,7 +244,6 @@ def _tab_users():
                                                 "role": e_role,
                                                 "is_approved": approved,
                                                 "avatar_color": e_color,
-                                                "last_reminder_sent": u.get("last_reminder_sent"),
                                             }).execute()
 
                                             _reassign_user_references(current_email, target_email)
@@ -262,8 +261,6 @@ def _tab_users():
                                         st.rerun()
                                 except Exception as ex:
                                     st.error(f"Error: {ex}")
-                                    with st.expander("Run SQL migration to enable safe FK cascade", expanded=False):
-                                        st.code(USER_EMAIL_FK_MIGRATION_SQL, language="sql")
                     with sb2:
                         if st.button("Cancel", key=f"cancel_edit_{safe_key}", use_container_width=True):
                             st.session_state.pop(edit_key, None)
@@ -286,8 +283,6 @@ def _tab_users():
                             st.rerun()
                         except Exception as ex:
                             st.error(f"Error: {ex}")
-                            with st.expander("Run SQL migration to enable safe FK cascade", expanded=False):
-                                st.code(USER_EMAIL_FK_MIGRATION_SQL, language="sql")
                 with dn:
                     if st.button("Cancel", key=f"no_del_{safe_key}", use_container_width=True):
                         st.session_state.pop(del_key, None)
@@ -872,8 +867,6 @@ def _tab_settings():
     st.subheader("SQL Migrations")
     st.caption("Run this SQL in Supabase to align the notification schema with the weekly briefing system.")
     st.code(SETTINGS_MIGRATION_SQL, language="sql")
-    st.caption("Run this SQL in Supabase to allow user email update/delete with automatic FK handling.")
-    st.code(USER_EMAIL_FK_MIGRATION_SQL, language="sql")
 
 def _tab_deliverable_tags():
     cfg = get_settings()
