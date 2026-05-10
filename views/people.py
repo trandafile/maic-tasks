@@ -24,6 +24,38 @@ def _parse_date(value: str | None) -> datetime.date | None:
         return None
 
 
+def _year_breakdown(result: dict) -> pd.DataFrame:
+    """Build a per-year DataFrame with three series: Total, Journal, Conference."""
+    counts: dict[int, dict[str, int]] = {}
+    for paper in result.get("all", []):
+        year = paper.get("year")
+        if year is None:
+            continue
+        bucket = counts.setdefault(year, {"Total": 0, "Journal": 0, "Conference": 0})
+        bucket["Total"] += 1
+        if paper.get("type") == "Journal":
+            bucket["Journal"] += 1
+        elif paper.get("type") == "Conference Proceeding":
+            bucket["Conference"] += 1
+
+    if not counts:
+        return pd.DataFrame()
+
+    min_year = min(counts.keys())
+    max_year = max(counts.keys())
+    full_index = list(range(min_year, max_year + 1))
+    rows = [
+        {
+            "Year": y,
+            "Total": counts.get(y, {}).get("Total", 0),
+            "Journal": counts.get(y, {}).get("Journal", 0),
+            "Conference": counts.get(y, {}).get("Conference", 0),
+        }
+        for y in full_index
+    ]
+    return pd.DataFrame(rows).set_index("Year")
+
+
 def _phd_status_label(user: dict) -> str:
     if not user.get("is_phd_student"):
         return "—"
@@ -88,11 +120,13 @@ def show_people() -> None:
     rows: list[dict] = []
     api_errors: list[str] = []
     unique_papers: dict[str, dict] = {}
+    author_results: dict[str, dict] = {}
 
     progress = st.progress(0.0, text="Fetching publication metrics...")
     for idx, user in enumerate(with_scopus, start=1):
         scopus_id = (user.get("scopus_id") or "").strip()
         result = fetch_publications(scopus_id)
+        author_results[user["email"]] = result
 
         if result.get("error"):
             api_errors.append(f"{user.get('name', user['email'])}: {result['error']}")
@@ -140,10 +174,15 @@ def show_people() -> None:
     )
 
     st.markdown("")
-    st.dataframe(
-        df,
+    st.caption("👉 Click a row to see the publications-per-year chart for that author.")
+    df_display = df.reset_index(drop=True)
+    event = st.dataframe(
+        df_display,
         use_container_width=True,
         hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="people_table",
         column_config={
             "Scopus ID": st.column_config.TextColumn("Scopus ID", width="small"),
             "Journals": st.column_config.NumberColumn("Journals", format="%d"),
@@ -152,6 +191,32 @@ def show_people() -> None:
             "Total": st.column_config.NumberColumn("Total", format="%d"),
         },
     )
+
+    selected_rows = getattr(getattr(event, "selection", None), "rows", None) or []
+    if selected_rows:
+        sel_idx = selected_rows[0]
+        sel_row = df_display.iloc[sel_idx]
+        sel_email = sel_row["Email"]
+        sel_name = sel_row["Name"]
+
+        st.markdown("---")
+        st.markdown(f"### 📈 Publications per year — {sel_name}")
+
+        chart_df = _year_breakdown(author_results.get(sel_email, {}))
+        if chart_df.empty:
+            st.info("No publications with a known year for this author.")
+        else:
+            st.line_chart(
+                chart_df,
+                height=340,
+                color=["#1565C0", "#188038", "#D93025"],
+            )
+            st.caption(
+                f"Range: {int(chart_df.index.min())}–{int(chart_df.index.max())}  ·  "
+                f"Total {int(chart_df['Total'].sum())}  ·  "
+                f"Journal {int(chart_df['Journal'].sum())}  ·  "
+                f"Conference {int(chart_df['Conference'].sum())}"
+            )
 
     if api_errors:
         with st.expander(f"⚠️ Scopus warnings ({len(api_errors)})", expanded=False):
