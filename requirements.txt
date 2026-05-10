@@ -7,3 +7,5 @@ reportlab
 gspread
 pandas
 requests
+markdown
+python-docx

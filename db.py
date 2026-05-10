@@ -183,6 +183,19 @@ ALTER TABLE users
 """
 
 
+PAPER_DRAFTS_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → adds the deliverable_drafts table
+-- used by the "My Paper Drafts" view to store the markdown working copy
+-- of each paper deliverable.
+CREATE TABLE IF NOT EXISTS deliverable_drafts (
+    deliverable_id   INTEGER PRIMARY KEY REFERENCES deliverables(id) ON DELETE CASCADE,
+    content          TEXT,
+    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+    updated_by_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL
+);
+"""
+
+
 USER_EMAIL_FK_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → allow user email update/delete without FK errors
 -- This keeps task/deliverable/subtask/comment rows, updates references on email change,
@@ -618,3 +631,119 @@ def get_subtask_detail(subtask_id: int) -> dict | None:
     except Exception as exc:
         print(f"[db.get_subtask_detail] {exc}")
         return None
+
+
+# ── Paper drafts (for the "My Paper Drafts" view) ─────────────────────────────
+
+def get_user_paper_deliverables(user_email: str | None, is_admin: bool) -> list[dict]:
+    """Return paper-type deliverables visible to the user.
+
+    Admin sees all non-archived paper deliverables.
+    Non-admin sees only those where they are owner or supervisor.
+    Each row is enriched with `_project` (id, name, acronym) and the
+    `draft_updated_at` timestamp if a draft exists.
+    """
+    try:
+        q = (
+            supabase.table("deliverables")
+            .select("*")
+            .eq("is_archived", False)
+            .eq("type", "paper")
+        )
+        delivs = q.execute().data or []
+    except Exception as exc:
+        print(f"[db.get_user_paper_deliverables] {exc}")
+        return []
+
+    if not is_admin and user_email:
+        delivs = [
+            d for d in delivs
+            if d.get("owner_email") == user_email
+            or d.get("supervisor_email") == user_email
+        ]
+
+    if not delivs:
+        return []
+
+    project_ids = sorted({d["project_id"] for d in delivs if d.get("project_id")})
+    proj_map: dict[int, dict] = {}
+    if project_ids:
+        try:
+            proj_rows = (
+                supabase.table("projects")
+                .select("id, name, acronym")
+                .in_("id", project_ids)
+                .execute()
+                .data
+                or []
+            )
+            proj_map = {p["id"]: p for p in proj_rows}
+        except Exception as exc:
+            print(f"[db.get_user_paper_deliverables] projects fetch: {exc}")
+
+    deliv_ids = [d["id"] for d in delivs]
+    draft_ts: dict[int, str] = {}
+    try:
+        rows = (
+            supabase.table("deliverable_drafts")
+            .select("deliverable_id, updated_at")
+            .in_("deliverable_id", deliv_ids)
+            .execute()
+            .data
+            or []
+        )
+        draft_ts = {r["deliverable_id"]: r.get("updated_at") for r in rows}
+    except Exception as exc:
+        print(f"[db.get_user_paper_deliverables] drafts fetch: {exc}")
+
+    for d in delivs:
+        d["_project"] = proj_map.get(d.get("project_id"), {})
+        d["draft_updated_at"] = draft_ts.get(d["id"])
+
+    return delivs
+
+
+def get_paper_draft(deliverable_id: int) -> dict | None:
+    """Return the draft row for a deliverable, or None if it does not exist."""
+    try:
+        rows = (
+            supabase.table("deliverable_drafts")
+            .select("*")
+            .eq("deliverable_id", deliverable_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        return rows[0] if rows else None
+    except Exception as exc:
+        print(f"[db.get_paper_draft] {exc}")
+        return None
+
+
+def save_paper_draft(deliverable_id: int, content: str, user_email: str | None) -> tuple[bool, str]:
+    """Upsert a draft row. Returns (success, error)."""
+    import datetime as _dt
+    payload = {
+        "deliverable_id": deliverable_id,
+        "content": content,
+        "updated_at": _dt.datetime.utcnow().isoformat() + "Z",
+        "updated_by_email": user_email,
+    }
+    try:
+        existing = (
+            supabase.table("deliverable_drafts")
+            .select("deliverable_id")
+            .eq("deliverable_id", deliverable_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if existing:
+            supabase.table("deliverable_drafts").update(payload).eq(
+                "deliverable_id", deliverable_id
+            ).execute()
+        else:
+            supabase.table("deliverable_drafts").insert(payload).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)

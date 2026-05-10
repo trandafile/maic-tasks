@@ -77,7 +77,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.auth import check_login, logout
 
-APP_BUILD_LABEL = "beta 1.18.3"
+APP_BUILD_LABEL = "beta 1.18.4"
 
 def init_session_state():
     """Inizializza tutte le chiavi necessarie nello stato della sessione"""
@@ -104,6 +104,7 @@ from views.reports import show_reports
 from views.admin import show_admin
 from views.master_status_report import show_master_status_report
 from views.my_papers import show_my_papers
+from views.my_paper_drafts import show_my_paper_drafts
 from views.people import show_people
 
 def _run_scheduler_once():
@@ -135,7 +136,7 @@ def main():
         st.markdown(f"**Role:** {str(st.session_state.get('user_role', '')).capitalize()}")
         st.markdown("---")
 
-        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports", "My Papers"]
+        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports", "My Papers", "My Paper Drafts"]
 
         if st.session_state.get('user_role') == 'admin':
             pages.append("People")
@@ -172,6 +173,8 @@ def main():
         show_reports()
     elif page == "My Papers":
         show_my_papers()
+    elif page == "My Paper Drafts":
+        show_my_paper_drafts()
     elif page == "People":
         show_people()
     elif page == "Admin Panel":

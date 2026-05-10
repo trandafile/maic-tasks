@@ -4,7 +4,9 @@
       "Bash(pip show:*)",
       "PowerShell(python -m py_compile utils/scopus_fetcher.py views/my_papers.py views/people.py views/admin.py app.py db.py)",
       "PowerShell(if \\($?\\) { \"OK\" } else { \"FAIL\" })",
-      "PowerShell(python -m py_compile views/people.py)"
+      "PowerShell(python -m py_compile views/people.py)",
+      "PowerShell(python -m py_compile utils/doc_converters.py views/my_paper_drafts.py app.py db.py views/admin.py)",
+      "PowerShell(python -c \"from pathlib import Path; import sys; sys.path.insert\\(0, '.'\\); from utils.doc_converters import md_to_pdf, md_to_docx; md = Path\\('MPC_Template.md'\\).read_text\\(encoding='utf-8'\\); pdf = md_to_pdf\\(md, title='Test MPC'\\); docx = md_to_docx\\(md, title='Test MPC'\\); print\\('PDF bytes:', len\\(pdf.getvalue\\(\\)\\)\\); print\\('DOCX bytes:', len\\(docx.getvalue\\(\\)\\)\\)\")"
     ]
   }
 }
