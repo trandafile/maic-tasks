@@ -3,7 +3,8 @@
     "allow": [
       "Bash(pip show:*)",
       "PowerShell(python -m py_compile utils/scopus_fetcher.py views/my_papers.py views/people.py views/admin.py app.py db.py)",
-      "PowerShell(if \\($?\\) { \"OK\" } else { \"FAIL\" })"
+      "PowerShell(if \\($?\\) { \"OK\" } else { \"FAIL\" })",
+      "PowerShell(python -m py_compile views/people.py)"
     ]
   }
 }

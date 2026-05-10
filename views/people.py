@@ -87,6 +87,7 @@ def show_people() -> None:
 
     rows: list[dict] = []
     api_errors: list[str] = []
+    unique_papers: dict[str, dict] = {}
 
     progress = st.progress(0.0, text="Fetching publication metrics...")
     for idx, user in enumerate(with_scopus, start=1):
@@ -95,6 +96,11 @@ def show_people() -> None:
 
         if result.get("error"):
             api_errors.append(f"{user.get('name', user['email'])}: {result['error']}")
+
+        for paper in result.get("all", []):
+            key = paper.get("scopus_id") or paper.get("doi") or f"{paper.get('title')}|{paper.get('year')}"
+            if key:
+                unique_papers.setdefault(key, paper)
 
         totals = result["totals"]
         rows.append({
@@ -112,10 +118,26 @@ def show_people() -> None:
 
     df = pd.DataFrame(rows).sort_values("Total", ascending=False)
 
+    unique_journal = sum(1 for p in unique_papers.values() if p.get("type") == "Journal")
+    unique_conference = sum(1 for p in unique_papers.values() if p.get("type") == "Conference Proceeding")
+    unique_total = len(unique_papers)
+
+    cumulative_total = int(df["Total"].sum())
+    duplicates = cumulative_total - unique_total
+
     sum1, sum2, sum3 = st.columns(3)
-    sum1.metric("Total publications", int(df["Total"].sum()))
-    sum2.metric("Total journal articles", int(df["Journals"].sum()))
-    sum3.metric("Total conference papers", int(df["Conferences"].sum()))
+    sum1.metric(
+        "Unique publications",
+        unique_total,
+        delta=f"-{duplicates} co-authored" if duplicates > 0 else None,
+        delta_color="off",
+    )
+    sum2.metric("Unique journal articles", unique_journal)
+    sum3.metric("Unique conference papers", unique_conference)
+    st.caption(
+        "Totals are deduplicated across authors: a paper co-authored by N people in this list "
+        "counts once here, but appears in each of their per-row counts."
+    )
 
     st.markdown("")
     st.dataframe(
