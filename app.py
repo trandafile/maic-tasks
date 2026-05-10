@@ -77,7 +77,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.auth import check_login, logout
 
-APP_BUILD_LABEL = "beta 1.16.71"
+APP_BUILD_LABEL = "beta 1.18.0"
 
 def init_session_state():
     """Inizializza tutte le chiavi necessarie nello stato della sessione"""
@@ -103,6 +103,8 @@ from views.calendar import show_calendar
 from views.reports import show_reports
 from views.admin import show_admin
 from views.master_status_report import show_master_status_report
+from views.my_papers import show_my_papers
+from views.people import show_people
 
 def _run_scheduler_once():
     """Run deadline check once per session (avoid repeated calls on rerender)."""
@@ -133,9 +135,10 @@ def main():
         st.markdown(f"**Role:** {str(st.session_state.get('user_role', '')).capitalize()}")
         st.markdown("---")
 
-        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports"]
+        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports", "My Papers"]
 
         if st.session_state.get('user_role') == 'admin':
+            pages.append("People")
             pages.append("Admin Panel")
             pages.append("Master Status Report")
 
@@ -167,6 +170,10 @@ def main():
         show_calendar()
     elif page == "Reports":
         show_reports()
+    elif page == "My Papers":
+        show_my_papers()
+    elif page == "People":
+        show_people()
     elif page == "Admin Panel":
         show_admin()
     elif page == "Master Status Report":

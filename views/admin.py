@@ -14,7 +14,7 @@ from db import (
     get_archived_tasks, get_archived_subtasks,
     delete_task_cascade, delete_deliverable_cascade, delete_project_cascade,
     get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
-    PROJECTS_MIGRATION_SQL,
+    PROJECTS_MIGRATION_SQL, SCOPUS_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
 from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
@@ -215,6 +215,43 @@ def _tab_users():
                             value=u.get("avatar_color") or "#888888",
                             key=f"e_color_{safe_key}",
                         )
+
+                    st.markdown("**Publications & PhD tracking**")
+                    sf1, sf2 = st.columns(2)
+                    with sf1:
+                        e_scopus_id = st.text_input(
+                            "Scopus Author ID",
+                            value=u.get("scopus_id") or "",
+                            key=f"e_scopus_{safe_key}",
+                            help="Numeric ID from scopus.com → Author profile URL.",
+                        )
+                    with sf2:
+                        e_is_phd = st.checkbox(
+                            "PhD student",
+                            value=bool(u.get("is_phd_student")),
+                            key=f"e_phd_{safe_key}",
+                        )
+
+                    if e_is_phd:
+                        pf1, pf2 = st.columns(2)
+                        with pf1:
+                            e_phd_start = st.date_input(
+                                "PhD Start Date",
+                                value=_parse_date(u.get("phd_start_date")),
+                                format="DD/MM/YYYY",
+                                key=f"e_phd_start_{safe_key}",
+                            )
+                        with pf2:
+                            e_phd_end = st.date_input(
+                                "PhD End Date",
+                                value=_parse_date(u.get("phd_end_date")),
+                                format="DD/MM/YYYY",
+                                key=f"e_phd_end_{safe_key}",
+                            )
+                    else:
+                        e_phd_start = None
+                        e_phd_end = None
+
                     sb1, sb2 = st.columns(2)
                     with sb1:
                         if st.button("💾 Save", key=f"save_user_{safe_key}",
@@ -225,6 +262,13 @@ def _tab_users():
                                 try:
                                     target_email = _normalize_email(e_email)
                                     current_email = _normalize_email(email)
+
+                                    extra_fields = {
+                                        "scopus_id": (e_scopus_id or "").strip() or None,
+                                        "is_phd_student": bool(e_is_phd),
+                                        "phd_start_date": e_phd_start.isoformat() if e_phd_start else None,
+                                        "phd_end_date": e_phd_end.isoformat() if e_phd_end else None,
+                                    }
 
                                     if target_email != current_email:
                                         exists = (
@@ -244,6 +288,7 @@ def _tab_users():
                                                 "role": e_role,
                                                 "is_approved": approved,
                                                 "avatar_color": e_color,
+                                                **extra_fields,
                                             }).execute()
 
                                             _reassign_user_references(current_email, target_email)
@@ -253,6 +298,7 @@ def _tab_users():
                                             "name": e_name,
                                             "role": e_role,
                                             "avatar_color": e_color,
+                                            **extra_fields,
                                         }).eq("email", current_email).execute()
 
                                     if target_email == current_email or not exists:
@@ -865,8 +911,12 @@ def _tab_settings():
 
     st.divider()
     st.subheader("SQL Migrations")
-    st.caption("Run this SQL in Supabase to align the notification schema with the weekly briefing system.")
-    st.code(SETTINGS_MIGRATION_SQL, language="sql")
+    st.caption("Run these SQL snippets in Supabase to keep the schema aligned with the app.")
+    with st.expander("Settings & notification schema", expanded=False):
+        st.code(SETTINGS_MIGRATION_SQL, language="sql")
+    with st.expander("Scopus & PhD tracking (users table)", expanded=False):
+        st.caption("Adds scopus_id, is_phd_student, phd_start_date, phd_end_date to users.")
+        st.code(SCOPUS_MIGRATION_SQL, language="sql")
 
 def _tab_deliverable_tags():
     cfg = get_settings()

@@ -173,6 +173,16 @@ ALTER TABLE projects
 """
 
 
+SCOPUS_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → adds Scopus + PhD tracking fields to users
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS scopus_id      TEXT,
+    ADD COLUMN IF NOT EXISTS is_phd_student BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS phd_start_date DATE,
+    ADD COLUMN IF NOT EXISTS phd_end_date   DATE;
+"""
+
+
 USER_EMAIL_FK_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → allow user email update/delete without FK errors
 -- This keeps task/deliverable/subtask/comment rows, updates references on email change,
