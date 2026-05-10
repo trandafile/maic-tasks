@@ -24,6 +24,11 @@ def _parse_date(value: str | None) -> datetime.date | None:
         return None
 
 
+def _fmt_date(value: str | None) -> str:
+    d = _parse_date(value)
+    return d.strftime("%Y/%m/%d") if d else "—"
+
+
 def _year_breakdown(result: dict) -> pd.DataFrame:
     """Build a per-year DataFrame with three series: Total, Journal, Conference."""
     counts: dict[int, dict[str, int]] = {}
@@ -173,49 +178,117 @@ def show_people() -> None:
         "counts once here, but appears in each of their per-row counts."
     )
 
-    st.markdown("")
-    st.caption("👉 Click a row to see the publications-per-year chart for that author.")
-    df_display = df.reset_index(drop=True)
-    event = st.dataframe(
-        df_display,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="people_table",
-        column_config={
-            "Scopus ID": st.column_config.TextColumn("Scopus ID", width="small"),
-            "Journals": st.column_config.NumberColumn("Journals", format="%d"),
-            "Conferences": st.column_config.NumberColumn("Conferences", format="%d"),
-            "Other": st.column_config.NumberColumn("Other", format="%d"),
-            "Total": st.column_config.NumberColumn("Total", format="%d"),
-        },
-    )
+    phd_users = [u for u in users if u.get("is_phd_student")]
 
-    selected_rows = getattr(getattr(event, "selection", None), "rows", None) or []
-    if selected_rows:
-        sel_idx = selected_rows[0]
-        sel_row = df_display.iloc[sel_idx]
-        sel_email = sel_row["Email"]
-        sel_name = sel_row["Name"]
+    tab_all, tab_phd = st.tabs([
+        f"📊 All Authors ({len(with_scopus)})",
+        f"🎓 PhD Students ({len(phd_users)})",
+    ])
 
-        st.markdown("---")
-        st.markdown(f"### 📈 Publications per year — {sel_name}")
+    with tab_all:
+        st.caption("👉 Click a row to see the publications-per-year chart for that author.")
+        df_display = df.reset_index(drop=True)
+        event = st.dataframe(
+            df_display,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="people_table",
+            column_config={
+                "Scopus ID": st.column_config.TextColumn("Scopus ID", width="small"),
+                "Journals": st.column_config.NumberColumn("Journals", format="%d"),
+                "Conferences": st.column_config.NumberColumn("Conferences", format="%d"),
+                "Other": st.column_config.NumberColumn("Other", format="%d"),
+                "Total": st.column_config.NumberColumn("Total", format="%d"),
+            },
+        )
 
-        chart_df = _year_breakdown(author_results.get(sel_email, {}))
-        if chart_df.empty:
-            st.info("No publications with a known year for this author.")
+        selected_rows = getattr(getattr(event, "selection", None), "rows", None) or []
+        if selected_rows:
+            sel_idx = selected_rows[0]
+            sel_row = df_display.iloc[sel_idx]
+            sel_email = sel_row["Email"]
+            sel_name = sel_row["Name"]
+
+            st.markdown("---")
+            st.markdown(f"### 📈 Publications per year — {sel_name}")
+
+            chart_df = _year_breakdown(author_results.get(sel_email, {}))
+            if chart_df.empty:
+                st.info("No publications with a known year for this author.")
+            else:
+                st.line_chart(
+                    chart_df,
+                    height=340,
+                    color=["#1565C0", "#188038", "#D93025"],
+                )
+                st.caption(
+                    f"Range: {int(chart_df.index.min())}–{int(chart_df.index.max())}  ·  "
+                    f"Total {int(chart_df['Total'].sum())}  ·  "
+                    f"Journal {int(chart_df['Journal'].sum())}  ·  "
+                    f"Conference {int(chart_df['Conference'].sum())}"
+                )
+
+    with tab_phd:
+        if not phd_users:
+            st.info(
+                "No PhD students configured. Mark a user as PhD student in "
+                "Admin Panel → Users → Edit."
+            )
         else:
-            st.line_chart(
-                chart_df,
-                height=340,
-                color=["#1565C0", "#188038", "#D93025"],
+            phd_rows = []
+            for u in phd_users:
+                scopus_id = (u.get("scopus_id") or "").strip()
+                totals = author_results.get(u["email"], {}).get("totals", {}) if scopus_id else {}
+                phd_rows.append({
+                    "Name": u.get("name") or u["email"],
+                    "Email": u["email"],
+                    "Status": _phd_status_label(u),
+                    "Start": _fmt_date(u.get("phd_start_date")),
+                    "End": _fmt_date(u.get("phd_end_date")),
+                    "Scopus ID": scopus_id or "—",
+                    "Total": totals.get("all") if scopus_id else None,
+                    "Journals": totals.get("journal") if scopus_id else None,
+                    "Conferences": totals.get("conference") if scopus_id else None,
+                })
+
+            phd_df = (
+                pd.DataFrame(phd_rows)
+                .sort_values("Start", ascending=False, na_position="last")
+                .reset_index(drop=True)
+            )
+
+            with_pubs = phd_df[phd_df["Total"].notna()]
+            pm1, pm2, pm3 = st.columns(3)
+            pm1.metric("PhD students", len(phd_df))
+            pm2.metric(
+                "Total publications",
+                int(with_pubs["Total"].sum()) if not with_pubs.empty else 0,
+            )
+            pm3.metric(
+                "Without Scopus ID",
+                int(phd_df["Scopus ID"].eq("—").sum()),
+            )
+
+            st.markdown("")
+            st.dataframe(
+                phd_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Status": st.column_config.TextColumn("Status", width="medium"),
+                    "Start": st.column_config.TextColumn("Start", width="small"),
+                    "End": st.column_config.TextColumn("End", width="small"),
+                    "Scopus ID": st.column_config.TextColumn("Scopus ID", width="small"),
+                    "Total": st.column_config.NumberColumn("Total", format="%d"),
+                    "Journals": st.column_config.NumberColumn("Journals", format="%d"),
+                    "Conferences": st.column_config.NumberColumn("Conferences", format="%d"),
+                },
             )
             st.caption(
-                f"Range: {int(chart_df.index.min())}–{int(chart_df.index.max())}  ·  "
-                f"Total {int(chart_df['Total'].sum())}  ·  "
-                f"Journal {int(chart_df['Journal'].sum())}  ·  "
-                f"Conference {int(chart_df['Conference'].sum())}"
+                "Publication counts are empty for PhD students without a configured Scopus ID. "
+                "Status is computed from Start/End dates."
             )
 
     if api_errors:
