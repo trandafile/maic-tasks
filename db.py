@@ -193,6 +193,12 @@ CREATE TABLE IF NOT EXISTS deliverable_drafts (
     updated_at       TIMESTAMPTZ DEFAULT NOW(),
     updated_by_email TEXT REFERENCES users(email) ON UPDATE CASCADE ON DELETE SET NULL
 );
+
+-- Match the project-wide pattern: the app authenticates with the publishable
+-- key, which enforces RLS. Other tables in this schema have RLS disabled,
+-- so we do the same here. Without this line, INSERT/UPDATE on
+-- deliverable_drafts fails with "new row violates row-level security policy".
+ALTER TABLE deliverable_drafts DISABLE ROW LEVEL SECURITY;
 """
 
 

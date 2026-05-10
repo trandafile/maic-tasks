@@ -2,9 +2,7 @@
 
 **MAIC-Lab — University of Calabria, DIMES**
 
-> **Purpose.** This document is a one-to-two-page contract between the PhD candidate and the supervisor describing the next publishable result. It is reviewed every six months. It is not a task list — granular tasks belong in the lab tracking application. It is a living document: if the central claim turns out not to be defensible, the MPC is rewritten, not abandoned.
->
-> **How to use it.** The candidate fills the document; the supervisor revises it during a dedicated 60-minute review meeting at the start of each semester. Italicised guidance text should be replaced with actual content, then deleted.
+> **Scope.** Defines the next publishable result within a research line. One to two pages, updated every six months. Granular tasks belong in the lab tracking application, not in this document.
 
 ---
 
@@ -12,7 +10,7 @@
 
 | Field | Value |
 |---|---|
-| **PhD candidate** | *Full name* |
+| **Researcher** | *Full name* |
 | **Supervisor(s)** | *Name(s)* |
 | **PhD cycle / year** | *e.g. XL cycle, year 2* |
 | **Research area (MAIC-Lab)** | *e.g. RF monolithic integration* |
@@ -23,7 +21,7 @@
 
 ## 2. Provisional Paper Title
 
-> *One sentence, even imperfect. Forces the candidate to imagine the final product, not just the activity. Can be revised, but it must exist.*
+> *One sentence describing the intended paper. May be revised across versions but cannot be left empty.*
 
 **Working title:** *e.g. A 1×3 coupled magneto-electric dipole array at 20 GHz on RO4350 substrate for SatCom user terminals.*
 
@@ -31,7 +29,7 @@
 
 ## 3. Central Claim
 
-> *Three to five lines. What the paper will demonstrate that is not demonstrated today. Phrased as a falsifiable statement, not as a topic. Bad example: "study of ME-dipole antennas for 20 GHz arrays." Good example: a quantitative, comparative, falsifiable assertion including the figure of merit, the operating condition, and the comparative baseline.*
+> *Three to five lines stating what the paper will demonstrate that is not demonstrated today. Phrased as a falsifiable statement, not as a topic, and including the figure of merit, the operating condition, and the comparative baseline. Bad example: "study of ME-dipole antennas for 20 GHz arrays." Good example: a quantitative, comparative, falsifiable assertion.*
 
 **Claim:**
 *[State the claim here in 3–5 lines.]*
@@ -40,22 +38,49 @@
 
 ## 4. Minimum State of the Art
 
-> *Five to eight key references — not an exhaustive review. The works against which the claim is measured. Linked to the MAIC_LAB_ZotLib via citation key. For each, one line on what it does and why the MPC extends or surpasses it.*
+> *Five to eight key references — not an exhaustive review. The works against which the claim is measured. Citations follow IEEE style. For each entry: one line on what it does and one line on how the MPC extends or surpasses it.*
 
-| Reference (Zotero key) | What it does | How MPC extends / surpasses it |
-|---|---|---|
-| *@author2024key* | | |
-| | | |
-| | | |
-| | | |
-| | | |
-| | | |
+**[1]** *A. Author, B. Author, and C. Author, "Title of the paper," IEEE Trans. on XXX, vol. X, no. Y, pp. ZZ–WW, Month Year.*
+
+&nbsp;&nbsp;&nbsp;a. *What it does.*
+
+&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+
+**[2]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
+
+&nbsp;&nbsp;&nbsp;a. *What it does.*
+
+&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+
+**[3]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
+
+&nbsp;&nbsp;&nbsp;a. *What it does.*
+
+&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+
+**[4]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
+
+&nbsp;&nbsp;&nbsp;a. *What it does.*
+
+&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+
+**[5]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
+
+&nbsp;&nbsp;&nbsp;a. *What it does.*
+
+&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+
+**[6]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
+
+&nbsp;&nbsp;&nbsp;a. *What it does.*
+
+&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
 
 ---
 
 ## 5. Target Venue
 
-> *Choosing the venue at the outset orients length, experimental angle, and the expected novelty bar. Without a venue, writing proceeds blindly.*
+> *Choosing the venue at the outset orients length, experimental angle, and expected novelty bar. Without a venue, writing proceeds without direction.*
 
 - **Primary venue:** *e.g. IEEE Transactions on Antennas and Propagation*
 - **Fallback venue:** *e.g. IEEE Antennas and Wireless Propagation Letters*
@@ -66,7 +91,7 @@
 
 ## 6. Required Evidence
 
-> *The simulation, fabrication, or measurement outputs that — if obtained — support the claim. Typically 3–5 items. This is the bridge between the claim and the work plan.*
+> *The simulation, fabrication, or measurement outputs that — if obtained — support the claim. Typically 3–5 items. The bridge between the claim and the work plan.*
 
 - *e.g. Full-wave simulation of the single element with parametric sweep of the coupling gap.*
 - *e.g. Fabricated prototype measured in the anechoic chamber: S-parameters, gain, scan loss over ±30°.*
@@ -103,7 +128,7 @@
 
 ## 9. Position in the Thesis Trajectory
 
-> *One short paragraph. This MPC is the first / second / third paper of the thesis, and it connects to chapter X. Keeps the three-year trajectory visible at every semester review.*
+> *One short paragraph. Identifies whether the MPC is the first, second, or third paper of the thesis, and the chapter it connects to. Keeps the three-year trajectory visible at every semester review.*
 
 *[Describe how this MPC fits into the overall thesis plan, which prior MPC it builds on, and which subsequent MPC it enables.]*
 
@@ -111,7 +136,7 @@
 
 ## 10. Review History
 
-> *Updated at each semester review. Track version, date, and the substantive changes (new claim formulation, new venue, dropped milestone).*
+> *Updated at each semester review. Tracks version, date, and substantive changes (new claim formulation, new venue, dropped milestone).*
 
 - **v1.0** — *date* — initial version.
 - **v1.1** — *date* — *[summarise change]*.
