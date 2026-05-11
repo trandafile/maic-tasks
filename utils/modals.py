@@ -356,13 +356,26 @@ def task_details_modal(task, can_edit, deliverables=None):
 
         curr_deadline = _parse_date(task.get("deadline"))
 
+        # Admins can reassign; non-admin owners/supervisors keep current assignment
+        _is_admin_modal = st.session_state.get("user_role") == "admin"
+
         c4, c5, c6 = st.columns([2, 2, 1])
         with c4:
-            new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
-            new_owner_email = user_opts.get(new_owner_disp) or task.get("owner_email")
+            if _is_admin_modal:
+                new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
+                new_owner_email = user_opts.get(new_owner_disp) or task.get("owner_email")
+            else:
+                st.caption("Assignee")
+                st.write(curr_owner_disp or task.get("owner_email") or "—")
+                new_owner_email = task.get("owner_email")
         with c5:
-            new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
-            new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+            if _is_admin_modal:
+                new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
+                new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+            else:
+                st.caption("Supervisor")
+                st.write(curr_sup_disp if curr_sup_disp != "None" else "—")
+                new_sup_email = task.get("supervisor_email")
         with c6:
             new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
 
@@ -497,13 +510,26 @@ def subtask_details_modal(subtask, can_edit):
 
         curr_deadline = _parse_date(subtask.get("deadline"))
 
+        # Admins can reassign; non-admin owners/supervisors keep current assignment
+        _is_admin_modal = st.session_state.get("user_role") == "admin"
+
         c1, c2, c3 = st.columns([2, 2, 1])
         with c1:
-            new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
-            new_owner_email = user_opts.get(new_owner_disp) or subtask.get("owner_email")
+            if _is_admin_modal:
+                new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
+                new_owner_email = user_opts.get(new_owner_disp) or subtask.get("owner_email")
+            else:
+                st.caption("Assignee")
+                st.write(curr_owner_disp or subtask.get("owner_email") or "—")
+                new_owner_email = subtask.get("owner_email")
         with c2:
-            new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
-            new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+            if _is_admin_modal:
+                new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
+                new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+            else:
+                st.caption("Supervisor")
+                st.write(curr_sup_disp if curr_sup_disp != "None" else "—")
+                new_sup_email = subtask.get("supervisor_email")
         with c3:
             new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
 

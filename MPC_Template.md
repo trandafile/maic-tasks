@@ -8,14 +8,12 @@
 
 ## 1. Identification
 
-| Field | Value |
-|---|---|
-| **Researcher** | *Full name* |
-| **Supervisor(s)** | *Name(s)* |
-| **PhD cycle / year** | *e.g. XL cycle, year 2* |
-| **Research area (MAIC-Lab)** | *e.g. RF monolithic integration* |
-| **Funded project(s)** | *e.g. SHIFT, ESACA, GDOPP* |
-| **Document version** | *v1.0 — date* |
+- **Researcher:** *Full name*
+- **Supervisor(s):** *Name(s)*
+- **PhD cycle / year:** *e.g. XL cycle, year 2*
+- **Research area (MAIC-Lab):** *e.g. RF monolithic integration*
+- **Funded project(s):** *e.g. SHIFT, ESACA, GDOPP*
+- **Document version:** *v1.0 — date*
 
 ---
 
@@ -42,39 +40,39 @@
 
 **[1]** *A. Author, B. Author, and C. Author, "Title of the paper," IEEE Trans. on XXX, vol. X, no. Y, pp. ZZ–WW, Month Year.*
 
-&nbsp;&nbsp;&nbsp;a. *What it does.*
+   a. *What it does.*
 
-&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+   b. *How MPC extends or surpasses it.*
 
 **[2]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
 
-&nbsp;&nbsp;&nbsp;a. *What it does.*
+   a. *What it does.*
 
-&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+   b. *How MPC extends or surpasses it.*
 
 **[3]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
 
-&nbsp;&nbsp;&nbsp;a. *What it does.*
+   a. *What it does.*
 
-&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+   b. *How MPC extends or surpasses it.*
 
 **[4]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
 
-&nbsp;&nbsp;&nbsp;a. *What it does.*
+   a. *What it does.*
 
-&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+   b. *How MPC extends or surpasses it.*
 
 **[5]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
 
-&nbsp;&nbsp;&nbsp;a. *What it does.*
+   a. *What it does.*
 
-&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+   b. *How MPC extends or surpasses it.*
 
 **[6]** *Author(s), "Title," Journal/Conference, vol., no., pp., Year.*
 
-&nbsp;&nbsp;&nbsp;a. *What it does.*
+   a. *What it does.*
 
-&nbsp;&nbsp;&nbsp;b. *How MPC extends or surpasses it.*
+   b. *How MPC extends or surpasses it.*
 
 ---
 
@@ -105,11 +103,23 @@
 
 > *What could make the MPC fail (foundry access, measurement system availability, component supply, IP from partners). For each risk, a sketched Plan B.*
 
-| Risk / dependency | Likelihood / impact | Mitigation (Plan B) |
-|---|---|---|
-| *e.g. Europractice MPW slot delay* | *Medium / High* | *Fall back to in-house PCB prototype on RO4350* |
-| | | |
-| | | |
+**[R1]** *Risk or dependency description (e.g. Europractice MPW slot delay).*
+
+   a. Likelihood / impact: *Medium / High.*
+
+   b. Mitigation (Plan B): *Fall back to in-house PCB prototype on RO4350.*
+
+**[R2]** *Risk or dependency description.*
+
+   a. Likelihood / impact: *...*
+
+   b. Mitigation (Plan B): *...*
+
+**[R3]** *Risk or dependency description.*
+
+   a. Likelihood / impact: *...*
+
+   b. Mitigation (Plan B): *...*
 
 ---
 
@@ -117,12 +127,29 @@
 
 > *Three to five milestones with target months. Milestones are deliverables ("prototype measured"), not activities ("run simulations"). Granular tasks live in the lab tracking application.*
 
-| ID | Milestone (deliverable, not task) | Target month | Status |
-|---|---|---|---|
-| M1 | *Full-wave design of the single element completed and verified* | Month 3 | Planned |
-| M2 | *Prototype fabricated and characterised in anechoic chamber* | Month 7 | Planned |
-| M3 | *Manuscript drafted, internal review completed* | Month 9 | Planned |
-| M4 | *Submission to target venue* | Month 10 | Planned |
+**[M1]** *Full-wave design of the single element completed and verified.*
+
+   a. Target month: *Month 3.*
+
+   b. Status: *Planned.*
+
+**[M2]** *Prototype fabricated and characterised in anechoic chamber.*
+
+   a. Target month: *Month 7.*
+
+   b. Status: *Planned.*
+
+**[M3]** *Manuscript drafted, internal review completed.*
+
+   a. Target month: *Month 9.*
+
+   b. Status: *Planned.*
+
+**[M4]** *Submission to target venue.*
+
+   a. Target month: *Month 10.*
+
+   b. Status: *Planned.*
 
 ---
 

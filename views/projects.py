@@ -719,7 +719,12 @@ def show_projects():
                         st.html(d_people if d_people else "<span style='color:#2E8B6E;font-size:0.82rem'>Owner/Supervisor: —</span>")
                     with h_det:
                         if st.button("🔍", key=f"det_del_{d_id}", use_container_width=True):
-                            deliverable_details_modal(d, can_edit=is_admin and not d.get("is_archived"))
+                            d_can_edit = (
+                                is_admin
+                                or d.get("owner_email") == user_email
+                                or d.get("supervisor_email") == user_email
+                            ) and not d.get("is_archived")
+                            deliverable_details_modal(d, can_edit=d_can_edit)
                     with h_arch:
                         if is_admin and not d.get("is_archived"):
                             if st.button("🗑️", key=f"arch_del_{d_id}", help="Archive Deliverable"):

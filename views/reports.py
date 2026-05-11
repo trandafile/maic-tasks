@@ -642,9 +642,14 @@ def _render_main_report():
                         )
                     with h2:
                         if st.button("Details", key=f"rp_dd_{did}", use_container_width=True):
+                            d_can_edit = (
+                                is_admin
+                                or d.get("owner_email") == user_email
+                                or d.get("supervisor_email") == user_email
+                            )
                             deliverable_details_modal(
                                 d,
-                                can_edit=is_admin,
+                                can_edit=d_can_edit,
                                 breadcrumb=f"Reports / {proj.get('name', '-') } / Deliverable",
                             )
 
@@ -1439,9 +1444,14 @@ def _render_detailed_report():
             st.progress(prog)
         with ph2:
             if st.button("Details", key=f"dr_dd_{did}", use_container_width=True):
+                d_can_edit = (
+                    is_admin
+                    or d.get("owner_email") == user_email
+                    or d.get("supervisor_email") == user_email
+                )
                 deliverable_details_modal(
                     d,
-                    can_edit=is_admin,
+                    can_edit=d_can_edit,
                     breadcrumb=f"Reports / Detailed Report / {proj.get('name', '-') } / Deliverable",
                 )
 
