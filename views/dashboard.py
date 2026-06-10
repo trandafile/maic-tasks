@@ -12,10 +12,11 @@ Projects are sorted by urgency (closest deadlines first).
 """
 
 import datetime
+import html as _htmllib
 import streamlit as st
 
 from core.supabase_client import supabase
-from db import get_settings
+from db import get_settings, compute_delay_stats
 from utils.helpers import PRIORITY_ORDER, strip_markdown, deliverable_chip_html
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
 
@@ -255,8 +256,8 @@ def _render_item_row(
     context_only: bool = False,
 ):
     status = item.get("status", "Not started")
-    title = item.get("name", "")
-    notes = _truncate_text(item.get("notes"), max_len=150)
+    title = _htmllib.escape(item.get("name", "") or "")
+    notes = _htmllib.escape(_truncate_text(item.get("notes"), max_len=150))
     _, dl_html = _deadline_html(item.get("deadline"), threshold)
 
     status_html = _status_badge_html(status)
@@ -477,6 +478,65 @@ def _render_scope_tab(
                             )
 
 
+def _render_personal_metrics(email: str) -> None:
+    """Compact personal stats row: workload now + all-time punctuality.
+
+    Uses a dedicated owned-tasks query WITHOUT the is_archived filter:
+    completed tasks are routinely bulk-archived, but they still belong to the
+    user's punctuality history.
+    """
+    try:
+        owned = (
+            supabase.table("tasks")
+            .select("status, deadline, completion_date")
+            .eq("owner_email", email)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return
+
+    owned = [t for t in owned if t.get("status") != "Cancelled"]
+    if not owned:
+        return
+
+    today = datetime.date.today()
+    active = [t for t in owned if t.get("status") not in _INACTIVE]
+    overdue = [
+        t for t in active
+        if (dl := _parse_date(t.get("deadline"))) and dl < today
+    ]
+    last30 = today - datetime.timedelta(days=30)
+    completed_30 = [
+        t for t in owned
+        if t.get("status") == "Completed"
+        and (cd := _parse_date(t.get("completion_date")))
+        and cd >= last30
+    ]
+    ds = compute_delay_stats(owned)
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Active tasks", len(active))
+    m2.metric(
+        "Overdue", len(overdue),
+        delta=-len(overdue) if overdue else None,
+        delta_color="inverse" if overdue else "off",
+        help="Active tasks past their deadline.",
+    )
+    m3.metric("Completed (30d)", len(completed_30))
+    m4.metric(
+        "On-time rate",
+        f"{ds['on_time_rate']}%" if ds["on_time_rate"] is not None else "—",
+        help="All-time: completed within deadline / completed with a deadline (archived included).",
+    )
+    m5.metric(
+        "Avg delay",
+        f"{ds['avg_delay_days']}d" if ds["avg_delay_days"] is not None else "—",
+        help="Average lateness of your tasks completed after the deadline.",
+    )
+
+
 def show_dashboard():
     st.title("Dashboard")
     st.markdown("**Most urgent tasks to work on**")
@@ -506,6 +566,8 @@ def show_dashboard():
     if not email:
         st.error("User not found in session.")
         return
+
+    _render_personal_metrics(email)
 
     try:
         threshold, projects, deliverables, all_tasks, all_subtasks, task_map, user_map = _fetch_dashboard_data(email)

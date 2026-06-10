@@ -111,6 +111,24 @@ CREATE TABLE IF NOT EXISTS comments (
     is_system_event BOOLEAN DEFAULT FALSE
 );
 
+-- 11. Status history (audit log of status changes, used by the Trend report)
+CREATE TABLE IF NOT EXISTS status_history (
+    id SERIAL PRIMARY KEY,
+    item_type TEXT NOT NULL CHECK (item_type IN ('task', 'subtask')),
+    item_id INTEGER NOT NULL,
+    project_id INTEGER,
+    old_status TEXT,
+    new_status TEXT,
+    changed_by_email TEXT,
+    changed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_status_history_project ON status_history (project_id);
+CREATE INDEX IF NOT EXISTS idx_status_history_item ON status_history (item_type, item_id);
+
+-- Creation timestamps for progress charts
+ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE subtasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+
 -- Seed Initial Admin User
 INSERT INTO users (email, name, role, is_approved, avatar_color)
 VALUES ('luigi.boccia@unical.it', 'System Administrator', 'admin', TRUE, '#ff5733')

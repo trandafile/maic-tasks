@@ -2,7 +2,7 @@ import streamlit as st
 import datetime
 import json
 from core.supabase_client import supabase
-from db import get_settings
+from db import get_settings, log_status_change
 from utils.md_editor import markdown_editor
 from utils.notifications import send_task_assigned
 from utils.helpers import parse_deliverable_tag_styles
@@ -276,25 +276,11 @@ def task_details_modal(task, can_edit, deliverables=None):
     st.html(_breadcrumb_html(seq_id=seq_id, proj=proj, deliv=deliv))
 
     curr_name = task.get("name", "") or ""
-    if can_edit:
-        new_name = st.text_input(
-            "Task name",
-            value=curr_name,
-            key=f"task_name_{task.get('id')}",
-        )
-    else:
-        st.html(f"<div style='font-size:1.15rem;font-weight:700;margin-bottom:4px'>{curr_name}</div>")
-        new_name = curr_name
-
-    st.html(
-        _persons_pills_html(
-            user_map=user_map,
-            owner_email=task.get("owner_email"),
-            sup_email=task.get("supervisor_email"),
-        )
+    pills_html = _persons_pills_html(
+        user_map=user_map,
+        owner_email=task.get("owner_email"),
+        sup_email=task.get("supervisor_email"),
     )
-    st.markdown("---")
-
     status_map = get_status_color_map()
 
     if can_edit:
@@ -308,7 +294,6 @@ def task_details_modal(task, can_edit, deliverables=None):
         all_users = _fetch_all_users()
         user_opts = _user_opts(all_users)
 
-        # ── Row 1: Status | Priority | Deliverable ────────────────────────────
         status_options = list(status_map.keys())
         display_options = list(status_map.values())
 
@@ -321,31 +306,6 @@ def task_details_modal(task, can_edit, deliverables=None):
         curr_deliv_id = task.get("deliverable_id")
         curr_deliv_name = next((k for k, v in deliv_opts.items() if v == curr_deliv_id), "None (Generic)")
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            new_status_display = st.selectbox(
-                "Status", display_options,
-                index=status_options.index(curr_status)
-            )
-            new_status = status_options[display_options.index(new_status_display)]
-        with c2:
-            priority_options = ["none", "low", "medium", "high", "urgent"]
-            curr_priority = task.get("priority", "medium")
-            if curr_priority not in priority_options:
-                curr_priority = "medium"
-            new_priority = st.selectbox(
-                "Priority", priority_options,
-                index=priority_options.index(curr_priority)
-            )
-        with c3:
-            new_deliv_name = st.selectbox(
-                "Deliverable",
-                list(deliv_opts.keys()),
-                index=list(deliv_opts.keys()).index(curr_deliv_name)
-            )
-            new_deliv_id = deliv_opts[new_deliv_name]
-
-        # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────────
         owner_keys = list(user_opts.keys())
         curr_owner_disp = _find_display(user_opts, task.get("owner_email"))
         owner_idx = owner_keys.index(curr_owner_disp) if curr_owner_disp in owner_keys else 0
@@ -359,80 +319,150 @@ def task_details_modal(task, can_edit, deliverables=None):
         # Admins can reassign; non-admin owners/supervisors keep current assignment
         _is_admin_modal = st.session_state.get("user_role") == "admin"
 
-        c4, c5, c6 = st.columns([2, 2, 1])
-        with c4:
-            if _is_admin_modal:
-                new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
-                new_owner_email = user_opts.get(new_owner_disp) or task.get("owner_email")
-            else:
-                st.caption("Assignee")
-                st.write(curr_owner_disp or task.get("owner_email") or "—")
-                new_owner_email = task.get("owner_email")
-        with c5:
-            if _is_admin_modal:
-                new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
-                new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
-            else:
-                st.caption("Supervisor")
-                st.write(curr_sup_disp if curr_sup_disp != "None" else "—")
-                new_sup_email = task.get("supervisor_email")
-        with c6:
-            new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
+        # ── Edit form ─────────────────────────────────────────────────────────
+        # The form is essential: the markdown editor syncs its content into a
+        # hidden text_area, whose value only reaches the backend reliably when
+        # a form submit commits all pending widget values. A plain st.button
+        # reads a stale value and silently loses note edits. Keeping all the
+        # other inputs in the same form also avoids intermediate reruns that
+        # would remount the editor iframe while the user is typing.
+        with st.form(f"task_edit_{task['id']}", border=False):
+            new_name = st.text_input(
+                "Task name",
+                value=curr_name,
+                key=f"task_name_{task.get('id')}",
+            )
+            st.html(pills_html)
+            st.markdown("---")
 
-        # ── Markdown notes editor ────────────────────────────────
-        new_notes = markdown_editor(
-            value=task.get("notes") or "",
-            key=f"task_notes_{task['id']}",
-            height=340,
-            label="📝 Notes / Description",
-        )
+            # ── Row 1: Status | Priority | Deliverable ────────────────────────
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                new_status_display = st.selectbox(
+                    "Status", display_options,
+                    index=status_options.index(curr_status)
+                )
+            with c2:
+                priority_options = ["none", "low", "medium", "high", "urgent"]
+                curr_priority = task.get("priority", "medium")
+                if curr_priority not in priority_options:
+                    curr_priority = "medium"
+                new_priority = st.selectbox(
+                    "Priority", priority_options,
+                    index=priority_options.index(curr_priority)
+                )
+            with c3:
+                new_deliv_name = st.selectbox(
+                    "Deliverable",
+                    list(deliv_opts.keys()),
+                    index=list(deliv_opts.keys()).index(curr_deliv_name)
+                )
 
-        st.markdown("---")
+            # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────
+            c4, c5, c6 = st.columns([2, 2, 1])
+            with c4:
+                if _is_admin_modal:
+                    new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
+                else:
+                    st.caption("Assignee")
+                    st.write(curr_owner_disp or task.get("owner_email") or "—")
+                    new_owner_disp = None
+            with c5:
+                if _is_admin_modal:
+                    new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
+                else:
+                    st.caption("Supervisor")
+                    st.write(curr_sup_disp if curr_sup_disp != "None" else "—")
+                    new_sup_disp = None
+            with c6:
+                new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
 
-        c_save, c_empty, c_arch = st.columns([2, 2, 2])
-        with c_save:
-            if st.button("💾 Save Changes", type="primary", use_container_width=True):
-                try:
-                    if not (new_name or "").strip():
-                        st.error("Task name is required.")
-                        return
-                    update_data = {
-                        "name":             (new_name or "").strip(),
-                        "notes":            new_notes,
-                        "status":           new_status,
-                        "priority":         new_priority,
-                        "deliverable_id":   new_deliv_id,
-                        "owner_email":      new_owner_email,
-                        "supervisor_email": new_sup_email,
-                        "deadline":         new_deadline.isoformat() if new_deadline else None,
-                    }
+            # ── Markdown notes editor ─────────────────────────────────────────
+            new_notes = markdown_editor(
+                value=task.get("notes") or "",
+                key=f"task_notes_{task['id']}",
+                height=340,
+                label="📝 Notes / Description",
+            )
 
-                    # Auto-manage completion date
-                    if new_status == "Completed" and curr_status != "Completed":
-                        update_data["completion_date"] = datetime.datetime.now().date().isoformat()
-                    elif new_status != "Completed" and curr_status == "Completed":
-                        update_data["completion_date"] = None
+            st.markdown("---")
 
-                    supabase.table("tasks").update(update_data).eq("id", task["id"]).execute()
+            c_save, c_empty, c_arch = st.columns([2, 2, 2])
+            with c_save:
+                submitted = st.form_submit_button(
+                    "💾 Save Changes", type="primary", use_container_width=True
+                )
 
-                    # Notify on assignment changes
-                    assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
-                    enriched = {**task, **update_data}
-                    old_owner = task.get("owner_email")
-                    old_sup   = task.get("supervisor_email")
-                    if new_owner_email and new_owner_email != old_owner:
-                        send_task_assigned(enriched, new_owner_email, assigner)
-                    if new_sup_email and new_sup_email != old_sup and new_sup_email != new_owner_email:
-                        send_task_assigned(enriched, new_sup_email, assigner)
+        new_status = status_options[display_options.index(new_status_display)]
+        new_deliv_id = deliv_opts[new_deliv_name]
+        if _is_admin_modal:
+            new_owner_email = user_opts.get(new_owner_disp) or task.get("owner_email")
+            new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+        else:
+            new_owner_email = task.get("owner_email")
+            new_sup_email = task.get("supervisor_email")
 
-                    st.success("Saved!")
-                    _mde_key = f"task_notes_{task['id']}"
-                    st.session_state.pop(f"__mde_{_mde_key}", None)
-                    st.session_state.pop(f"{_mde_key}_ta", None)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-        with c_arch:
+        if submitted:
+            try:
+                if not (new_name or "").strip():
+                    st.error("Task name is required.")
+                    return
+                update_data = {
+                    "name":             (new_name or "").strip(),
+                    "notes":            new_notes,
+                    "status":           new_status,
+                    "priority":         new_priority,
+                    "deliverable_id":   new_deliv_id,
+                    "owner_email":      new_owner_email,
+                    "supervisor_email": new_sup_email,
+                    "deadline":         new_deadline.isoformat() if new_deadline else None,
+                }
+
+                # Auto-manage completion date
+                if new_status == "Completed" and curr_status != "Completed":
+                    update_data["completion_date"] = datetime.datetime.now().date().isoformat()
+                elif new_status != "Completed" and curr_status == "Completed":
+                    update_data["completion_date"] = None
+
+                # Only write fields that actually changed: avoids clobbering
+                # concurrent edits by another user holding a stale snapshot.
+                changed = {k: v for k, v in update_data.items() if task.get(k) != v}
+                if not changed:
+                    st.info("No changes to save.")
+                    return
+
+                res = supabase.table("tasks").update(changed).eq("id", task["id"]).execute()
+                if not getattr(res, "data", None):
+                    st.error("Save failed: the database did not confirm the update.")
+                    return
+
+                if "status" in changed:
+                    log_status_change(
+                        "task", task["id"], task.get("project_id"),
+                        task.get("status"), new_status,
+                        st.session_state.get("user_email"),
+                    )
+
+                # Notify on assignment changes
+                assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
+                enriched = {**task, **update_data}
+                old_owner = task.get("owner_email")
+                old_sup   = task.get("supervisor_email")
+                if new_owner_email and new_owner_email != old_owner:
+                    send_task_assigned(enriched, new_owner_email, assigner)
+                if new_sup_email and new_sup_email != old_sup and new_sup_email != new_owner_email:
+                    send_task_assigned(enriched, new_sup_email, assigner)
+
+                st.success("Saved!")
+                _mde_key = f"task_notes_{task['id']}"
+                st.session_state.pop(f"__mde_{_mde_key}", None)
+                st.session_state.pop(f"{_mde_key}_ta", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        c_a1, c_a2, c_a3 = st.columns([2, 2, 2])
+        with c_a3:
             if st.button("🗑️ Archive Task", use_container_width=True):
                 try:
                     supabase.table("tasks").update({"is_archived": True}).eq("id", task["id"]).execute()
@@ -441,6 +471,9 @@ def task_details_modal(task, can_edit, deliverables=None):
                     st.error(f"Error: {e}")
     else:
         # ── Read-only view ────────────────────────────────────────────────────
+        st.html(f"<div style='font-size:1.15rem;font-weight:700;margin-bottom:4px'>{curr_name}</div>")
+        st.html(pills_html)
+        st.markdown("---")
         st.write(f"**Status**: {status_map.get(task.get('status', 'Not started'))}")
         st.write(f"**Priority**: {render_priority_badge(task.get('priority'))}")
         if task.get("deadline"):
@@ -459,25 +492,11 @@ def subtask_details_modal(subtask, can_edit):
     st.html(_breadcrumb_html(seq_id=seq_id, proj=proj, deliv=deliv, parent_task=parent or None))
 
     curr_name = subtask.get("name", "") or ""
-    if can_edit:
-        new_name = st.text_input(
-            "Subtask name",
-            value=curr_name,
-            key=f"subtask_name_{subtask.get('id')}",
-        )
-    else:
-        st.html(f"<div style='font-size:1.15rem;font-weight:700;margin-bottom:4px'>{curr_name}</div>")
-        new_name = curr_name
-
-    st.html(
-        _persons_pills_html(
-            user_map=user_map,
-            owner_email=subtask.get("owner_email"),
-            sup_email=subtask.get("supervisor_email"),
-        )
+    pills_html = _persons_pills_html(
+        user_map=user_map,
+        owner_email=subtask.get("owner_email"),
+        sup_email=subtask.get("supervisor_email"),
     )
-    st.markdown("---")
-
     status_map = get_status_color_map()
 
     if can_edit:
@@ -485,7 +504,6 @@ def subtask_details_modal(subtask, can_edit):
         all_users = _fetch_all_users()
         user_opts = _user_opts(all_users)
 
-        # ── Row 1: Status ─────────────────────────────────────────────────────
         status_options = list(status_map.keys())
         display_options = list(status_map.values())
 
@@ -493,13 +511,6 @@ def subtask_details_modal(subtask, can_edit):
         if curr_status not in status_options:
             curr_status = "Not started"
 
-        new_status_display = st.selectbox(
-            "Status", display_options,
-            index=status_options.index(curr_status)
-        )
-        new_status = status_options[display_options.index(new_status_display)]
-
-        # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────────
         owner_keys = list(user_opts.keys())
         curr_owner_disp = _find_display(user_opts, subtask.get("owner_email"))
         owner_idx = owner_keys.index(curr_owner_disp) if curr_owner_disp in owner_keys else 0
@@ -513,71 +524,121 @@ def subtask_details_modal(subtask, can_edit):
         # Admins can reassign; non-admin owners/supervisors keep current assignment
         _is_admin_modal = st.session_state.get("user_role") == "admin"
 
-        c1, c2, c3 = st.columns([2, 2, 1])
-        with c1:
-            if _is_admin_modal:
-                new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
-                new_owner_email = user_opts.get(new_owner_disp) or subtask.get("owner_email")
-            else:
-                st.caption("Assignee")
-                st.write(curr_owner_disp or subtask.get("owner_email") or "—")
-                new_owner_email = subtask.get("owner_email")
-        with c2:
-            if _is_admin_modal:
-                new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
-                new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
-            else:
-                st.caption("Supervisor")
-                st.write(curr_sup_disp if curr_sup_disp != "None" else "—")
-                new_sup_email = subtask.get("supervisor_email")
-        with c3:
-            new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
+        # ── Edit form ─────────────────────────────────────────────────────────
+        # Same rationale as task_details_modal: the form submit is what
+        # reliably commits the hidden markdown-editor sink textarea, and it
+        # prevents intermediate reruns from remounting the editor iframe.
+        with st.form(f"subtask_edit_{subtask['id']}", border=False):
+            new_name = st.text_input(
+                "Subtask name",
+                value=curr_name,
+                key=f"subtask_name_{subtask.get('id')}",
+            )
+            st.html(pills_html)
+            st.markdown("---")
 
-        # ── Markdown notes editor ────────────────────────────────
-        new_notes = markdown_editor(
-            value=subtask.get("notes") or "",
-            key=f"subtask_notes_{subtask['id']}",
-            height=300,
-            label="📝 Notes / Description",
-        )
+            # ── Row 1: Status ─────────────────────────────────────────────────
+            new_status_display = st.selectbox(
+                "Status", display_options,
+                index=status_options.index(curr_status)
+            )
 
-        st.markdown("---")
+            # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────
+            c1, c2, c3 = st.columns([2, 2, 1])
+            with c1:
+                if _is_admin_modal:
+                    new_owner_disp = st.selectbox("Assignee", owner_keys, index=owner_idx)
+                else:
+                    st.caption("Assignee")
+                    st.write(curr_owner_disp or subtask.get("owner_email") or "—")
+                    new_owner_disp = None
+            with c2:
+                if _is_admin_modal:
+                    new_sup_disp = st.selectbox("Supervisor", sup_keys, index=sup_idx)
+                else:
+                    st.caption("Supervisor")
+                    st.write(curr_sup_disp if curr_sup_disp != "None" else "—")
+                    new_sup_disp = None
+            with c3:
+                new_deadline = st.date_input("Deadline", value=curr_deadline, format="DD/MM/YYYY")
 
-        c_save, c_empty, c_arch = st.columns([2, 2, 2])
-        with c_save:
-            if st.button("💾 Save Changes", key="save_st", type="primary", use_container_width=True):
-                try:
-                    if not (new_name or "").strip():
-                        st.error("Subtask name is required.")
-                        return
-                    update_data = {
-                        "name":             (new_name or "").strip(),
-                        "notes":            new_notes,
-                        "status":           new_status,
-                        "owner_email":      new_owner_email,
-                        "supervisor_email": new_sup_email,
-                        "deadline":         new_deadline.isoformat() if new_deadline else None,
-                    }
-                    supabase.table("subtasks").update(update_data).eq("id", subtask["id"]).execute()
+            # ── Markdown notes editor ─────────────────────────────────────────
+            new_notes = markdown_editor(
+                value=subtask.get("notes") or "",
+                key=f"subtask_notes_{subtask['id']}",
+                height=300,
+                label="📝 Notes / Description",
+            )
 
-                    # Notify on assignment changes
-                    assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
-                    enriched = {**subtask, **update_data}
-                    old_owner = subtask.get("owner_email")
-                    old_sup   = subtask.get("supervisor_email")
-                    if new_owner_email and new_owner_email != old_owner:
-                        send_task_assigned(enriched, new_owner_email, assigner)
-                    if new_sup_email and new_sup_email != old_sup and new_sup_email != new_owner_email:
-                        send_task_assigned(enriched, new_sup_email, assigner)
+            st.markdown("---")
 
-                    st.success("Saved!")
-                    _mde_key = f"subtask_notes_{subtask['id']}"
-                    st.session_state.pop(f"__mde_{_mde_key}", None)
-                    st.session_state.pop(f"{_mde_key}_ta", None)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-        with c_arch:
+            c_save, c_empty, c_arch = st.columns([2, 2, 2])
+            with c_save:
+                submitted = st.form_submit_button(
+                    "💾 Save Changes", type="primary", use_container_width=True
+                )
+
+        new_status = status_options[display_options.index(new_status_display)]
+        if _is_admin_modal:
+            new_owner_email = user_opts.get(new_owner_disp) or subtask.get("owner_email")
+            new_sup_email = user_opts.get(new_sup_disp) if new_sup_disp != "None" else None
+        else:
+            new_owner_email = subtask.get("owner_email")
+            new_sup_email = subtask.get("supervisor_email")
+
+        if submitted:
+            try:
+                if not (new_name or "").strip():
+                    st.error("Subtask name is required.")
+                    return
+                update_data = {
+                    "name":             (new_name or "").strip(),
+                    "notes":            new_notes,
+                    "status":           new_status,
+                    "owner_email":      new_owner_email,
+                    "supervisor_email": new_sup_email,
+                    "deadline":         new_deadline.isoformat() if new_deadline else None,
+                }
+
+                # Only write fields that actually changed: avoids clobbering
+                # concurrent edits by another user holding a stale snapshot.
+                changed = {k: v for k, v in update_data.items() if subtask.get(k) != v}
+                if not changed:
+                    st.info("No changes to save.")
+                    return
+
+                res = supabase.table("subtasks").update(changed).eq("id", subtask["id"]).execute()
+                if not getattr(res, "data", None):
+                    st.error("Save failed: the database did not confirm the update.")
+                    return
+
+                if "status" in changed:
+                    log_status_change(
+                        "subtask", subtask["id"], (parent or {}).get("project_id"),
+                        subtask.get("status"), new_status,
+                        st.session_state.get("user_email"),
+                    )
+
+                # Notify on assignment changes
+                assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
+                enriched = {**subtask, **update_data}
+                old_owner = subtask.get("owner_email")
+                old_sup   = subtask.get("supervisor_email")
+                if new_owner_email and new_owner_email != old_owner:
+                    send_task_assigned(enriched, new_owner_email, assigner)
+                if new_sup_email and new_sup_email != old_sup and new_sup_email != new_owner_email:
+                    send_task_assigned(enriched, new_sup_email, assigner)
+
+                st.success("Saved!")
+                _mde_key = f"subtask_notes_{subtask['id']}"
+                st.session_state.pop(f"__mde_{_mde_key}", None)
+                st.session_state.pop(f"{_mde_key}_ta", None)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+        c_a1, c_a2, c_a3 = st.columns([2, 2, 2])
+        with c_a3:
             if st.button("🗑️ Archive Subtask", key="arch_st", use_container_width=True):
                 try:
                     supabase.table("subtasks").update({"is_archived": True}).eq("id", subtask["id"]).execute()
@@ -586,6 +647,9 @@ def subtask_details_modal(subtask, can_edit):
                     st.error(f"Error: {e}")
     else:
         # ── Read-only view ────────────────────────────────────────────────────
+        st.html(f"<div style='font-size:1.15rem;font-weight:700;margin-bottom:4px'>{curr_name}</div>")
+        st.html(pills_html)
+        st.markdown("---")
         st.write(f"**Status**: {status_map.get(subtask.get('status', 'Not started'))}")
         if subtask.get("deadline"):
             st.write(f"**Deadline**: {_fmt_date(subtask.get('deadline'))}")

@@ -1,7 +1,8 @@
 import streamlit as st
 import datetime
+import html as _htmllib
 from core.supabase_client import supabase
-from db import get_settings
+from db import get_settings, compute_delay_stats, rbac_or_filter
 from utils.pdf_generator import generate_report_pdf
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
 from utils.helpers import fmt_date, sort_tasks_by_deadline, deliverable_chip_html
@@ -40,6 +41,11 @@ STATUS_SQUARE = {
 }
 
 # ─── Small HTML / formatting helpers ──────────────────────────────────────────
+
+def _esc(text) -> str:
+    """Escape user-entered content before interpolating it into st.html blocks."""
+    return _htmllib.escape(str(text or ""), quote=True)
+
 
 def _avatar_colour(name: str) -> str:
     return AVATAR_PALETTE[abs(hash(name)) % len(AVATAR_PALETTE)]
@@ -261,7 +267,7 @@ def _build_main_report_markdown(
 def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_t"):
     """Render a task row visually aligned with Active Tasks view."""
     seq_id   = t.get("sequence_id") or f"T-{t['id']}"
-    name     = t.get("name", "")
+    name     = _esc(t.get("name", ""))
     status   = t.get("status", "Not started")
     priority = (t.get("priority") or "none").lower()
 
@@ -307,7 +313,7 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
 
 def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_s"):
     """Render subtask row aligned with Active Tasks style."""
-    s_name   = s.get("name", "")
+    s_name   = _esc(s.get("name", ""))
     s_status = s.get("status", "Not started")
     s_fg, s_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
     s_badge = _badge(s_status, s_fg, s_bg)
@@ -340,12 +346,23 @@ def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: s
         if st.button("Details", key=f"{key_prefix}_{s['id']}", use_container_width=False):
             subtask_details_modal(s, can_edit=can_edit)
 
-def _fetch():
+def _fetch(rbac_email: str | None = None):
+    """Fetch report data. For non-admin users the RBAC filter on tasks and
+    subtasks is applied server-side (owner OR supervisor) instead of
+    downloading the whole tables and filtering in Python. Deliverables and
+    projects are small tables and stay unfiltered: their visibility is
+    derived later (a deliverable is shown also when it merely contains
+    visible tasks)."""
     try:
         projects     = supabase.table("projects").select("*").eq("is_archived", False).order("name").execute().data
         deliverables = supabase.table("deliverables").select("*").eq("is_archived", False).execute().data
-        tasks        = supabase.table("tasks").select("*").order("sort_order", desc=False).execute().data
-        subtasks     = supabase.table("subtasks").select("*").order("sort_order", desc=False).execute().data
+        t_q = supabase.table("tasks").select("*").order("sort_order", desc=False)
+        s_q = supabase.table("subtasks").select("*").order("sort_order", desc=False)
+        if rbac_email:
+            t_q = t_q.or_(rbac_or_filter(rbac_email))
+            s_q = s_q.or_(rbac_or_filter(rbac_email))
+        tasks        = t_q.execute().data
+        subtasks     = s_q.execute().data
         users        = supabase.table("users").select("email, name, avatar_color").execute().data
         return projects, deliverables, tasks, subtasks, users
     except Exception as e:
@@ -360,7 +377,7 @@ def _render_main_report():
     rbac_email = None if user_role == "admin" else user_email
     is_admin   = user_role == "admin"
 
-    projects, deliverables, tasks, subtasks, users = _fetch()
+    projects, deliverables, tasks, subtasks, users = _fetch(rbac_email)
     settings = get_settings()
     if not projects:
         st.info("No projects available.")
@@ -506,6 +523,16 @@ def _render_main_report():
         visible_subtask_ids = set(base_subtask_ids)
         visible_deliv_ids = set(base_deliv_ids)
 
+    # A deliverable must be visible also when it merely CONTAINS visible tasks,
+    # even if the filtered person (or the non-admin viewer) is not owner or
+    # supervisor of the deliverable itself. Without this union, a user's tasks
+    # filed under someone else's deliverable silently disappear from the report.
+    visible_deliv_ids |= {
+        t.get("deliverable_id")
+        for t in tasks
+        if t.get("id") in visible_task_ids and t.get("deliverable_id")
+    }
+
     if filt_user:
         # Requested behavior: with person filter, show only projects where that person has tasks.
         visible_proj_ids = {
@@ -577,8 +604,8 @@ def _render_main_report():
             f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:2px'>"
             f"<span style='width:18px;height:18px;background:#F59E0B;border-radius:4px;"
             f"display:inline-block'></span>"
-            f"<span style='font-size:1.5rem;font-weight:700'>{proj.get('name')} "
-            f"({proj.get('acronym','')})</span></div>"
+            f"<span style='font-size:1.5rem;font-weight:700'>{_esc(proj.get('name'))} "
+            f"({_esc(proj.get('acronym',''))})</span></div>"
         )
         caption_parts = []
         if proj.get("funding_agency"):
@@ -622,7 +649,7 @@ def _render_main_report():
                             f"margin-bottom:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>"
                             f"<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;'>Deliverable</span>"
                             f"<span style='font-size:13px;font-weight:600;color:#0F5943;'>"
-                            f"{d.get('name','')}"
+                            f"{_esc(d.get('name',''))}"
                             f"</span>"
                             f"<span style='font-size:11px;color:#2E8B6E;'>"
                             f"{d_type_chip} · deadline {d_deadline_txt}"
@@ -725,7 +752,7 @@ def _render_main_report():
 
 # ─── Carico per Persona ────────────────────────────────────────────────────────
 
-def _render_person_card(person: dict):
+def _render_person_card(person: dict, proj_map: dict):
     user         = person["user"]
     av_color     = user.get("avatar_color") or _avatar_colour(user.get("name", "?"))
     name         = user.get("name", "?")
@@ -739,6 +766,18 @@ def _render_person_card(person: dict):
     est_hours         = person["estimate_hours"]
     hours_str         = f"{int(est_hours)}h" if est_hours else "—"
     overdue_col       = "#C62828" if tasks_overdue > 0 else "#1a1a1a"
+
+    delay         = person.get("delay_stats") or {}
+    on_time_rate  = delay.get("on_time_rate")
+    avg_delay     = delay.get("avg_delay_days")
+    on_time_str   = f"{on_time_rate}%" if on_time_rate is not None else "—"
+    avg_delay_str = f"{avg_delay}d" if avg_delay is not None else "—"
+    on_time_col   = (
+        "#1a1a1a" if on_time_rate is None
+        else "#2E7D32" if on_time_rate >= 80
+        else "#E65100" if on_time_rate >= 50
+        else "#C62828"
+    )
 
     owned_tasks      = person.get("owned_tasks", person["all_user_tasks"])
     supervised_tasks = person.get("supervised_tasks", [])
@@ -763,7 +802,7 @@ def _render_person_card(person: dict):
 
     def _task_row_html(t: dict, proj_map: dict) -> str:
         seq    = t.get("sequence_id") or f"T-{t['id']}"
-        tname  = t.get("name", "")
+        tname  = _esc(t.get("name", ""))
         status = t.get("status", "Not started")
         s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
         badge  = f"<span style='background:{s_bg};color:{s_fg};border-radius:4px;padding:1px 6px;font-size:0.7rem;font-weight:600;flex-shrink:0;white-space:nowrap'>{status}</span>"
@@ -776,13 +815,6 @@ def _render_person_card(person: dict):
             f"{badge}"
             f"</div>"
         )
-
-    # Fetch projects map for badges
-    try:
-        _projs = supabase.table("projects").select("id, name, acronym, identifier").execute().data
-        proj_map = {p["id"]: p for p in _projs}
-    except Exception:
-        proj_map = {}
 
     with st.container(border=True):
         # ── Header ────────────────────────────────────────────────────────────
@@ -804,6 +836,12 @@ def _render_person_card(person: dict):
             f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>supervises</div></div>"
             f"<div><div style='font-size:1.15rem;font-weight:700;color:{overdue_col}'>{tasks_overdue}</div>"
             f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>overdue</div></div>"
+            f"<div title='Completed within deadline (tasks with both deadline and completion date)'>"
+            f"<div style='font-size:1.15rem;font-weight:700;color:{on_time_col}'>{on_time_str}</div>"
+            f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>on time</div></div>"
+            f"<div title='Average lateness of tasks completed after their deadline'>"
+            f"<div style='font-size:1.15rem;font-weight:700;color:#1a1a1a'>{avg_delay_str}</div>"
+            f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>avg delay</div></div>"
             f"<div><div style='font-size:1.15rem;font-weight:700;color:#1a1a1a'>{hours_str}</div>"
             f"<div style='font-size:0.68rem;color:#888;text-transform:uppercase;letter-spacing:.04em'>est. hours</div></div>"
             f"</div></div>"
@@ -891,8 +929,16 @@ def _render_workload_report():
 
     st.divider()
 
+    # Fetch the projects map ONCE for all cards (was previously re-fetched
+    # inside every card render).
+    try:
+        _projs = supabase.table("projects").select("id, name, acronym, identifier").execute().data
+        proj_map = {p["id"]: p for p in _projs}
+    except Exception:
+        proj_map = {}
+
     for person in data:
-        _render_person_card(person)
+        _render_person_card(person, proj_map)
         st.write("")
 
 
@@ -1052,10 +1098,12 @@ def _render_detailed_report():
     proj = proj_options[sel_proj_name]
     pid  = proj["id"]
 
-    # Fetch project data
+    # Fetch project data (tasks incl. archived: completed tasks get bulk-
+    # archived, but they still belong to the project's punctuality history)
     try:
-        deliverables = supabase.table("deliverables").select("*").eq("project_id", pid).eq("is_archived", False).order("deadline").execute().data
-        tasks        = supabase.table("tasks").select("*").eq("project_id", pid).eq("is_archived", False).order("sort_order").execute().data
+        deliverables   = supabase.table("deliverables").select("*").eq("project_id", pid).eq("is_archived", False).order("deadline").execute().data
+        tasks_all_hist = supabase.table("tasks").select("*").eq("project_id", pid).order("sort_order").execute().data
+        tasks          = [t for t in tasks_all_hist if not t.get("is_archived")]
         subtasks_all = supabase.table("subtasks").select("*").eq("is_archived", False).order("sort_order").execute().data
         # filter subtasks belonging to tasks of this project
         task_ids     = {t["id"] for t in tasks}
@@ -1075,7 +1123,7 @@ def _render_detailed_report():
     st.html(
         f"<div style='margin-bottom:8px'>"
         f"<span style='font-size:1.5rem;font-weight:700;color:#1a1a1a'>"
-        f"{proj.get('name')} ({acronym})</span></div>"
+        f"{_esc(proj.get('name'))} ({_esc(acronym)})</span></div>"
     )
     caption_parts = []
     if proj.get("funding_agency"):
@@ -1084,6 +1132,10 @@ def _render_detailed_report():
         caption_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
     caption_parts.append(f"Generated: {datetime.date.today().strftime('%Y/%m/%d')}")
     st.caption("  ·  ".join(caption_parts))
+
+    delay_stats = compute_delay_stats(
+        [t for t in tasks_all_hist if t.get("status") != "Cancelled"]
+    )
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
@@ -1095,6 +1147,34 @@ def _render_detailed_report():
         st.metric("Overdue", overdue_col)
     with m4:
         st.metric("Est. hours", f"{int(total_hours)}h" if total_hours else "—")
+
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        st.metric(
+            "Completed late",
+            delay_stats["completed_late"],
+            help="Tasks completed after their deadline (archived tasks included).",
+        )
+    with d2:
+        otr = delay_stats["on_time_rate"]
+        st.metric(
+            "On-time rate",
+            f"{otr}%" if otr is not None else "—",
+            help="Share of completed tasks (with a deadline) finished on time.",
+        )
+    with d3:
+        avg_d = delay_stats["avg_delay_days"]
+        st.metric(
+            "Avg delay",
+            f"{avg_d}d" if avg_d is not None else "—",
+            help="Average lateness of the tasks completed after their deadline.",
+        )
+    with d4:
+        st.metric(
+            "Evaluated",
+            delay_stats["completed_with_deadline"],
+            help="Completed tasks having both deadline and completion date.",
+        )
 
     st.divider()
 
@@ -1271,7 +1351,7 @@ def _render_detailed_report():
             st.html(
                 f"<div style='display:flex;align-items:center;gap:7px;flex-wrap:wrap'>"
                 f"<span style='font-family:monospace;color:#aaa;font-size:0.8rem;flex-shrink:0'>{seq}</span>"
-                f"<span style='font-size:13px;font-weight:500;color:#111'>{t.get('name','')}</span>"
+                f"<span style='font-size:13px;font-weight:500;color:#111'>{_esc(t.get('name',''))}</span>"
                 f"<span style='background:{s_bg};color:{s_fg};border-radius:4px;padding:2px 8px;"
                 f"font-size:0.78rem;font-weight:600;white-space:nowrap'>{status}</span>"
                 f"<span style='background:{p_bg};color:{p_fg};border-radius:4px;padding:2px 8px;"
@@ -1350,7 +1430,7 @@ def _render_detailed_report():
                     f"<span style='width:8px;height:8px;background:{s_dot_col};"
                     f"border-radius:50%;flex-shrink:0'></span>"
                     f"<span style='font-family:monospace;color:#aaa;font-size:0.72rem;flex-shrink:0'>{s_seq}</span>"
-                    f"<span style='font-size:13px;flex:1;min-width:80px'>{s.get('name','')}</span>"
+                    f"<span style='font-size:13px;flex:1;min-width:80px'>{_esc(s.get('name',''))}</span>"
                     f"{s_badge}"
                     f"{s_pills}"
                     f"</div>"
@@ -1386,7 +1466,7 @@ def _render_detailed_report():
                     f"padding:3px 0;font-size:0.85rem'>"
                     f"<span style='width:8px;height:8px;background:{dot_col};"
                     f"border-radius:50%;flex-shrink:0;margin-top:4px'></span>"
-                    f"<span style='flex:1'>{c.get('body','')}</span>"
+                    f"<span style='flex:1'>{_esc(c.get('body',''))}</span>"
                     f"<span style='color:#aaa;font-size:11px;white-space:nowrap;flex-shrink:0'>"
                     f"· {ts} · {author}</span>"
                     f"</div>"
@@ -1419,7 +1499,7 @@ def _render_detailed_report():
               <div style='background:#E6F7F3;padding:6px 10px;
                           display:flex;align-items:center;gap:10px;flex-wrap:wrap;'>
                 <span style='font-size:13px;font-weight:600;color:#0F5943;'>
-                  {d.get('name','')}
+                  {_esc(d.get('name',''))}
                 </span>
                 <span style='font-size:11px;color:#2E8B6E;'>
                                     {d_type_chip} · deadline {d_deadline_txt}
@@ -1492,6 +1572,185 @@ def _render_detailed_report():
             _render_task_block(t, can_edit=can_edit_t)
 
 
+# ─── Trend / progress over time ───────────────────────────────────────────────
+
+def _render_trend_report():
+    """Per-project progress over time.
+
+    Data sources:
+    - completion_date (already on every completed task → retroactive curve);
+    - created_at (added by the STATUS_HISTORY migration → real burn-up; until
+      the migration is run the total is shown as the current flat count);
+    - status_history (populated from now on at every status change).
+    Cancelled tasks are excluded; archived tasks are INCLUDED (completed tasks
+    get bulk-archived but remain part of the project history).
+    """
+    import pandas as pd
+
+    try:
+        projects = supabase.table("projects").select("id, name, acronym").eq(
+            "is_archived", False
+        ).order("name").execute().data
+    except Exception as e:
+        st.error(f"Error loading projects: {e}")
+        return
+    if not projects:
+        st.info("No active projects.")
+        return
+
+    proj_opts = {"All Projects": None}
+    proj_opts.update({p["name"]: p["id"] for p in projects})
+    sel = st.selectbox("Project", list(proj_opts.keys()), key="tr_proj")
+    pid = proj_opts[sel]
+
+    try:
+        q = supabase.table("tasks").select("*")
+        if pid is not None:
+            q = q.eq("project_id", pid)
+        tasks = q.execute().data or []
+    except Exception as e:
+        st.error(f"Error loading tasks: {e}")
+        return
+
+    tasks = [t for t in tasks if t.get("status") != "Cancelled"]
+    if not tasks:
+        st.info("No tasks for this selection.")
+        return
+
+    # ── Build weekly series ───────────────────────────────────────────────────
+    def _to_dates(values: list) -> pd.Series:
+        if not values:
+            return pd.Series(dtype="datetime64[ns]")
+        raw = pd.Series(values)
+        try:
+            # format="mixed": date-only strings and ISO timestamps can coexist
+            # (recent pandas otherwise coerces the mismatching ones to NaT)
+            s = pd.to_datetime(raw, errors="coerce", utc=True, format="mixed")
+        except (TypeError, ValueError):  # older pandas without format="mixed"
+            s = pd.to_datetime(raw, errors="coerce", utc=True)
+        s = s.dropna()
+        if s.empty:
+            return pd.Series(dtype="datetime64[ns]")
+        return s.dt.tz_localize(None)
+
+    def _week_floor(s: pd.Series) -> pd.Series:
+        """Map each timestamp to the Monday of its week."""
+        return (s - pd.to_timedelta(s.dt.weekday, unit="D")).dt.normalize()
+
+    comp_dates = _to_dates([
+        t["completion_date"] for t in tasks
+        if t.get("status") == "Completed" and t.get("completion_date")
+    ])
+    created_dates = _to_dates([t.get("created_at") for t in tasks if t.get("created_at")])
+
+    if comp_dates.empty and created_dates.empty:
+        st.info(
+            "No dated events yet: complete some tasks (completion dates feed the chart) "
+            "or run the 'Status history & trend' migration to start recording creation dates."
+        )
+        return
+
+    today = pd.Timestamp.today().normalize()
+    today_week = today - pd.Timedelta(days=int(today.weekday()))
+    start_candidates = [s.min() for s in (comp_dates, created_dates) if not s.empty]
+    start_week = min(
+        _week_floor(pd.Series(start_candidates)).min(),
+        today_week,
+    )
+    idx = pd.date_range(start=start_week, end=today_week, freq="7D")
+
+    chart = pd.DataFrame(index=idx)
+    comp_weekly = (
+        _week_floor(comp_dates).value_counts().sort_index().reindex(idx, fill_value=0)
+        if not comp_dates.empty
+        else pd.Series(0, index=idx)
+    )
+    chart["Completed (cumulative)"] = comp_weekly.cumsum()
+
+    if not created_dates.empty:
+        created_weekly = (
+            _week_floor(created_dates).value_counts().sort_index().reindex(idx, fill_value=0)
+        )
+        chart["Total tasks (cumulative)"] = created_weekly.cumsum()
+        total_caption = "Total = cumulative task creations (created_at)."
+    else:
+        chart["Total tasks (current)"] = len(tasks)
+        total_caption = (
+            "Total shown as the current flat count: run the 'Status history & trend' "
+            "migration to record task creation dates and get a real burn-up."
+        )
+
+    st.html(
+        "<p style='font-size:0.75rem;font-weight:700;letter-spacing:0.1em;color:#666;"
+        "text-transform:uppercase;margin-bottom:4px'>Progress over time (weekly)</p>"
+    )
+    st.line_chart(chart, height=320)
+    st.caption(f"Completed curve from completion_date (retroactive). {total_caption}")
+
+    if not comp_dates.empty:
+        st.html(
+            "<p style='font-size:0.75rem;font-weight:700;letter-spacing:0.1em;color:#666;"
+            "text-transform:uppercase;margin:10px 0 4px 0'>Tasks completed per week</p>"
+        )
+        st.bar_chart(pd.DataFrame({"Completed": comp_weekly}), height=200)
+
+    # ── Per-project punctuality summary (All Projects view) ──────────────────
+    if pid is None:
+        rows = []
+        for p in projects:
+            p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
+            if not p_tasks:
+                continue
+            ds = compute_delay_stats(p_tasks)
+            done = len([t for t in p_tasks if t.get("status") == "Completed"])
+            rows.append({
+                "Project": p.get("acronym") or p.get("name"),
+                "Tasks": len(p_tasks),
+                "Completed": done,
+                "Progress %": round(100 * done / len(p_tasks)),
+                "Late": ds["completed_late"],
+                "On-time %": ds["on_time_rate"],
+                "Avg delay (d)": ds["avg_delay_days"],
+            })
+        if rows:
+            st.html(
+                "<p style='font-size:0.75rem;font-weight:700;letter-spacing:0.1em;color:#666;"
+                "text-transform:uppercase;margin:10px 0 4px 0'>Per-project summary</p>"
+            )
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── Status change log (status_history) ────────────────────────────────────
+    st.divider()
+    try:
+        hq = supabase.table("status_history").select("*").order("changed_at", desc=True).limit(300)
+        if pid is not None:
+            hq = hq.eq("project_id", pid)
+        hist = hq.execute().data or []
+    except Exception:
+        hist = None
+
+    if hist is None:
+        st.caption(
+            "ℹ️ status_history table not found — run the 'Status history & trend' migration "
+            "(Admin → Settings → SQL Migrations) to start recording status changes."
+        )
+    elif not hist:
+        st.caption("No status changes recorded yet: they are logged from now on whenever a task or subtask status is edited.")
+    else:
+        hdf = pd.DataFrame(hist)
+        try:
+            hdf["changed_at"] = pd.to_datetime(hdf["changed_at"], errors="coerce", utc=True, format="mixed").dt.tz_localize(None)
+        except (TypeError, ValueError):
+            hdf["changed_at"] = pd.to_datetime(hdf["changed_at"], errors="coerce", utc=True).dt.tz_localize(None)
+        with st.expander(f"🗂️ Recent status changes ({len(hist)})", expanded=False):
+            show_cols = [c for c in ["changed_at", "item_type", "item_id", "old_status", "new_status", "changed_by_email"] if c in hdf.columns]
+            st.dataframe(
+                hdf[show_cols].head(100),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
 # ─── Main entry point ──────────────────────────────────────────────────────────
 
 def show_reports():
@@ -1500,11 +1759,12 @@ def show_reports():
     user_role = st.session_state.get("user_role")
 
     if user_role == "admin":
-        tab_main, tab_wl, tab_sp, tab_det = st.tabs([
+        tab_main, tab_wl, tab_sp, tab_det, tab_tr = st.tabs([
             "📋 Project Report",
             "👤 Workload by Person",
             "🏗️ Staff by Project",
             "📄 Detailed Report",
+            "📈 Trend",
         ])
         with tab_main:
             _render_main_report()
@@ -1514,5 +1774,7 @@ def show_reports():
             _render_staff_report()
         with tab_det:
             _render_detailed_report()
+        with tab_tr:
+            _render_trend_report()
     else:
         _render_main_report()

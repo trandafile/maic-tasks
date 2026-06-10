@@ -215,12 +215,26 @@ def _render_detail(deliverable: dict, email: str | None, is_admin: bool) -> None
     # Markdown editor (or read-only render if user has no edit rights)
     editor_key = f"paper_draft_{d_id}"
     if can_edit:
-        current_md = markdown_editor(
-            value=initial_content,
-            key=editor_key,
-            height=520,
-            label="📝 Paper draft (Markdown)",
-        )
+        # Editor + Save live in a form: the form submit is what reliably
+        # commits the hidden markdown-editor sink textarea to the backend.
+        # A plain st.button reads a stale value and silently loses edits.
+        with st.form(f"paper_draft_form_{d_id}", border=False):
+            current_md = markdown_editor(
+                value=initial_content,
+                key=editor_key,
+                height=520,
+                label="📝 Paper draft (Markdown)",
+            )
+            save_clicked = st.form_submit_button(
+                "💾 Save Draft", type="primary", use_container_width=True
+            )
+        if save_clicked:
+            ok, err = save_paper_draft(d_id, current_md, email)
+            if ok:
+                st.success("Draft saved." + (" (created)" if is_new_draft else ""))
+                st.rerun()
+            else:
+                st.error(f"Save failed: {err}")
     else:
         st.caption("📝 Paper draft (read-only — you are not owner or supervisor of this paper)")
         st.markdown(initial_content)
@@ -228,24 +242,8 @@ def _render_detail(deliverable: dict, email: str | None, is_admin: bool) -> None
 
     st.divider()
 
-    # ── Action bar ────────────────────────────────────────────────────────────
-    a1, a2, a3, a4 = st.columns(4)
-
-    with a1:
-        save_disabled = not can_edit
-        if st.button(
-            "💾 Save Draft",
-            type="primary",
-            use_container_width=True,
-            disabled=save_disabled,
-            key=f"save_paper_{d_id}",
-        ):
-            ok, err = save_paper_draft(d_id, current_md, email)
-            if ok:
-                st.success("Draft saved." + (" (created)" if is_new_draft else ""))
-                st.rerun()
-            else:
-                st.error(f"Save failed: {err}")
+    # ── Action bar (downloads reflect the last saved/rendered content) ───────
+    a2, a3, a4 = st.columns(3)
 
     base_name = _slugify(f"{proj_label}_{deliverable.get('name', 'paper')}") or f"paper_{d_id}"
     title_for_export = deliverable.get("name") or "Paper Draft"

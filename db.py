@@ -50,36 +50,31 @@ def get_deliverables(show_archived: bool = False) -> list:
 
 # ── Tasks ────────────────────────────────────────────────────────────────────
 
+def rbac_or_filter(user_email: str) -> str:
+    """PostgREST `or` expression matching rows owned or supervised by the user."""
+    return f"owner_email.eq.{user_email},supervisor_email.eq.{user_email}"
+
+
 def get_tasks(show_archived: bool = False, user_email: str | None = None) -> list:
-    """Return tasks with optional RBAC filter."""
+    """Return tasks with optional RBAC filter (applied server-side)."""
     q = supabase.table("tasks").select("*").order("sort_order", desc=False)
     if not show_archived:
         q = q.eq("is_archived", False)
-    tasks = q.execute().data
     if user_email is not None:
-        tasks = [
-            t for t in tasks
-            if t.get("owner_email") == user_email
-            or t.get("supervisor_email") == user_email
-        ]
-    return tasks
+        q = q.or_(rbac_or_filter(user_email))
+    return q.execute().data
 
 
 # ── Subtasks ──────────────────────────────────────────────────────────────────
 
 def get_subtasks(show_archived: bool = False, user_email: str | None = None) -> list:
-    """Return subtasks with optional RBAC filter."""
+    """Return subtasks with optional RBAC filter (applied server-side)."""
     q = supabase.table("subtasks").select("*").order("sort_order", desc=False)
     if not show_archived:
         q = q.eq("is_archived", False)
-    subtasks = q.execute().data
     if user_email is not None:
-        subtasks = [
-            s for s in subtasks
-            if s.get("owner_email") == user_email
-            or s.get("supervisor_email") == user_email
-        ]
-    return subtasks
+        q = q.or_(rbac_or_filter(user_email))
+    return q.execute().data
 
 
 # ── Users ────────────────────────────────────────────────────────────────────
@@ -199,6 +194,32 @@ CREATE TABLE IF NOT EXISTS deliverable_drafts (
 -- so we do the same here. Without this line, INSERT/UPDATE on
 -- deliverable_drafts fails with "new row violates row-level security policy".
 ALTER TABLE deliverable_drafts DISABLE ROW LEVEL SECURITY;
+"""
+
+
+STATUS_HISTORY_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → adds the status_history log (used by the
+-- Trend report) and creation timestamps on tasks/subtasks for progress charts.
+CREATE TABLE IF NOT EXISTS status_history (
+    id SERIAL PRIMARY KEY,
+    item_type TEXT NOT NULL CHECK (item_type IN ('task', 'subtask')),
+    item_id INTEGER NOT NULL,
+    project_id INTEGER,
+    old_status TEXT,
+    new_status TEXT,
+    changed_by_email TEXT,
+    changed_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_status_history_project ON status_history (project_id);
+CREATE INDEX IF NOT EXISTS idx_status_history_item ON status_history (item_type, item_id);
+
+-- Same pattern as the rest of the schema: the app authenticates with the
+-- publishable key and RLS is disabled on application tables.
+ALTER TABLE status_history DISABLE ROW LEVEL SECURITY;
+
+-- NOTE: pre-existing rows get created_at = time of this migration.
+ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE subtasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 """
 
 
@@ -348,6 +369,74 @@ def delete_deliverable_cascade(deliverable_id: int):
     supabase.table("deliverables").delete().eq("id", deliverable_id).execute()
 
 
+# ── Status history (audit log for trend reports) ─────────────────────────────
+
+def log_status_change(
+    item_type: str,
+    item_id: int,
+    project_id: int | None,
+    old_status: str | None,
+    new_status: str | None,
+    changed_by_email: str | None,
+) -> None:
+    """Best-effort append to status_history. Never raises: the table may not
+    exist yet (run STATUS_HISTORY_MIGRATION_SQL in the Supabase SQL Editor)
+    and a logging failure must not block the save that triggered it."""
+    try:
+        supabase.table("status_history").insert({
+            "item_type":        item_type,
+            "item_id":          item_id,
+            "project_id":       project_id,
+            "old_status":       old_status,
+            "new_status":       new_status,
+            "changed_by_email": changed_by_email,
+        }).execute()
+    except Exception as exc:
+        print(f"[db.log_status_change] {exc}")
+
+
+# ── Delay / punctuality metrics ───────────────────────────────────────────────
+
+def compute_delay_stats(tasks: list) -> dict:
+    """Punctuality stats over a list of task dicts.
+
+    Evaluates tasks with status == "Completed" that have BOTH a deadline and a
+    completion_date. Returns:
+      completed_with_deadline – evaluated tasks
+      completed_late          – completed after their deadline
+      on_time_rate            – % completed on time (None if nothing evaluable)
+      avg_delay_days          – mean lateness in days over LATE tasks (None)
+    """
+    import datetime as _dt
+
+    evaluated = 0
+    late = 0
+    delays: list[int] = []
+    for t in tasks:
+        if t.get("status") != "Completed":
+            continue
+        dl, cd = t.get("deadline"), t.get("completion_date")
+        if not dl or not cd:
+            continue
+        try:
+            d_dl = _dt.date.fromisoformat(str(dl)[:10])
+            d_cd = _dt.date.fromisoformat(str(cd)[:10])
+        except ValueError:
+            continue
+        evaluated += 1
+        delay = (d_cd - d_dl).days
+        if delay > 0:
+            late += 1
+            delays.append(delay)
+
+    return {
+        "completed_with_deadline": evaluated,
+        "completed_late": late,
+        "on_time_rate": round(100 * (evaluated - late) / evaluated) if evaluated else None,
+        "avg_delay_days": round(sum(delays) / len(delays), 1) if delays else None,
+    }
+
+
 # ── Admin workload reports ────────────────────────────────────────────────────
 
 def get_workload_per_person() -> list[dict]:
@@ -373,7 +462,7 @@ def get_workload_per_person() -> list[dict]:
 
     try:
         users        = supabase.table("users").select("*").eq("is_approved", True).execute().data
-        tasks        = supabase.table("tasks").select("*").eq("is_archived", False).execute().data
+        tasks_all    = supabase.table("tasks").select("*").execute().data
         projects     = supabase.table("projects").select("*").execute().data
     except Exception as exc:
         print(f"[db.get_workload_per_person] {exc}")
@@ -382,8 +471,11 @@ def get_workload_per_person() -> list[dict]:
     today = _dt.date.today().isoformat()
 
     proj_map = {p["id"]: p for p in projects}
-    # Exclude cancelled from all analysis
-    tasks = [t for t in tasks if t.get("status") != "Cancelled"]
+    # Exclude cancelled from all analysis. Archived tasks are kept aside:
+    # they are excluded from the workload lists but still count for the
+    # punctuality stats (completed tasks are routinely bulk-archived).
+    tasks_all = [t for t in tasks_all if t.get("status") != "Cancelled"]
+    tasks = [t for t in tasks_all if not t.get("is_archived")]
 
     result = []
     for user in users:
@@ -455,6 +547,9 @@ def get_workload_per_person() -> list[dict]:
             "owned_tasks":      owned_tasks,
             "supervised_tasks": supervised_tasks,
             "projects":         projects_detail,
+            "delay_stats":      compute_delay_stats(
+                [t for t in tasks_all if t.get("owner_email") == email]
+            ),
         })
 
     result.sort(key=lambda x: x["tasks_active"], reverse=True)

@@ -3,7 +3,7 @@ import datetime as _dt
 import json
 from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
-from db import delete_task_cascade
+from db import delete_task_cascade, log_status_change
 from utils.notifications import send_task_assigned
 from utils.helpers import fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles, deliverable_chip_html
 from utils.md_editor import markdown_editor
@@ -224,6 +224,11 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
                 seq_id = f"{ident}-{t_id}"
                 supabase.table("tasks").update({"sequence_id": seq_id}).eq("id", t_id).execute()
 
+                log_status_change(
+                    "task", t_id, project_id, None, "Not started",
+                    st.session_state.get("user_email"),
+                )
+
                 # Notify owner and supervisor
                 assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
                 proj_name = p_res.data[0].get("name", "") if p_res.data else ""
@@ -281,6 +286,17 @@ def add_subtask_modal(task_id, users):
                     "notes":            notes,
                     "sort_order":       999,
                 }).execute()
+
+                if res.data:
+                    parent_rows = supabase.table("tasks").select("project_id").eq(
+                        "id", task_id
+                    ).execute().data
+                    log_status_change(
+                        "subtask", res.data[0]["id"],
+                        parent_rows[0].get("project_id") if parent_rows else None,
+                        None, "Not started",
+                        st.session_state.get("user_email"),
+                    )
 
                 # Notify owner and supervisor
                 assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
