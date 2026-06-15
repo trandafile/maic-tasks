@@ -10,6 +10,7 @@ authors during a single day.
 
 from __future__ import annotations
 
+import re
 import streamlit as st
 import requests
 
@@ -17,6 +18,7 @@ SCOPUS_SEARCH_URL = "https://api.elsevier.com/content/search/scopus"
 PAGE_SIZE = 25
 MAX_PAGES = 40  # hard cap = 1000 papers per author, well above realistic needs
 REQUEST_TIMEOUT = 20
+RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 
 JOURNAL_TYPE = "Journal"
 CONFERENCE_TYPE = "Conference Proceeding"
@@ -45,6 +47,21 @@ def _empty_result(error: str | None = None) -> dict:
         "totals": {"journal": 0, "conference": 0, "other": 0, "all": 0},
         "error": error,
     }
+
+
+def _normalize_scopus_id(scopus_id: str) -> str:
+    """Normalize Scopus Author ID input (plain ID, prefixed value, or URL)."""
+    value = (scopus_id or "").strip()
+    if not value:
+        return ""
+
+    value = value.replace("SCOPUS_ID:", "").strip()
+    if value.isdigit():
+        return value
+
+    # Accept IDs embedded in profile URLs or pasted labels.
+    matches = re.findall(r"\d{6,}", value)
+    return matches[-1] if matches else value
 
 
 def _parse_year(cover_date: str | None) -> int | None:
@@ -95,7 +112,7 @@ def fetch_publications(scopus_id: str) -> dict:
     if not scopus_id:
         return _empty_result("Missing Scopus ID")
 
-    scopus_id = str(scopus_id).strip()
+    scopus_id = _normalize_scopus_id(str(scopus_id))
     if not scopus_id:
         return _empty_result("Missing Scopus ID")
 
@@ -126,6 +143,15 @@ def fetch_publications(scopus_id: str) -> dict:
                 params=params,
                 timeout=REQUEST_TIMEOUT,
             )
+            # Some Scopus Solr failures are transient or sort-specific.
+            if resp.status_code in RETRYABLE_STATUS_CODES:
+                fallback_params = {k: v for k, v in params.items() if k != "sort"}
+                resp = requests.get(
+                    SCOPUS_SEARCH_URL,
+                    headers=headers,
+                    params=fallback_params,
+                    timeout=REQUEST_TIMEOUT,
+                )
         except requests.RequestException as ex:
             return _empty_result(f"Network error: {ex}")
 
@@ -133,6 +159,11 @@ def fetch_publications(scopus_id: str) -> dict:
             return _empty_result("Scopus API key is invalid or unauthorized.")
         if resp.status_code == 429:
             return _empty_result("Scopus rate limit reached. Try again later.")
+        if resp.status_code in RETRYABLE_STATUS_CODES:
+            return _empty_result(
+                "Scopus service is temporarily unavailable (HTTP "
+                f"{resp.status_code}). Please retry in a few minutes."
+            )
         if resp.status_code != 200:
             return _empty_result(
                 f"Scopus API returned HTTP {resp.status_code}: {resp.text[:200]}"
