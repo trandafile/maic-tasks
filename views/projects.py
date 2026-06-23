@@ -329,7 +329,7 @@ def add_project_modal():
             acronym    = st.text_input("Acronym", help="E.g. HIPA2")
             identifier = st.text_input("Task ID Template*", help="E.g. HIP → HIP-1, HIP-2…")
         with c2:
-            start_date = st.date_input("Start Date", value=datetime.date.today(), format="DD/MM/YYYY")
+            start_date = st.date_input("Start Date", value=_dt.date.today(), format="DD/MM/YYYY")
             end_date   = st.date_input("Estimated End Date", value=None, format="DD/MM/YYYY")
         funding = st.text_input("Funding Agency")
         description = markdown_editor(
