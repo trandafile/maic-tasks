@@ -105,6 +105,8 @@ from views.admin import show_admin
 from views.master_status_report import show_master_status_report
 from views.my_papers import show_my_papers
 from views.my_paper_drafts import show_my_paper_drafts
+from views.conferences import show_conference_calendar
+from views.conference_papers import show_conference_papers
 from views.people import show_people
 
 def _run_scheduler_once():
@@ -136,21 +138,48 @@ def main():
         st.markdown(f"**Role:** {str(st.session_state.get('user_role', '')).capitalize()}")
         st.markdown("---")
 
-        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports", "My Papers", "My Paper Drafts"]
+        # Main workspace pages
+        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports"]
 
+        # Paper-related pages, grouped under a "Papers" heading
+        paper_pages = ["My Papers", "My Paper Drafts", "Conference Calendar", "Conference Paper Drafts"]
+
+        # Admin-only pages
+        admin_pages = []
         if st.session_state.get('user_role') == 'admin':
-            pages.append("People")
-            pages.append("Admin Panel")
-            pages.append("Master Status Report")
+            admin_pages = ["People", "Admin Panel", "Master Status Report"]
 
         current = st.session_state.get('current_page', 'Dashboard')
-        
-        # Render stylized navigation buttons
-        for p in pages:
-            if st.button(p, key=f"nav_{p}", use_container_width=True, type="primary" if current == p else "secondary"):
+
+        def _nav_button(p: str):
+            if st.button(p, key=f"nav_{p}", use_container_width=True,
+                         type="primary" if current == p else "secondary"):
                 st.session_state['current_page'] = p
                 st.rerun()
-        
+
+        # Render main pages
+        for p in pages:
+            _nav_button(p)
+
+        # Papers block
+        st.markdown(
+            "<div style='font-size:0.7rem;font-weight:700;letter-spacing:0.08em;"
+            "color:#888;text-transform:uppercase;margin:10px 0 2px 4px'>📄 Papers</div>",
+            unsafe_allow_html=True,
+        )
+        for p in paper_pages:
+            _nav_button(p)
+
+        # Admin block
+        if admin_pages:
+            st.markdown(
+                "<div style='font-size:0.7rem;font-weight:700;letter-spacing:0.08em;"
+                "color:#888;text-transform:uppercase;margin:10px 0 2px 4px'>🛠️ Admin</div>",
+                unsafe_allow_html=True,
+            )
+            for p in admin_pages:
+                _nav_button(p)
+
         st.markdown("---")
         if st.button("Logout", use_container_width=True):
             logout()
@@ -175,6 +204,10 @@ def main():
         show_my_papers()
     elif page == "My Paper Drafts":
         show_my_paper_drafts()
+    elif page == "Conference Calendar":
+        show_conference_calendar()
+    elif page == "Conference Paper Drafts":
+        show_conference_papers()
     elif page == "People":
         show_people()
     elif page == "Admin Panel":

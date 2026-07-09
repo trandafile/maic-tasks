@@ -16,8 +16,8 @@ import html as _htmllib
 import streamlit as st
 
 from core.supabase_client import supabase
-from db import get_settings, compute_delay_stats
-from utils.helpers import PRIORITY_ORDER, strip_markdown, deliverable_chip_html
+from db import get_settings, compute_delay_stats, get_conference_paper_tasks
+from utils.helpers import PRIORITY_ORDER, strip_markdown, deliverable_chip_html, fmt_date, sort_tasks_by_deadline
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
 
 _INACTIVE = {"Completed", "Cancelled"}
@@ -537,6 +537,52 @@ def _render_personal_metrics(email: str) -> None:
     )
 
 
+def _render_conference_priority(email: str, user_map: dict) -> None:
+    """Priority section: the user's active conference paper tasks (owner or
+    supervisor), shown above everything else so submission deadlines stay
+    front-of-mind. Rendered only when the user is involved in at least one."""
+    try:
+        tasks = get_conference_paper_tasks(user_email=email)
+    except Exception:
+        return
+    tasks = [t for t in tasks if t.get("status") not in _INACTIVE]
+    if not tasks:
+        return
+
+    st.markdown(
+        "<div style='display:flex;align-items:center;gap:8px;margin:2px 0 4px 0'>"
+        "<span style='font-size:1.05rem;font-weight:800;color:#1A3E8B'>🎤 Conference Papers</span>"
+        f"<span style='background:#EEF3FF;color:#1A3E8B;border-radius:99px;padding:1px 9px;"
+        f"font-size:0.75rem;font-weight:700'>{len(tasks)} active</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.container(border=True):
+        for t in sort_tasks_by_deadline(tasks):
+            status = t.get("status", "Not started")
+            icon, s_col = _STATUS_BADGE.get(status, ("⚪", "#888888"))
+            _, dl_html = _deadline_html(t.get("deadline"), threshold=21)
+            pills = _people_pills(t.get("owner_email"), t.get("supervisor_email"), user_map)
+            can_edit = t.get("owner_email") == email or t.get("supervisor_email") == email
+
+            c_l, c_r = st.columns([8, 1.6])
+            with c_l:
+                st.markdown(
+                    f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 0'>"
+                    f"<span style='font-size:13px;font-weight:600'>"
+                    f"{_htmllib.escape(t.get('name','') or '')}</span>"
+                    f"<span style='background:{s_col}22;color:{s_col};border-radius:4px;"
+                    f"padding:1px 8px;font-size:11px'>{icon} {status}</span>"
+                    f"<span style='margin-left:auto'>{dl_html}</span></div>"
+                    f"<div style='padding-bottom:2px'>{pills or ''}</div>",
+                    unsafe_allow_html=True,
+                )
+            with c_r:
+                if st.button("Details", key=f"confdash_{t['id']}", use_container_width=True):
+                    task_details_modal(t, can_edit=can_edit)
+    st.divider()
+
+
 def show_dashboard():
     st.title("Dashboard")
     st.markdown("**Most urgent tasks to work on**")
@@ -574,6 +620,9 @@ def show_dashboard():
     except Exception as e:
         st.error(f"Error while loading dashboard data: {e}")
         return
+
+    # Priority section: conference papers the user is involved in (front-of-mind).
+    _render_conference_priority(email, user_map)
 
     my_tasks, my_subtasks = _scope_filters(email, "owner", all_tasks, all_subtasks)
     supervised_tasks, supervised_subtasks = _scope_filters(email, "supervisor", all_tasks, all_subtasks)

@@ -129,6 +129,27 @@ CREATE INDEX IF NOT EXISTS idx_status_history_item ON status_history (item_type,
 ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE subtasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
 
+-- 12. Conferences (calendar of target venues; used by the Conference Calendar view)
+CREATE TABLE IF NOT EXISTS conferences (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    acronym TEXT,
+    year INTEGER,
+    location TEXT,
+    url TEXT,
+    topics TEXT,
+    rank TEXT,
+    submission_deadline DATE,
+    notification_date DATE,
+    camera_ready_date DATE,
+    start_date DATE,
+    end_date DATE,
+    notes TEXT,
+    is_archived BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_conferences_submission ON conferences (submission_deadline);
+
 -- Seed Initial Admin User
 INSERT INTO users (email, name, role, is_approved, avatar_color)
 VALUES ('luigi.boccia@unical.it', 'System Administrator', 'admin', TRUE, '#ff5733')

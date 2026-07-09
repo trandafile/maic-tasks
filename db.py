@@ -27,6 +27,7 @@ ALTER TABLE subtasks
 
 from core.supabase_client import supabase
 import json
+from datetime import date as _dt_date
 
 from utils.helpers import DEFAULT_DELIVERABLE_TAG_STYLES
 
@@ -220,6 +221,36 @@ ALTER TABLE status_history DISABLE ROW LEVEL SECURITY;
 -- NOTE: pre-existing rows get created_at = time of this migration.
 ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE subtasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+"""
+
+
+CONFERENCES_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → adds the conferences calendar table used by
+-- the "Conference Calendar" view (manual entry + JSON import). The app degrades
+-- gracefully until this is run: the Conference Calendar shows this snippet.
+CREATE TABLE IF NOT EXISTS conferences (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    acronym TEXT,
+    year INTEGER,
+    location TEXT,
+    url TEXT,
+    topics TEXT,
+    rank TEXT,
+    submission_deadline DATE,
+    notification_date DATE,
+    camera_ready_date DATE,
+    start_date DATE,
+    end_date DATE,
+    notes TEXT,
+    is_archived BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_conferences_submission ON conferences (submission_deadline);
+
+-- Same pattern as the rest of the schema: the app authenticates with the
+-- publishable key and RLS is disabled on application tables.
+ALTER TABLE conferences DISABLE ROW LEVEL SECURITY;
 """
 
 
@@ -848,3 +879,221 @@ def save_paper_draft(deliverable_id: int, content: str, user_email: str | None) 
         return True, ""
     except Exception as exc:
         return False, str(exc)
+
+
+# ── Conferences (calendar of target venues) ───────────────────────────────────
+
+# Field set persisted for a conference. Keep in sync with CONFERENCES_MIGRATION_SQL
+# and the JSON import/export schema exposed in the Conference Calendar view.
+CONFERENCE_FIELDS = [
+    "name", "acronym", "year", "location", "url", "topics", "rank",
+    "submission_deadline", "notification_date", "camera_ready_date",
+    "start_date", "end_date", "notes",
+]
+_CONFERENCE_DATE_FIELDS = {
+    "submission_deadline", "notification_date", "camera_ready_date",
+    "start_date", "end_date",
+}
+
+
+def _norm_conf_date(value) -> str | None:
+    """Coerce a JSON date value to an ISO 'YYYY-MM-DD' string or None."""
+    if value in (None, ""):
+        return None
+    s = str(value).strip()
+    try:
+        return _dt_date.fromisoformat(s[:10]).isoformat()
+    except Exception:
+        return None
+
+
+def normalize_conference_payload(raw: dict) -> dict | None:
+    """Validate/normalize one conference dict (from a form or JSON import).
+
+    Returns a payload with only known columns, or None when the mandatory
+    ``name`` is missing. Unknown keys are dropped; dates are coerced to ISO.
+    """
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    payload: dict = {"name": name}
+    for key in CONFERENCE_FIELDS:
+        if key == "name":
+            continue
+        if key not in raw:
+            continue
+        val = raw.get(key)
+        if key in _CONFERENCE_DATE_FIELDS:
+            payload[key] = _norm_conf_date(val)
+        elif key == "year":
+            try:
+                payload[key] = int(val) if val not in (None, "") else None
+            except (TypeError, ValueError):
+                payload[key] = None
+        else:
+            payload[key] = (str(val).strip() or None) if val is not None else None
+    return payload
+
+
+def get_conferences(show_archived: bool = False) -> list | None:
+    """Return conferences ordered by submission deadline.
+
+    Returns None (not []) when the table does not exist yet, so the caller can
+    tell 'run the migration' apart from 'no conferences yet'.
+    """
+    try:
+        q = supabase.table("conferences").select("*")
+        if not show_archived:
+            q = q.eq("is_archived", False)
+        rows = q.order("submission_deadline", desc=False).execute().data
+        return rows or []
+    except Exception as exc:
+        print(f"[db.get_conferences] {exc}")
+        return None
+
+
+def upsert_conference(payload: dict, conference_id: int | None = None) -> tuple[bool, str]:
+    """Insert (conference_id is None) or update a conference row."""
+    clean = normalize_conference_payload(payload)
+    if clean is None:
+        return False, "Conference name is required."
+    try:
+        if conference_id is None:
+            supabase.table("conferences").insert(clean).execute()
+        else:
+            supabase.table("conferences").update(clean).eq("id", conference_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def import_conferences_json(data) -> tuple[int, int, list[str]]:
+    """Bulk-insert conferences from a parsed JSON list.
+
+    Accepts either a list of dicts or a dict with a top-level 'conferences' key.
+    Returns (inserted, skipped, errors).
+    """
+    if isinstance(data, dict) and "conferences" in data:
+        data = data.get("conferences")
+    if not isinstance(data, list):
+        return 0, 0, ["JSON root must be a list of conferences (or {'conferences': [...]})."]
+
+    rows: list[dict] = []
+    skipped = 0
+    errors: list[str] = []
+    for i, item in enumerate(data):
+        clean = normalize_conference_payload(item)
+        if clean is None:
+            skipped += 1
+            errors.append(f"Entry #{i + 1} skipped: missing 'name'.")
+            continue
+        rows.append(clean)
+
+    if not rows:
+        return 0, skipped, errors or ["No valid conferences found."]
+
+    try:
+        supabase.table("conferences").insert(rows).execute()
+        return len(rows), skipped, errors
+    except Exception as exc:
+        return 0, skipped, errors + [str(exc)]
+
+
+def set_conference_archived(conference_id: int, archived: bool = True) -> None:
+    try:
+        supabase.table("conferences").update({"is_archived": archived}).eq("id", conference_id).execute()
+    except Exception as exc:
+        print(f"[db.set_conference_archived] {exc}")
+
+
+# ── Conference papers (tasks in a dedicated project — no schema change) ────────
+
+CONF_PROJECT_NAME = "Conference Papers"
+CONF_PROJECT_IDENTIFIER = "CONF"
+
+
+def get_or_create_conference_project(create: bool = True) -> dict | None:
+    """Return the dedicated 'Conference Papers' project, creating it on demand.
+
+    Conference paper drafts are modelled as ordinary tasks of this project, so
+    they reuse the whole task machinery (notes editor, RBAC, status history)
+    without any schema change. Matched by the stable CONF identifier, with a
+    name fallback for older manually-created rows.
+    """
+    try:
+        rows = supabase.table("projects").select("*").eq(
+            "identifier", CONF_PROJECT_IDENTIFIER
+        ).limit(1).execute().data
+        if rows:
+            return rows[0]
+        rows = supabase.table("projects").select("*").eq(
+            "name", CONF_PROJECT_NAME
+        ).limit(1).execute().data
+        if rows:
+            return rows[0]
+        if not create:
+            return None
+        ins = supabase.table("projects").insert({
+            "name":           CONF_PROJECT_NAME,
+            "acronym":        CONF_PROJECT_IDENTIFIER,
+            "identifier":     CONF_PROJECT_IDENTIFIER,
+            "funding_agency": None,
+            "is_archived":    False,
+        }).execute().data
+        return ins[0] if ins else None
+    except Exception as exc:
+        print(f"[db.get_or_create_conference_project] {exc}")
+        return None
+
+
+def _conference_deliverable_name(conf: dict) -> str:
+    acr = (conf.get("acronym") or conf.get("name") or "Conference").strip()
+    year = conf.get("year")
+    return f"{acr} {year}".strip() if year else acr
+
+
+def ensure_conference_deliverable(project_id: int, conf: dict) -> int | None:
+    """Find or create the deliverable projecting a target conference inside the
+    Conference Papers project. Returns its id (paper tasks link to it).
+
+    The deliverable is a lightweight projection of the conferences row: it
+    carries the submission deadline so linked paper tasks inherit a meaningful
+    due date and show up in the existing Calendar/Reports views.
+    """
+    name = _conference_deliverable_name(conf)
+    try:
+        rows = supabase.table("deliverables").select("id").eq(
+            "project_id", project_id
+        ).eq("name", name).limit(1).execute().data
+        if rows:
+            return rows[0]["id"]
+        ins = supabase.table("deliverables").insert({
+            "project_id": project_id,
+            "name":       name,
+            "type":       "conference",
+            "status":     "Not started",
+            "deadline":   _norm_conf_date(conf.get("submission_deadline")),
+        }).execute().data
+        return ins[0]["id"] if ins else None
+    except Exception as exc:
+        print(f"[db.ensure_conference_deliverable] {exc}")
+        return None
+
+
+def get_conference_paper_tasks(user_email: str | None = None) -> list:
+    """Return active tasks of the Conference Papers project (optional RBAC)."""
+    proj = get_or_create_conference_project(create=False)
+    if not proj:
+        return []
+    try:
+        q = supabase.table("tasks").select("*").eq(
+            "project_id", proj["id"]
+        ).eq("is_archived", False)
+        if user_email is not None:
+            q = q.or_(rbac_or_filter(user_email))
+        return q.order("sort_order", desc=False).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_conference_paper_tasks] {exc}")
+        return []
