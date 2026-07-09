@@ -23,6 +23,7 @@ from db import (
     upsert_conference,
     import_conferences_json,
     set_conference_archived,
+    delete_conference,
     CONFERENCE_FIELDS,
     CONFERENCES_MIGRATION_SQL,
 )
@@ -49,6 +50,17 @@ _DEFAULT_TOPICS = (
     "phased arrays, transmitarrays, reflectarrays; K/Ka/E/W/D-band front-ends; "
     "5G/6G, SatCom and radar front-ends"
 )
+
+# Geographic macro-areas selectable for the Gemini prompt (travel constraints).
+_GEO_REGIONS = {
+    "Europe": "Europe (EU, UK, Switzerland, etc.)",
+    "North America": "North America (USA, Canada)",
+    "Asia-Pacific (excl. China)": "Asia-Pacific excluding mainland China (Japan, South Korea, Singapore, Australia, India, etc.)",
+    "China": "Mainland China",
+    "Middle East & Africa": "Middle East and Africa",
+    "Latin America": "Latin America",
+    "Online / hybrid": "Fully online or hybrid venues (no travel required)",
+}
 
 
 def _iso(value: str | None) -> datetime.date | None:
@@ -96,8 +108,17 @@ def _json_schema_hint() -> str:
     )
 
 
-def _build_gemini_prompt(topics: str, horizon_months: int) -> str:
+def _build_gemini_prompt(topics: str, horizon_months: int, regions: list[str]) -> str:
     today = datetime.date.today()
+    if regions:
+        region_desc = "; ".join(_GEO_REGIONS.get(r, r) for r in regions)
+        geo_line = (
+            "- GEOGRAPHIC SCOPE: include ONLY conferences physically held in these "
+            f"macro-areas: {region_desc}. Exclude venues held anywhere else. "
+            "Online/hybrid venues count only if 'Online / hybrid' is listed above.\n"
+        )
+    else:
+        geo_line = "- GEOGRAPHIC SCOPE: any region.\n"
     return (
         "You are a research assistant for the MAIC Lab (University of Calabria, DIMES). "
         "Perform a deep web search and compile a calendar of upcoming academic "
@@ -107,11 +128,12 @@ def _build_gemini_prompt(topics: str, horizon_months: int) -> str:
         f"- Only conferences whose paper submission deadline is between {today.isoformat()} "
         f"and {(today + datetime.timedelta(days=30 * horizon_months)).isoformat()} "
         f"(next {horizon_months} months).\n"
+        f"{geo_line}"
         "- Prefer IEEE/EuMA/URSI and other reputable venues; include the venue rank "
         "(CORE/GGS/Qualis) when known.\n"
         "- Verify every date against the official conference website; do not invent dates. "
         "If a date is unknown, use null.\n"
-        "- Use ISO dates (YYYY-MM-DD).\n\n"
+        "- Use ISO dates (YYYY-MM-DD). Put the host city and country in 'location'.\n\n"
         "OUTPUT:\n"
         "Return ONLY a valid JSON array (no prose, no markdown fences) where each "
         "element has exactly these keys:\n"
@@ -275,6 +297,81 @@ def _conferences_to_json(conferences: list[dict]) -> str:
     return json.dumps(out, indent=2, ensure_ascii=False)
 
 
+# ── Admin: manage the full database (archive / restore / delete) ──────────────
+
+def _render_admin_manage_section() -> None:
+    """Admin-only: full list of every conference (active + archived) with
+    permanent delete and archive/restore, to prune non-pertinent entries."""
+    with st.expander("🗂️ Manage all conferences (delete / archive)", expanded=False):
+        all_conf = get_conferences(show_archived=True)
+        if all_conf is None:
+            st.caption("Conferences table not available.")
+            return
+        if not all_conf:
+            st.caption("No conferences in the database.")
+            return
+
+        st.caption(
+            f"{len(all_conf)} conference(s) in the database. **Delete** is permanent; "
+            "**Archive** just hides an entry from the calendar."
+        )
+
+        # Sort: active first, then by submission deadline / name.
+        all_conf = sorted(
+            all_conf,
+            key=lambda c: (
+                bool(c.get("is_archived")),
+                c.get("submission_deadline") or "9999-12-31",
+                (c.get("acronym") or c.get("name") or "").lower(),
+            ),
+        )
+
+        for c in all_conf:
+            cid = c.get("id")
+            archived = bool(c.get("is_archived"))
+            label = c.get("acronym") or c.get("name") or f"Conference {cid}"
+            if c.get("year"):
+                label = f"{label} {c['year']}"
+            sub = fmt_date(c.get("submission_deadline")) if c.get("submission_deadline") else "—"
+            tag = " 🗄️ archived" if archived else ""
+
+            info_col, arch_col, del_col = st.columns([6, 1.3, 1.3])
+            with info_col:
+                st.markdown(
+                    f"<div style='padding:4px 0'>"
+                    f"<span style='font-weight:600'>{html.escape(str(label))}</span>"
+                    f"<span style='color:#888;font-size:12px'> · submission {sub}"
+                    f"{' · ' + html.escape(str(c.get('location'))) if c.get('location') else ''}"
+                    f"<span style='color:#B26A00'>{tag}</span></span></div>",
+                    unsafe_allow_html=True,
+                )
+            with arch_col:
+                if archived:
+                    if st.button("♻️ Restore", key=f"conf_restore_{cid}", use_container_width=True):
+                        set_conference_archived(cid, False)
+                        st.rerun()
+                else:
+                    if st.button("🗄️ Archive", key=f"conf_mgmt_arch_{cid}", use_container_width=True):
+                        set_conference_archived(cid, True)
+                        st.rerun()
+            with del_col:
+                confirm_key = f"_conf_del_confirm_{cid}"
+                if st.session_state.get(confirm_key):
+                    if st.button("✅ Confirm", key=f"conf_del_ok_{cid}", type="primary", use_container_width=True):
+                        ok, err = delete_conference(cid)
+                        st.session_state.pop(confirm_key, None)
+                        if ok:
+                            st.rerun()
+                        else:
+                            st.error(f"Delete failed: {err}")
+                else:
+                    if st.button("🗑️ Delete", key=f"conf_del_{cid}", use_container_width=True):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+            if st.session_state.get(f"_conf_del_confirm_{cid}"):
+                st.caption(f"⚠️ Permanently delete **{label}**? Click *Confirm* to proceed.")
+
+
 # ── Main view ──────────────────────────────────────────────────────────────────
 
 def show_conference_calendar() -> None:
@@ -301,6 +398,7 @@ def show_conference_calendar() -> None:
                 "Paste a JSON array of conferences (or upload a .json file). Missing "
                 "keys are allowed; each entry needs at least a `name`."
             )
+            st.caption("Conferences already in the database (matched by acronym/name + year) are skipped automatically.")
             up = st.file_uploader("Upload .json", type=["json"], key="conf_json_up")
             pasted = st.text_area("…or paste JSON here", height=160, key="conf_json_paste")
             if st.button("Import conferences", key="conf_import_btn"):
@@ -320,10 +418,18 @@ def show_conference_calendar() -> None:
                     except Exception as ex:
                         st.error(f"Invalid JSON: {ex}")
                     else:
-                        inserted, skipped, errors = import_conferences_json(data)
+                        inserted, skipped_invalid, skipped_dup, errors = import_conferences_json(data)
                         if inserted:
-                            st.success(f"Imported {inserted} conference(s). Skipped {skipped}.")
-                        for e in errors[:8]:
+                            st.success(
+                                f"Imported {inserted} new conference(s). "
+                                f"Duplicates skipped: {skipped_dup}. Invalid skipped: {skipped_invalid}."
+                            )
+                        else:
+                            st.info(
+                                f"Nothing imported. Duplicates skipped: {skipped_dup}. "
+                                f"Invalid skipped: {skipped_invalid}."
+                            )
+                        for e in errors[:10]:
                             st.warning(e)
                         if inserted:
                             st.rerun()
@@ -334,14 +440,26 @@ def show_conference_calendar() -> None:
                 "returns into *Import from JSON* above."
             )
             topics = st.text_area("Research areas", value=_DEFAULT_TOPICS, height=90, key="conf_prompt_topics")
-            horizon = st.slider("Horizon (months)", 3, 24, 12, key="conf_prompt_horizon")
-            prompt = _build_gemini_prompt(topics, horizon)
+            pc1, pc2 = st.columns([2, 1])
+            with pc1:
+                regions = st.multiselect(
+                    "Geographic macro-areas (leave empty for any region)",
+                    options=list(_GEO_REGIONS.keys()),
+                    default=["Europe", "Online / hybrid"],
+                    key="conf_prompt_regions",
+                    help="Restrict the search to reachable venues — e.g. exclude USA/China.",
+                )
+            with pc2:
+                horizon = st.slider("Horizon (months)", 3, 24, 12, key="conf_prompt_horizon")
+            prompt = _build_gemini_prompt(topics, horizon, regions)
             st.code(prompt, language="text")
             st.download_button(
                 "⬇️ Download prompt (.txt)", data=prompt,
                 file_name="gemini_conference_prompt.txt", mime="text/plain",
                 key="conf_prompt_dl",
             )
+
+        _render_admin_manage_section()
 
     if not conferences:
         st.info(

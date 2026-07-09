@@ -969,36 +969,65 @@ def upsert_conference(payload: dict, conference_id: int | None = None) -> tuple[
         return False, str(exc)
 
 
-def import_conferences_json(data) -> tuple[int, int, list[str]]:
-    """Bulk-insert conferences from a parsed JSON list.
+def conference_dedup_key(row: dict) -> tuple:
+    """Identity of a conference for duplicate detection: (acronym|name, year).
+
+    Acronym is preferred; name is the fallback when no acronym is given. Year is
+    part of the key so the 2026 and 2027 editions are treated as distinct.
+    """
+    acr = (row.get("acronym") or "").strip().lower()
+    name = (row.get("name") or "").strip().lower()
+    return (acr or name, row.get("year"))
+
+
+def import_conferences_json(data) -> tuple[int, int, int, list[str]]:
+    """Bulk-insert conferences from a parsed JSON list, skipping duplicates.
 
     Accepts either a list of dicts or a dict with a top-level 'conferences' key.
-    Returns (inserted, skipped, errors).
+    A conference is a duplicate when its (acronym|name, year) key already exists
+    in the table (archived rows included) or appears earlier in the same batch.
+    Returns (inserted, skipped_invalid, skipped_duplicate, errors).
     """
     if isinstance(data, dict) and "conferences" in data:
         data = data.get("conferences")
     if not isinstance(data, list):
-        return 0, 0, ["JSON root must be a list of conferences (or {'conferences': [...]})."]
+        return 0, 0, 0, ["JSON root must be a list of conferences (or {'conferences': [...]})."]
+
+    # Existing keys (include archived, so we don't resurrect a removed one).
+    existing = get_conferences(show_archived=True)
+    if existing is None:
+        return 0, 0, 0, ["The 'conferences' table does not exist. Run the migration first."]
+    seen: set[tuple] = {conference_dedup_key(c) for c in existing}
 
     rows: list[dict] = []
-    skipped = 0
+    skipped_invalid = 0
+    skipped_dup = 0
     errors: list[str] = []
     for i, item in enumerate(data):
         clean = normalize_conference_payload(item)
         if clean is None:
-            skipped += 1
+            skipped_invalid += 1
             errors.append(f"Entry #{i + 1} skipped: missing 'name'.")
             continue
+        key = conference_dedup_key(clean)
+        if key in seen:
+            skipped_dup += 1
+            errors.append(
+                f"'{clean.get('acronym') or clean.get('name')}"
+                f"{(' ' + str(clean['year'])) if clean.get('year') else ''}' already present — skipped."
+            )
+            continue
+        seen.add(key)
         rows.append(clean)
 
     if not rows:
-        return 0, skipped, errors or ["No valid conferences found."]
+        return 0, skipped_invalid, skipped_dup, errors or ["No new conferences to import."]
 
     try:
         supabase.table("conferences").insert(rows).execute()
-        return len(rows), skipped, errors
+        return len(rows), skipped_invalid, skipped_dup, errors
     except Exception as exc:
-        return 0, skipped, errors + [str(exc)]
+        return 0, skipped_invalid, skipped_dup, errors + [str(exc)]
 
 
 def set_conference_archived(conference_id: int, archived: bool = True) -> None:
@@ -1006,6 +1035,15 @@ def set_conference_archived(conference_id: int, archived: bool = True) -> None:
         supabase.table("conferences").update({"is_archived": archived}).eq("id", conference_id).execute()
     except Exception as exc:
         print(f"[db.set_conference_archived] {exc}")
+
+
+def delete_conference(conference_id: int) -> tuple[bool, str]:
+    """Hard-delete a conference row (admin cleanup of non-pertinent entries)."""
+    try:
+        supabase.table("conferences").delete().eq("id", conference_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
 
 
 # ── Conference papers (tasks in a dedicated project — no schema change) ────────

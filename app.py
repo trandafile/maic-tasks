@@ -1,13 +1,54 @@
 import streamlit as st
 import os
 import sys
+from pathlib import Path
+
+# ── MAIC LAB branding ─────────────────────────────────────────────────────────
+# Drop a logo file into  assets/  to brand the whole app. The first existing of
+# these names is used; PNG/SVG with transparent background works best.
+_ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+_LOGO_CANDIDATES = [
+    "maic_logo.png", "maic_logo.svg", "maic_logo.jpg", "maic_logo.jpeg",
+    "logo.png", "logo.svg",
+]
+# A separate small square mark for the collapsed sidebar / browser tab (optional).
+_ICON_CANDIDATES = ["maic_icon.png", "maic_mark.png", "maic_logo.png", "logo.png"]
+
+
+def _first_existing(names) -> str | None:
+    for n in names:
+        p = _ASSETS_DIR / n
+        if p.exists():
+            return str(p)
+    return None
+
+
+_LOGO_PATH = _first_existing(_LOGO_CANDIDATES)
+_ICON_PATH = _first_existing(_ICON_CANDIDATES)
 
 # Configure main page BEFORE any other Streamlit calls
 st.set_page_config(
-    page_title="MAIC LAB - Task Manager", 
-    page_icon="✅", 
-    layout="wide"
+    page_title="MAIC LAB - Task Manager",
+    page_icon=_ICON_PATH or "✅",
+    layout="wide",
 )
+
+
+def _apply_branding():
+    """Show the MAIC LAB logo across the app (top bar + sidebar). Falls back to
+    a text wordmark if no logo file has been added to assets/."""
+    if _LOGO_PATH and hasattr(st, "logo"):
+        try:
+            st.logo(_LOGO_PATH, icon_image=_ICON_PATH or _LOGO_PATH, size="large")
+            return
+        except Exception:
+            pass  # older Streamlit / bad file → fall through to text wordmark
+    with st.sidebar:
+        st.markdown(
+            "<div style='font-weight:800;font-size:1.1rem;color:#1A3E8B;"
+            "letter-spacing:0.02em;margin-bottom:6px'>MAIC&nbsp;LAB</div>",
+            unsafe_allow_html=True,
+        )
 
 # Custom CSS for UI enhancements (matching hipa)
 st.markdown("""
@@ -77,7 +118,18 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.auth import check_login, logout
 
-APP_BUILD_LABEL = "beta 1.18.71"
+def _load_build_label(default: str = "beta 1.18.72") -> str:
+    """Load build label from the same file used by upload.bat."""
+    version_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".upload_version.txt")
+    try:
+        with open(version_file, "r", encoding="utf-8") as f:
+            value = f.readline().strip()
+            return value if value else default
+    except OSError:
+        return default
+
+
+APP_BUILD_LABEL = _load_build_label()
 
 def init_session_state():
     """Inizializza tutte le chiavi necessarie nello stato della sessione"""
@@ -123,6 +175,9 @@ def _run_scheduler_once():
 
 def main():
     init_session_state()
+
+    # MAIC LAB logo on every page (login screen included)
+    _apply_branding()
 
     # Se non siamo loggati, mostra pagina login auth di Google
     is_authenticated = check_login()
