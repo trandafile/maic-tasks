@@ -112,6 +112,37 @@ def send_task_assigned(task: dict, assignee_email: str, assigner_name: str) -> b
     return _send(subject, body, assignee_email)
 
 
+def send_task_comment(task: dict, recipient_email: str, author_name: str, body_text: str) -> bool:
+    """Notify a task owner/supervisor that a new comment was posted."""
+    if not recipient_email:
+        return False
+
+    cfg     = _get_settings()
+    app_url = cfg.get("app_url", "http://localhost:8501")
+    recipient_name = _get_name_from_email(recipient_email).split()[0]
+
+    seq_id    = task.get("sequence_id") or f"T-{task.get('id', '?')}"
+    task_name = task.get("name", "")
+    project   = task.get("project_name", "")
+
+    snippet = (body_text or "").strip()
+    if len(snippet) > 500:
+        snippet = snippet[:500].rstrip() + "…"
+
+    project_line = f"Progetto: {project}\n" if project else ""
+    subject = f"[MAIC LAB] Nuovo commento: {seq_id} — {task_name}"
+    body = (
+        f"Ciao {recipient_name},\n\n"
+        f"{author_name} ha scritto un commento sul task seguente.\n\n"
+        f"Task: {seq_id} — {task_name}\n"
+        f"{project_line}\n"
+        f"Commento:\n{snippet}\n\n"
+        f"Rispondi dall'app: {app_url}\n\n"
+        f"— MAIC LAB Task Manager"
+    )
+    return _send(subject, body, recipient_email)
+
+
 def send_deadline_reminder(task: dict, assignee_email: str, days_left: int) -> bool:
     """Notify assignee that deadline is approaching."""
     if not assignee_email:

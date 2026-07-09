@@ -1,10 +1,14 @@
 import streamlit as st
 import datetime
 import json
+import html as _html
 from core.supabase_client import supabase
-from db import get_settings, log_status_change
+from db import (
+    get_settings, log_status_change,
+    get_comments, add_comment, update_comment, delete_comment,
+)
 from utils.md_editor import markdown_editor
-from utils.notifications import send_task_assigned
+from utils.notifications import send_task_assigned, send_task_comment
 from utils.helpers import parse_deliverable_tag_styles
 
 
@@ -266,6 +270,146 @@ def _parse_date(value: str | None) -> datetime.date | None:
         return None
 
 
+# ── Comments thread ───────────────────────────────────────────────────────────
+
+def _fmt_comment_ts(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        clean = str(value).replace("Z", "+00:00")
+        return datetime.datetime.fromisoformat(clean).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return str(value)[:16].replace("T", " ")
+
+
+def _can_edit_comment(comment: dict) -> bool:
+    """A comment can be edited/deleted by its author or by any admin."""
+    if st.session_state.get("user_role") == "admin":
+        return True
+    me = st.session_state.get("user_email")
+    return bool(me) and comment.get("author_email") == me
+
+
+# Callbacks run BEFORE the rerun, so the dialog re-renders with fresh data
+# without us calling st.rerun() (which would close the dialog).
+
+def _delete_comment_cb(comment_id: int):
+    delete_comment(comment_id)
+    st.session_state.pop(f"_edit_comment_{comment_id}", None)
+
+
+def _start_edit_comment_cb(comment_id: int):
+    st.session_state[f"_edit_comment_{comment_id}"] = True
+
+
+def _cancel_edit_comment_cb(comment_id: int):
+    st.session_state.pop(f"_edit_comment_{comment_id}", None)
+    st.session_state.pop(f"_edit_body_{comment_id}", None)
+
+
+def _save_edit_comment_cb(comment_id: int):
+    body = st.session_state.get(f"_edit_body_{comment_id}", "")
+    ok, _ = update_comment(comment_id, body)
+    if ok:
+        st.session_state.pop(f"_edit_comment_{comment_id}", None)
+        st.session_state.pop(f"_edit_body_{comment_id}", None)
+
+
+def _notify_comment(task: dict, author_email: str | None, body: str, project_name: str | None):
+    """Email the task owner and supervisor (except the comment's author)."""
+    author_name = st.session_state.get("user_name") or author_email or "Someone"
+    enriched = {**task, "project_name": project_name or task.get("project_name", "")}
+    recipients = {
+        e for e in (task.get("owner_email"), task.get("supervisor_email"))
+        if e and e != author_email
+    }
+    for e in recipients:
+        try:
+            send_task_comment(enriched, e, author_name, body)
+        except Exception as exc:  # never let a mail failure break the post
+            print(f"[modals._notify_comment] {exc}")
+
+
+def _render_one_comment(c: dict, me: str | None):
+    cid = c.get("id")
+    is_system = bool(c.get("is_system_event"))
+    author = c.get("author_name") or c.get("author_email") or "?"
+    ts = _fmt_comment_ts(c.get("created_at"))
+
+    if st.session_state.get(f"_edit_comment_{cid}") and not is_system:
+        st.text_area(
+            "Edit comment", value=c.get("body", ""), key=f"_edit_body_{cid}",
+            height=80, label_visibility="collapsed",
+        )
+        e1, e2, _ = st.columns([1, 1, 4])
+        e1.button("💾 Save", key=f"_csave_{cid}", on_click=_save_edit_comment_cb, args=(cid,))
+        e2.button("Cancel", key=f"_ccancel_{cid}", on_click=_cancel_edit_comment_cb, args=(cid,))
+        return
+
+    dot = "#2E7D32" if is_system else "#1565C0"
+    st.html(
+        f"<div style='display:flex;align-items:flex-start;gap:8px;padding:6px 0;"
+        f"border-bottom:1px solid #f2f2f2'>"
+        f"<span style='width:8px;height:8px;border-radius:50%;background:{dot};"
+        f"margin-top:6px;flex-shrink:0'></span>"
+        f"<div style='flex:1'>"
+        f"<div style='font-size:11px;color:#888'>"
+        f"<b style='color:#444'>{_html.escape(str(author))}</b>"
+        f"{'  · system' if is_system else ''} · {ts}</div>"
+        f"<div style='font-size:13px;color:#222;white-space:pre-wrap'>"
+        f"{_html.escape(c.get('body','') or '')}</div>"
+        f"</div></div>"
+    )
+    if not is_system and _can_edit_comment(c):
+        b1, b2, _ = st.columns([1, 1, 6])
+        b1.button("✏️ Edit", key=f"_cedit_{cid}", on_click=_start_edit_comment_cb, args=(cid,))
+        b2.button("🗑️ Delete", key=f"_cdel_{cid}", on_click=_delete_comment_cb, args=(cid,))
+
+
+def _render_task_comments(task: dict, can_edit: bool, project_name: str | None = None):
+    """Discussion thread for a task. Posting is restricted to admin / owner /
+    supervisor (``can_edit``); everyone viewing the task can read it."""
+    task_id = task.get("id")
+    if not task_id:
+        return
+    me = st.session_state.get("user_email")
+
+    st.markdown("---")
+
+    # Placeholder so the thread renders ABOVE the input but is filled AFTER the
+    # post is processed (so a just-posted comment shows without st.rerun).
+    thread_box = st.container()
+
+    if can_edit:
+        with st.form(f"comment_form_{task_id}", clear_on_submit=True):
+            new_body = st.text_area(
+                "Add a comment", key=f"_new_comment_{task_id}", height=80,
+                label_visibility="collapsed", placeholder="Write a comment…",
+            )
+            posted = st.form_submit_button("💬 Post comment", type="primary")
+        if posted:
+            if not (new_body or "").strip():
+                st.warning("Comment is empty.")
+            else:
+                ok, err = add_comment(task_id, me, new_body)
+                if ok:
+                    _notify_comment(task, me, new_body, project_name)
+                    st.toast("Comment posted")
+                else:
+                    st.error(f"Could not post: {err}")
+    elif me:
+        st.caption("Only the task owner, supervisor or an admin can post comments.")
+
+    comments = get_comments(task_id, include_system=True)
+    user_comments = [c for c in comments if not c.get("is_system_event")]
+    with thread_box:
+        st.markdown(f"**💬 Comments ({len(user_comments)})**")
+        if not comments:
+            st.caption("No comments yet.")
+        for c in comments:
+            _render_one_comment(c, me)
+
+
 # ── Modals ────────────────────────────────────────────────────────────────────
 
 @st.dialog("Task Details", width="large")
@@ -482,6 +626,9 @@ def task_details_modal(task, can_edit, deliverables=None):
             st.write(f"**Completed on**: {_fmt_date(task.get('completion_date'))}")
         st.write("**Notes/Description**:")
         st.markdown(task.get("notes") or "*No notes provided.*")
+
+    # ── Comments thread (shown in both edit and read-only modes) ──────────────
+    _render_task_comments(task, can_edit=can_edit, project_name=proj.get("name"))
 
 
 @st.dialog("Subtask Details", width="large")

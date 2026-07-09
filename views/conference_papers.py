@@ -25,8 +25,9 @@ from db import (
     get_conferences,
     ensure_conference_deliverable,
     log_status_change,
+    get_comment_counts,
 )
-from utils.helpers import fmt_date, sort_tasks_by_deadline
+from utils.helpers import fmt_date, sort_tasks_by_deadline, comment_badge_html
 from utils.modals import task_details_modal, person_pill_html
 from utils.notifications import send_task_assigned
 
@@ -163,11 +164,12 @@ def _add_paper_modal(project_id: int, users: list[dict], conferences: list[dict]
                 st.error(f"Error: {e}")
 
 
-def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str):
+def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str, comment_counts: dict):
     status = t.get("status", "Not started")
     s_fg, s_bg = _STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
     seq = t.get("sequence_id") or f"CONF-{t['id']}"
     pills = _people_pills(t.get("owner_email"), t.get("supervisor_email"), user_map)
+    cc_html = comment_badge_html(comment_counts.get(t.get("id"), 0))
 
     col_l, col_r = st.columns([8, 1.6])
     with col_l:
@@ -176,6 +178,7 @@ def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str):
             f"<span style='font-family:monospace;color:#aaa;font-size:11px'>{html.escape(seq)}</span>"
             f"<span style='font-size:13px;font-weight:600'>{html.escape(t.get('name',''))}</span>"
             f"{_badge(status, s_fg, s_bg)}"
+            f"{cc_html}"
             f"<span style='margin-left:6px'>{_deadline_html(t.get('deadline'))}</span>"
             f"</div>"
             f"<div style='padding-bottom:3px'>{pills or ''}</div>",
@@ -225,6 +228,7 @@ def show_conference_papers() -> None:
 
     user_map = {u["email"]: u for u in users}
     conferences = get_conferences(show_archived=False) or []
+    comment_counts = get_comment_counts([t["id"] for t in tasks]) if tasks else {}
 
     top_l, top_r = st.columns([3, 1.4])
     with top_l:
@@ -275,4 +279,4 @@ def show_conference_papers() -> None:
             unsafe_allow_html=True,
         )
         for t in sort_tasks_by_deadline(group_tasks):
-            _render_paper_row(t, user_map, can_edit=_can_edit(t), key_prefix=f"confp_{did}")
+            _render_paper_row(t, user_map, can_edit=_can_edit(t), key_prefix=f"confp_{did}", comment_counts=comment_counts)

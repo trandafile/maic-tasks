@@ -765,6 +765,94 @@ def get_subtask_detail(subtask_id: int) -> dict | None:
         return None
 
 
+# ── Comments (task discussion thread) ─────────────────────────────────────────
+
+def _comment_author_name(row: dict) -> str:
+    """Resolve the author display name from a `users(name)` join (dict or list)."""
+    rel = row.get("users")
+    if isinstance(rel, dict):
+        return rel.get("name") or row.get("author_email") or "?"
+    if isinstance(rel, list) and rel:
+        return rel[0].get("name") or row.get("author_email") or "?"
+    return row.get("author_email") or "?"
+
+
+def get_comments(task_id: int, include_system: bool = True) -> list[dict]:
+    """Return the comment thread of a task, oldest first, with `author_name`."""
+    try:
+        q = supabase.table("comments").select("*, users(name)").eq("task_id", task_id)
+        if not include_system:
+            q = q.eq("is_system_event", False)
+        rows = q.order("created_at", desc=False).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_comments] {exc}")
+        return []
+    for r in rows:
+        r["author_name"] = _comment_author_name(r)
+    return rows
+
+
+def add_comment(task_id: int, author_email: str | None, body: str) -> tuple[bool, str]:
+    """Insert a user comment. Returns (success, error)."""
+    text = (body or "").strip()
+    if not text:
+        return False, "Empty comment."
+    try:
+        res = supabase.table("comments").insert({
+            "task_id":         task_id,
+            "author_email":    author_email,
+            "body":            text,
+            "is_system_event": False,
+        }).execute()
+        if not getattr(res, "data", None):
+            return False, "The database did not confirm the insert."
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def update_comment(comment_id: int, body: str) -> tuple[bool, str]:
+    """Edit a comment body. Returns (success, error)."""
+    text = (body or "").strip()
+    if not text:
+        return False, "Empty comment."
+    try:
+        supabase.table("comments").update({"body": text}).eq("id", comment_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def delete_comment(comment_id: int) -> tuple[bool, str]:
+    try:
+        supabase.table("comments").delete().eq("id", comment_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def get_comment_counts(task_ids: list[int] | None = None) -> dict[int, int]:
+    """Return {task_id: user-comment count} for a badge on task rows.
+
+    One query; system events are excluded so the badge reflects human
+    discussion only. Empty/failed → {} (badge simply not shown).
+    """
+    try:
+        q = supabase.table("comments").select("task_id").eq("is_system_event", False)
+        if task_ids:
+            q = q.in_("task_id", list(task_ids))
+        rows = q.execute().data or []
+    except Exception as exc:
+        print(f"[db.get_comment_counts] {exc}")
+        return {}
+    counts: dict[int, int] = {}
+    for r in rows:
+        tid = r.get("task_id")
+        if tid is not None:
+            counts[tid] = counts.get(tid, 0) + 1
+    return counts
+
+
 # ── Paper drafts (for the "My Paper Drafts" view) ─────────────────────────────
 
 def get_user_paper_deliverables(user_email: str | None, is_admin: bool) -> list[dict]:

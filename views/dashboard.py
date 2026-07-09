@@ -16,8 +16,8 @@ import html as _htmllib
 import streamlit as st
 
 from core.supabase_client import supabase
-from db import get_settings, compute_delay_stats, get_conference_paper_tasks
-from utils.helpers import PRIORITY_ORDER, strip_markdown, deliverable_chip_html, fmt_date, sort_tasks_by_deadline
+from db import get_settings, compute_delay_stats, get_conference_paper_tasks, get_comment_counts
+from utils.helpers import PRIORITY_ORDER, strip_markdown, deliverable_chip_html, fmt_date, sort_tasks_by_deadline, comment_badge_html
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
 
 _INACTIVE = {"Completed", "Cancelled"}
@@ -263,6 +263,10 @@ def _render_item_row(
     status_html = _status_badge_html(status)
     prio_html = _priority_badge_html(item.get("priority")) if kind == "task" else ""
     people_html = _people_pills(item.get("owner_email"), item.get("supervisor_email"), user_map)
+    comment_html = ""
+    if kind == "task":
+        _cc = st.session_state.get("_comment_counts", {}).get(item.get("id"), 0)
+        comment_html = comment_badge_html(_cc)
 
     if kind == "task":
         type_chip = "<span style='font-size:10px;background:#E8F0FE;color:#1A73E8;border-radius:3px;padding:1px 7px;'>TASK</span>"
@@ -289,6 +293,7 @@ def _render_item_row(
         </span>
         {status_html}
         {prio_html}
+        {comment_html}
         <span style='margin-left:auto;white-space:nowrap'>{dl_html}</span>
       </div>
       <div style='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:3px;'>
@@ -564,6 +569,7 @@ def _render_conference_priority(email: str, user_map: dict) -> None:
             _, dl_html = _deadline_html(t.get("deadline"), threshold=21)
             pills = _people_pills(t.get("owner_email"), t.get("supervisor_email"), user_map)
             can_edit = t.get("owner_email") == email or t.get("supervisor_email") == email
+            cc_html = comment_badge_html(st.session_state.get("_comment_counts", {}).get(t.get("id"), 0))
 
             c_l, c_r = st.columns([8, 1.6])
             with c_l:
@@ -573,6 +579,7 @@ def _render_conference_priority(email: str, user_map: dict) -> None:
                     f"{_htmllib.escape(t.get('name','') or '')}</span>"
                     f"<span style='background:{s_col}22;color:{s_col};border-radius:4px;"
                     f"padding:1px 8px;font-size:11px'>{icon} {status}</span>"
+                    f"{cc_html}"
                     f"<span style='margin-left:auto'>{dl_html}</span></div>"
                     f"<div style='padding-bottom:2px'>{pills or ''}</div>",
                     unsafe_allow_html=True,
@@ -612,6 +619,9 @@ def show_dashboard():
     if not email:
         st.error("User not found in session.")
         return
+
+    # Comment counts for the 💬 badges (one query, read by the row renderers).
+    st.session_state["_comment_counts"] = get_comment_counts()
 
     _render_personal_metrics(email)
 

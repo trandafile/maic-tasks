@@ -2,10 +2,10 @@ import streamlit as st
 import datetime
 import html as _htmllib
 from core.supabase_client import supabase
-from db import get_settings, compute_delay_stats, rbac_or_filter
+from db import get_settings, compute_delay_stats, rbac_or_filter, get_comment_counts
 from utils.pdf_generator import generate_report_pdf
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
-from utils.helpers import fmt_date, sort_tasks_by_deadline, deliverable_chip_html
+from utils.helpers import fmt_date, sort_tasks_by_deadline, deliverable_chip_html, comment_badge_html
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
 
@@ -281,6 +281,7 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
         compl_html = f"<span style='font-size:11px;color:#888;'>&nbsp;· ✅ {fmt_date(t.get('completion_date'))}</span>"
 
     pills = _render_people_pills(t.get("owner_email"), t.get("supervisor_email"), users_meta)
+    cc_html = comment_badge_html(st.session_state.get("_comment_counts", {}).get(t.get("id"), 0))
 
     col_html, col_btns = st.columns([7.5, 2.5])
     with col_html:
@@ -298,6 +299,7 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
                                line-height:1.3;'>{name}</span>
                   {s_badge}
                   {p_badge}
+                  {cc_html}
                   <span style='margin-left:8px;'>{dl_html}{compl_html}</span>
                 </div>
                 <div>{pills}</div>
@@ -385,6 +387,8 @@ def _render_main_report():
 
     users_dict = {u["email"]: u.get("name", u["email"]) for u in users}
     users_meta = {u["email"]: u for u in users}
+    # Comment counts for the 💬 badge on task rows (one query per render).
+    st.session_state["_comment_counts"] = get_comment_counts([t["id"] for t in tasks if t.get("id")])
 
     # Scoped CSS to align deliverable containers with Active Tasks view
     st.markdown(

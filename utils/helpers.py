@@ -115,6 +115,17 @@ def deliverable_chip_html(tag_name: str | None, settings: dict | None = None) ->
     )
 
 
+def comment_badge_html(n: int | None) -> str:
+    """Small '💬 N' chip for task rows; empty string when there are no comments."""
+    if not n:
+        return ""
+    return (
+        "<span style='background:#EEF1F6;color:#5B6B8C;border-radius:10px;"
+        "padding:0 7px;font-size:11px;font-weight:600;white-space:nowrap'>"
+        f"💬 {int(n)}</span>"
+    )
+
+
 # ── Deadline-based sorting for tasks / subtasks ─────────────────────────────────
 
 PRIORITY_ORDER = {"urgent": 0, "high": 1, "medium": 2, "low": 3, "none": 4, None: 4}
