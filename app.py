@@ -106,9 +106,26 @@ st.markdown("""
     div[data-testid='stHorizontalBlock']:nth-of-type(odd) { 
         background-color: #ffffff; 
     } 
-    div[data-testid='stHorizontalBlock']:first-of-type { 
-        background-color: #eeeeee; 
-        font-weight: bold; 
+    div[data-testid='stHorizontalBlock']:first-of-type {
+        background-color: #eeeeee;
+        font-weight: bold;
+    }
+
+    /* ── Task / subtask hierarchy rows ─────────────────────────────────────
+       The row renderers emit a marker div (.maic-task-row / .maic-subtask-row)
+       inside their column, so we can tint the whole row band and give subtasks
+       a lighter shade than their parent task. These rules come AFTER the
+       nth-of-type striping above so they win for hierarchy rows only.        */
+
+    /* Nested column blocks (e.g. the action buttons) must not repaint the band */
+    div[data-testid='stHorizontalBlock'] div[data-testid='stHorizontalBlock'] {
+        background-color: transparent !important;
+    }
+    div[data-testid='stHorizontalBlock']:has(.maic-task-row) {
+        background-color: #E9ECEF !important;
+    }
+    div[data-testid='stHorizontalBlock']:has(.maic-subtask-row) {
+        background-color: #F7F8FA !important;
     }
     </style>
 """, unsafe_allow_html=True)

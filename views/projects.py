@@ -5,7 +5,10 @@ from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
 from db import delete_task_cascade, log_status_change
 from utils.notifications import send_task_assigned
-from utils.helpers import fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles, deliverable_chip_html
+from utils.helpers import (
+    fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles, deliverable_chip_html,
+    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX, TASK_ROW_CLASS, SUBTASK_ROW_CLASS,
+)
 from utils.md_editor import markdown_editor
 from db import get_settings
 
@@ -482,17 +485,16 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
     with col_html:
         st.html(
             f"""
-            <div style='display:grid;grid-template-columns:52px 1fr auto;
+            <div class='{TASK_ROW_CLASS}'
+                 style='display:grid;grid-template-columns:52px 1fr auto;
                         gap:0;padding:5px 8px 5px 8px;align-items:start;
                         opacity:{opacity};'>
               <span style='font-family:monospace;font-size:10px;
-                           color:#aaa;padding-top:3px;'>{seq_id}</span>
+                           color:#aaa;padding-top:4px;'>{seq_id}</span>
               <div>
                 <div style='display:flex;align-items:center;gap:7px;
                             flex-wrap:wrap;margin-bottom:5px;'>
-                  <span style='font-size:13px;font-weight:500;
-                               color:var(--color-text-primary,#111);
-                               line-height:1.3;'>{name}</span>
+                  <span style='{TASK_NAME_STYLE}'>{name}</span>
                   {s_badge}
                   {p_badge}
                   {f"<span style='margin-left:8px;'>{dl_html}</span>" if dl_html else ""}
@@ -580,16 +582,15 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
         with scol_html:
             st.html(
                 f"""
-                <div style='display:grid;grid-template-columns:52px 1fr auto;
+                <div class='{SUBTASK_ROW_CLASS}'
+                     style='display:grid;grid-template-columns:52px 1fr auto;
                             gap:0;padding:5px 8px 4px 8px;align-items:start;
                             opacity:{s_opacity};padding-left:24px;'>
                   <span></span>
                   <div>
                     <div style='display:flex;align-items:center;gap:7px;
                                 flex-wrap:wrap;margin-bottom:5px;'>
-                      <span style='font-size:12px;font-weight:400;
-                                   color:var(--color-text-primary,#111);
-                                   line-height:1.3;'>↳ 🖇️ {s_name}</span>
+                      <span style='{SUBTASK_NAME_STYLE}'>{SUBTASK_PREFIX} {s_name}</span>
                       {s_badge}
                     </div>
                     {f"<div style='margin-bottom:5px;'>{s_dl_html}</div>" if s_dl_html else ""}

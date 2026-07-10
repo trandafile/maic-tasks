@@ -115,6 +115,27 @@ def deliverable_chip_html(tag_name: str | None, settings: dict | None = None) ->
     )
 
 
+# ── Shared task / subtask row styling ─────────────────────────────────────────
+# Single source of truth for the hierarchy rows rendered in Active Tasks,
+# Dashboard, Reports and Conference Paper Drafts.
+#
+# The name styles are INLINE (not CSS classes) so they always survive st.html.
+# The row CLASSES below are only markers: the global CSS in app.py uses
+# `:has(.maic-task-row)` / `:has(.maic-subtask-row)` to tint the row band, with
+# subtasks a shade lighter than tasks. If a class were ever stripped, the
+# typography still holds and only the band tint falls back to the default.
+
+TASK_NAME_STYLE = "font-size:14px;font-weight:600;color:var(--color-text-primary,#111);line-height:1.35;"
+SUBTASK_NAME_STYLE = "font-size:13px;font-weight:500;color:var(--color-text-primary,#1f1f1f);line-height:1.35;"
+
+# "↳" alone reads as "nested item". The old "🖇️" (paperclip) suggested an
+# attachment, which a subtask is not.
+SUBTASK_PREFIX = "↳"
+
+TASK_ROW_CLASS = "maic-task-row"
+SUBTASK_ROW_CLASS = "maic-subtask-row"
+
+
 def comment_badge_html(n: int | None) -> str:
     """Small '💬 N' chip for task rows; empty string when there are no comments."""
     if not n:

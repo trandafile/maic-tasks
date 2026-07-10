@@ -5,7 +5,10 @@ from core.supabase_client import supabase
 from db import get_settings, compute_delay_stats, rbac_or_filter, get_comment_counts
 from utils.pdf_generator import generate_report_pdf
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
-from utils.helpers import fmt_date, sort_tasks_by_deadline, deliverable_chip_html, comment_badge_html
+from utils.helpers import (
+    fmt_date, sort_tasks_by_deadline, deliverable_chip_html, comment_badge_html,
+    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX, TASK_ROW_CLASS, SUBTASK_ROW_CLASS,
+)
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
 
@@ -287,16 +290,15 @@ def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str 
     with col_html:
         st.html(
             f"""
-            <div style='display:grid;grid-template-columns:52px 1fr auto;
-                                                gap:0;padding:3px 8px 3px 8px;align-items:start;'>
+            <div class='{TASK_ROW_CLASS}'
+                 style='display:grid;grid-template-columns:52px 1fr auto;
+                        gap:0;padding:3px 8px 3px 8px;align-items:start;'>
               <span style='font-family:monospace;font-size:10px;
-                                                     color:#aaa;padding-top:2px;'>{seq_id}</span>
+                                                     color:#aaa;padding-top:3px;'>{seq_id}</span>
               <div>
                 <div style='display:flex;align-items:center;gap:7px;
                                                         flex-wrap:wrap;margin-bottom:2px;'>
-                  <span style='font-size:13px;font-weight:500;
-                               color:var(--color-text-primary,#111);
-                               line-height:1.3;'>{name}</span>
+                  <span style='{TASK_NAME_STYLE}'>{name}</span>
                   {s_badge}
                   {p_badge}
                   {cc_html}
@@ -326,15 +328,14 @@ def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: s
     with scol_html:
         st.html(
             f"""
-            <div style='display:grid;grid-template-columns:52px 1fr auto;
+            <div class='{SUBTASK_ROW_CLASS}'
+                 style='display:grid;grid-template-columns:52px 1fr auto;
                         gap:0;padding:3px 8px 2px 8px;align-items:start;padding-left:24px;'>
               <span></span>
               <div>
                 <div style='display:flex;align-items:center;gap:7px;
                             flex-wrap:wrap;margin-bottom:2px;'>
-                  <span style='font-size:12px;font-weight:400;
-                               color:var(--color-text-primary,#111);
-                               line-height:1.3;'>↳ 🖇️ {s_name}</span>
+                  <span style='{SUBTASK_NAME_STYLE}'>{SUBTASK_PREFIX} {s_name}</span>
                   {s_badge}
                   <span style='margin-left:8px;'>{s_dl_html}</span>
                 </div>
@@ -1355,7 +1356,7 @@ def _render_detailed_report():
             st.html(
                 f"<div style='display:flex;align-items:center;gap:7px;flex-wrap:wrap'>"
                 f"<span style='font-family:monospace;color:#aaa;font-size:0.8rem;flex-shrink:0'>{seq}</span>"
-                f"<span style='font-size:13px;font-weight:500;color:#111'>{_esc(t.get('name',''))}</span>"
+                f"<span style='{TASK_NAME_STYLE}'>{_esc(t.get('name',''))}</span>"
                 f"<span style='background:{s_bg};color:{s_fg};border-radius:4px;padding:2px 8px;"
                 f"font-size:0.78rem;font-weight:600;white-space:nowrap'>{status}</span>"
                 f"<span style='background:{p_bg};color:{p_fg};border-radius:4px;padding:2px 8px;"
@@ -1434,7 +1435,7 @@ def _render_detailed_report():
                     f"<span style='width:8px;height:8px;background:{s_dot_col};"
                     f"border-radius:50%;flex-shrink:0'></span>"
                     f"<span style='font-family:monospace;color:#aaa;font-size:0.72rem;flex-shrink:0'>{s_seq}</span>"
-                    f"<span style='font-size:13px;flex:1;min-width:80px'>{_esc(s.get('name',''))}</span>"
+                    f"<span style='{SUBTASK_NAME_STYLE}flex:1;min-width:80px'>{_esc(s.get('name',''))}</span>"
                     f"{s_badge}"
                     f"{s_pills}"
                     f"</div>"

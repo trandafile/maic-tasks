@@ -17,7 +17,11 @@ import streamlit as st
 
 from core.supabase_client import supabase
 from db import get_settings, compute_delay_stats, get_conference_paper_tasks, get_comment_counts
-from utils.helpers import PRIORITY_ORDER, strip_markdown, deliverable_chip_html, fmt_date, sort_tasks_by_deadline, comment_badge_html
+from utils.helpers import (
+    PRIORITY_ORDER, strip_markdown, deliverable_chip_html, fmt_date, sort_tasks_by_deadline,
+    comment_badge_html, TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX,
+    TASK_ROW_CLASS, SUBTASK_ROW_CLASS,
+)
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
 
 _INACTIVE = {"Completed", "Cancelled"}
@@ -271,9 +275,13 @@ def _render_item_row(
     if kind == "task":
         type_chip = "<span style='font-size:10px;background:#E8F0FE;color:#1A73E8;border-radius:3px;padding:1px 7px;'>TASK</span>"
         icon_prefix = ""
+        name_style = TASK_NAME_STYLE
+        row_class = TASK_ROW_CLASS
     else:
         type_chip = "<span style='font-size:10px;background:#EEF7FF;color:#1565C0;border-radius:3px;padding:1px 7px;'>SUBTASK</span>"
-        icon_prefix = "↳ "
+        icon_prefix = f"{SUBTASK_PREFIX} "
+        name_style = SUBTASK_NAME_STYLE
+        row_class = SUBTASK_ROW_CLASS
 
     context_chip = (
         "<span style='font-size:10px;background:#f3f3f3;color:#888;border-radius:3px;padding:1px 7px;'>context</span>"
@@ -284,11 +292,11 @@ def _render_item_row(
     opacity = "0.78" if context_only else "1"
 
     row_html = f"""
-    <div style='margin-left:{indent_px}px;border-left:2px solid #EFEFEF;padding:4px 0 4px 10px;opacity:{opacity};'>
+    <div class='{row_class}' style='margin-left:{indent_px}px;border-left:2px solid #EFEFEF;padding:4px 0 4px 10px;opacity:{opacity};'>
       <div style='display:flex;align-items:center;gap:7px;flex-wrap:wrap;'>
         {type_chip}
         {context_chip}
-        <span style='font-size:13px;font-weight:{'450' if kind == 'subtask' else '550'};line-height:1.25;'>
+        <span style='{name_style}'>
           {icon_prefix}{title}
         </span>
         {status_html}
@@ -574,8 +582,8 @@ def _render_conference_priority(email: str, user_map: dict) -> None:
             c_l, c_r = st.columns([8, 1.6])
             with c_l:
                 st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 0'>"
-                    f"<span style='font-size:13px;font-weight:600'>"
+                    f"<div class='{TASK_ROW_CLASS}' style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:2px 0'>"
+                    f"<span style='{TASK_NAME_STYLE}'>"
                     f"{_htmllib.escape(t.get('name','') or '')}</span>"
                     f"<span style='background:{s_col}22;color:{s_col};border-radius:4px;"
                     f"padding:1px 8px;font-size:11px'>{icon} {status}</span>"

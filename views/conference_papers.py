@@ -27,7 +27,9 @@ from db import (
     log_status_change,
     get_comment_counts,
 )
-from utils.helpers import fmt_date, sort_tasks_by_deadline, comment_badge_html
+from utils.helpers import (
+    fmt_date, sort_tasks_by_deadline, comment_badge_html, TASK_NAME_STYLE, TASK_ROW_CLASS,
+)
 from utils.modals import task_details_modal, person_pill_html
 from utils.notifications import send_task_assigned
 
@@ -174,9 +176,9 @@ def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str, 
     col_l, col_r = st.columns([8, 1.6])
     with col_l:
         st.markdown(
-            f"<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:3px 0'>"
+            f"<div class='{TASK_ROW_CLASS}' style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:3px 0'>"
             f"<span style='font-family:monospace;color:#aaa;font-size:11px'>{html.escape(seq)}</span>"
-            f"<span style='font-size:13px;font-weight:600'>{html.escape(t.get('name',''))}</span>"
+            f"<span style='{TASK_NAME_STYLE}'>{html.escape(t.get('name',''))}</span>"
             f"{_badge(status, s_fg, s_bg)}"
             f"{cc_html}"
             f"<span style='margin-left:6px'>{_deadline_html(t.get('deadline'))}</span>"
