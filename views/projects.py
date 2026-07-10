@@ -45,7 +45,13 @@ def _priority_badge(priority):
 
 # ─── Data fetching ──────────────────────────────────────────────────────────────
 
-def fetch_hierarchy(show_archived=False, user_email=None, is_admin=False):
+def fetch_hierarchy(show_archived=False, user_email=None, is_admin=False, only_mine=False):
+    """Load the project → deliverable → task → subtask hierarchy.
+
+    only_mine: keep only tasks/subtasks where ``user_email`` is owner or
+    supervisor, then prune the deliverables and projects left without any
+    visible item. Used by the admin "my tasks" default scope.
+    """
     try:
         pq = supabase.table("projects").select("*")
         if not show_archived:
@@ -89,6 +95,42 @@ def fetch_hierarchy(show_archived=False, user_email=None, is_admin=False):
                 and tasks_by_id.get(s.get("task_id"), {}).get("project_id")
             )
             projects = [p for p in (projects or []) if p.get("id") in involved_project_ids]
+
+        # "My tasks" scope: narrow tasks/subtasks to the ones I own or supervise,
+        # then drop the deliverables and projects that end up with nothing to show.
+        if only_mine and user_email:
+            def _mine(item: dict) -> bool:
+                return (
+                    item.get("owner_email") == user_email
+                    or item.get("supervisor_email") == user_email
+                )
+
+            all_tasks = tasks or []
+            all_subtasks = subtasks or []
+
+            # A task is visible when it is mine, or when it carries a subtask of mine.
+            my_subtask_parent_ids = {s.get("task_id") for s in all_subtasks if _mine(s)}
+            tasks = [t for t in all_tasks if _mine(t) or t.get("id") in my_subtask_parent_ids]
+
+            visible_tasks_by_id = {t["id"]: t for t in tasks}
+            # Show my subtasks, plus every subtask of a task that is mine (context).
+            subtasks = [
+                s for s in all_subtasks
+                if s.get("task_id") in visible_tasks_by_id
+                and (_mine(s) or _mine(visible_tasks_by_id[s["task_id"]]))
+            ]
+
+            task_deliv_ids = {t.get("deliverable_id") for t in tasks if t.get("deliverable_id")}
+            deliverables = [
+                d for d in (deliverables or [])
+                if d.get("id") in task_deliv_ids or _mine(d)
+            ]
+
+            visible_project_ids = {t.get("project_id") for t in tasks if t.get("project_id")}
+            visible_project_ids.update(
+                d.get("project_id") for d in deliverables if d.get("project_id")
+            )
+            projects = [p for p in (projects or []) if p.get("id") in visible_project_ids]
 
         return projects, deliverables, tasks, subtasks, users, user_map
     except Exception as e:
@@ -625,23 +667,39 @@ def show_projects():
         unsafe_allow_html=True,
     )
 
-    col_tools, c_arch = st.columns([1, 3])
+    user_email = st.session_state.get('user_email')
+    is_admin   = st.session_state.get('user_role') == 'admin'
+
+    col_tools, c_scope, c_arch = st.columns([1.4, 2.2, 1.4])
     with col_tools:
-        if st.session_state.get('user_role') == 'admin':
+        if is_admin:
             if st.button("➕ New Project", type="primary", use_container_width=True):
                 add_project_modal()
+    with c_scope:
+        if is_admin:
+            show_all = st.checkbox(
+                "All tasks and projects",
+                value=False,
+                key="proj_show_all",
+                help="Unchecked (default): only tasks where you are the owner or the supervisor.",
+            )
+        else:
+            # Non-admins are already scoped to the projects they are involved in.
+            show_all = True
     with c_arch:
         show_archived = st.checkbox("Show Archived", value=False)
 
-    st.divider()
+    only_mine = is_admin and not show_all
+    if only_mine:
+        st.caption("Showing only tasks where you are owner or supervisor.")
 
-    user_email = st.session_state.get('user_email')
-    is_admin   = st.session_state.get('user_role') == 'admin'
+    st.divider()
 
     projects, deliverables, tasks, subtasks, users, user_map = fetch_hierarchy(
         show_archived,
         user_email=user_email,
         is_admin=is_admin,
+        only_mine=only_mine,
     )
 
     # deadline urgency threshold from settings
@@ -652,7 +710,13 @@ def show_projects():
         threshold = 7
 
     if not projects:
-        st.info("No active tasks found. Create a new task to get started.")
+        if only_mine:
+            st.info(
+                "You have no tasks assigned to you as owner or supervisor. "
+                "Tick **All tasks and projects** to see everything."
+            )
+        else:
+            st.info("No active tasks found. Create a new task to get started.")
         return
 
     for proj in projects:
