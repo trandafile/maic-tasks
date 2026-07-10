@@ -15,7 +15,7 @@ from db import (
     delete_task_cascade, delete_deliverable_cascade, delete_project_cascade,
     get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
     PROJECTS_MIGRATION_SQL, SCOPUS_MIGRATION_SQL, PAPER_DRAFTS_MIGRATION_SQL,
-    STATUS_HISTORY_MIGRATION_SQL, CONFERENCES_MIGRATION_SQL,
+    STATUS_HISTORY_MIGRATION_SQL, CONFERENCES_MIGRATION_SQL, CONTRACTS_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
 from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
@@ -934,6 +934,13 @@ def _tab_settings():
             "(manual entry + JSON import). Until it is run, that view shows this snippet."
         )
         st.code(CONFERENCES_MIGRATION_SQL, language="sql")
+    with st.expander("Contracts & time sheets", expanded=False):
+        st.caption(
+            "Creates contracts, project_activities and timesheets, adds CUP/soggetto "
+            "attuatore/tipo to projects and fiscal_code to users. Required by the "
+            "Contracts and Time Sheets pages."
+        )
+        st.code(CONTRACTS_MIGRATION_SQL, language="sql")
 
 def _tab_deliverable_tags():
     cfg = get_settings()

@@ -254,6 +254,72 @@ ALTER TABLE conferences DISABLE ROW LEVEL SECURITY;
 """
 
 
+CONTRACTS_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → contract management + monthly timesheets.
+-- Until this runs, the Contracts and Time Sheets pages show this snippet and the
+-- rest of the app is unaffected.
+
+-- Reporting metadata that belongs to the PROJECT (printed on every timesheet).
+ALTER TABLE projects
+    ADD COLUMN IF NOT EXISTS cup                TEXT,
+    ADD COLUMN IF NOT EXISTS soggetto_attuatore TEXT,
+    ADD COLUMN IF NOT EXISTS project_type       TEXT;
+
+-- Fiscal code is a property of the person, printed on the timesheet header.
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS fiscal_code TEXT;
+
+-- One row per contract. PhD students ('phd') do NOT fill timesheets;
+-- contractors ('contract') do.
+CREATE TABLE IF NOT EXISTS contracts (
+    id SERIAL PRIMARY KEY,
+    user_email TEXT NOT NULL REFERENCES users(email) ON UPDATE CASCADE ON DELETE CASCADE,
+    contract_type TEXT NOT NULL CHECK (contract_type IN ('phd', 'contract')),
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    start_date DATE,
+    end_date DATE,
+    annual_hours INTEGER DEFAULT 1500,   -- "Monte ore lavorative annuo previsto"
+    daily_hours NUMERIC DEFAULT 8,       -- autofill: hours booked per working day
+    hourly_cost NUMERIC,
+    notes TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_contracts_user ON contracts (user_email);
+ALTER TABLE contracts DISABLE ROW LEVEL SECURITY;
+
+-- Configurable timesheet rows per project. `counts_to_project` marks the rows
+-- imputable to the CUP (their label gets " - <CUP>" appended, as in the MIUR
+-- template). `default_share_pct` drives the autofill split.
+CREATE TABLE IF NOT EXISTS project_activities (
+    id SERIAL PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    sort_order INTEGER DEFAULT 0,
+    counts_to_project BOOLEAN DEFAULT TRUE,
+    default_share_pct NUMERIC DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_project_activities_project ON project_activities (project_id);
+ALTER TABLE project_activities DISABLE ROW LEVEL SECURITY;
+
+-- One row per (person, project, month). `grid` is {activity_id: {day: hours}}.
+CREATE TABLE IF NOT EXISTS timesheets (
+    id SERIAL PRIMARY KEY,
+    user_email TEXT NOT NULL,
+    project_id INTEGER NOT NULL,
+    year INTEGER NOT NULL,
+    month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    grid JSONB DEFAULT '{}'::jsonb,
+    status TEXT DEFAULT 'draft',         -- 'draft' | 'completed'
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_by_email TEXT,
+    UNIQUE (user_email, project_id, year, month)
+);
+CREATE INDEX IF NOT EXISTS idx_timesheets_user_period ON timesheets (user_email, year, month);
+ALTER TABLE timesheets DISABLE ROW LEVEL SECURITY;
+"""
+
+
 USER_EMAIL_FK_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → allow user email update/delete without FK errors
 -- This keeps task/deliverable/subtask/comment rows, updates references on email change,
@@ -1223,3 +1289,182 @@ def get_conference_paper_tasks(user_email: str | None = None) -> list:
     except Exception as exc:
         print(f"[db.get_conference_paper_tasks] {exc}")
         return []
+
+
+# ── Contracts (PhD students and contractors) ──────────────────────────────────
+
+CONTRACT_TYPES = ("phd", "contract")
+
+
+def get_contracts(user_email: str | None = None, active_only: bool = False) -> list | None:
+    """Contracts, newest first. Returns None when the table is missing."""
+    try:
+        q = supabase.table("contracts").select("*")
+        if user_email:
+            q = q.eq("user_email", user_email)
+        if active_only:
+            q = q.eq("is_active", True)
+        return q.order("start_date", desc=True).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_contracts] {exc}")
+        return None
+
+
+def upsert_contract(payload: dict, contract_id: int | None = None) -> tuple[bool, str]:
+    if not payload.get("user_email"):
+        return False, "A person is required."
+    if payload.get("contract_type") not in CONTRACT_TYPES:
+        return False, "Invalid contract type."
+    start, end = payload.get("start_date"), payload.get("end_date")
+    if start and end and str(end) < str(start):
+        return False, "End date is before the start date."
+    try:
+        if contract_id is None:
+            supabase.table("contracts").insert(payload).execute()
+        else:
+            supabase.table("contracts").update(payload).eq("id", contract_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def delete_contract(contract_id: int) -> tuple[bool, str]:
+    try:
+        supabase.table("contracts").delete().eq("id", contract_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def contract_covers(contract: dict, day: _dt_date) -> bool:
+    """True when `day` falls inside the contract period (open ends allowed)."""
+    start = _norm_conf_date(contract.get("start_date"))
+    end = _norm_conf_date(contract.get("end_date"))
+    if start and day < _dt_date.fromisoformat(start):
+        return False
+    if end and day > _dt_date.fromisoformat(end):
+        return False
+    return True
+
+
+def get_timesheet_contracts(user_email: str) -> list:
+    """Active 'contract' contracts of a user — the ones requiring timesheets."""
+    rows = get_contracts(user_email=user_email, active_only=True) or []
+    return [c for c in rows if c.get("contract_type") == "contract" and c.get("project_id")]
+
+
+# ── Project activity rows (configurable timesheet lines) ──────────────────────
+
+def get_project_activities(project_id: int) -> list:
+    try:
+        return (
+            supabase.table("project_activities").select("*")
+            .eq("project_id", project_id)
+            .order("sort_order", desc=False)
+            .execute().data or []
+        )
+    except Exception as exc:
+        print(f"[db.get_project_activities] {exc}")
+        return []
+
+
+def upsert_project_activity(payload: dict, activity_id: int | None = None) -> tuple[bool, str]:
+    if not (payload.get("name") or "").strip():
+        return False, "Activity name is required."
+    try:
+        if activity_id is None:
+            supabase.table("project_activities").insert(payload).execute()
+        else:
+            supabase.table("project_activities").update(payload).eq("id", activity_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def delete_project_activity(activity_id: int) -> tuple[bool, str]:
+    try:
+        supabase.table("project_activities").delete().eq("id", activity_id).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+# ── Timesheets ────────────────────────────────────────────────────────────────
+
+def get_timesheet(user_email: str, project_id: int, year: int, month: int) -> dict | None:
+    try:
+        rows = (
+            supabase.table("timesheets").select("*")
+            .eq("user_email", user_email).eq("project_id", project_id)
+            .eq("year", year).eq("month", month)
+            .limit(1).execute().data
+        )
+        return rows[0] if rows else None
+    except Exception as exc:
+        print(f"[db.get_timesheet] {exc}")
+        return None
+
+
+def save_timesheet(user_email: str, project_id: int, year: int, month: int,
+                   grid: dict, status: str, updated_by: str | None) -> tuple[bool, str]:
+    """Insert or update the monthly timesheet. `grid` = {activity_id: {day: hours}}."""
+    import datetime as _dt
+    payload = {
+        "user_email": user_email,
+        "project_id": project_id,
+        "year": int(year),
+        "month": int(month),
+        "grid": grid,
+        "status": status,
+        "updated_at": _dt.datetime.utcnow().isoformat() + "Z",
+        "updated_by_email": updated_by,
+    }
+    try:
+        existing = get_timesheet(user_email, project_id, year, month)
+        if existing:
+            supabase.table("timesheets").update(payload).eq("id", existing["id"]).execute()
+        else:
+            supabase.table("timesheets").insert(payload).execute()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def get_pending_timesheets(user_email: str, today: _dt_date | None = None) -> list[dict]:
+    """Months the user still has to complete, for the dashboard reminder.
+
+    Looks at the current month and the previous one (the usual reporting lag),
+    for every active contractor contract, skipping months outside the contract
+    period. Returns [{contract, project_id, year, month, status}].
+    """
+    import datetime as _dt
+    today = today or _dt_date.today()
+
+    periods: list[tuple[int, int]] = []
+    prev = (today.replace(day=1) - _dt.timedelta(days=1))
+    periods.append((prev.year, prev.month))
+    periods.append((today.year, today.month))
+
+    pending: list[dict] = []
+    for c in get_timesheet_contracts(user_email):
+        for (y, m) in periods:
+            # The month is in scope only if the contract covers at least one of its days.
+            last_day = _month_last_day(y, m)
+            if not (contract_covers(c, _dt_date(y, m, 1)) or contract_covers(c, last_day)):
+                continue
+            ts = get_timesheet(user_email, c["project_id"], y, m)
+            if ts and ts.get("status") == "completed":
+                continue
+            pending.append({
+                "contract": c,
+                "project_id": c["project_id"],
+                "year": y,
+                "month": m,
+                "status": (ts or {}).get("status", "missing"),
+            })
+    return pending
+
+
+def _month_last_day(year: int, month: int) -> _dt_date:
+    import calendar as _cal
+    return _dt_date(year, month, _cal.monthrange(year, month)[1])

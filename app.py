@@ -176,6 +176,8 @@ from views.my_papers import show_my_papers
 from views.my_paper_drafts import show_my_paper_drafts
 from views.conferences import show_conference_calendar
 from views.conference_papers import show_conference_papers
+from views.timesheets import show_timesheets
+from views.contracts import show_contracts
 from views.people import show_people
 
 def _run_scheduler_once():
@@ -211,7 +213,7 @@ def main():
         st.markdown("---")
 
         # Main workspace pages
-        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports"]
+        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports", "Time Sheets"]
 
         # Paper-related pages, grouped under a "Papers" heading
         paper_pages = ["My Papers", "My Paper Drafts", "Conference Calendar", "Conference Paper Drafts"]
@@ -219,7 +221,7 @@ def main():
         # Admin-only pages
         admin_pages = []
         if st.session_state.get('user_role') == 'admin':
-            admin_pages = ["People", "Admin Panel", "Master Status Report"]
+            admin_pages = ["People", "Contracts", "Admin Panel", "Master Status Report"]
 
         current = st.session_state.get('current_page', 'Dashboard')
 
@@ -280,6 +282,10 @@ def main():
         show_conference_calendar()
     elif page == "Conference Paper Drafts":
         show_conference_papers()
+    elif page == "Time Sheets":
+        show_timesheets()
+    elif page == "Contracts":
+        show_contracts()
     elif page == "People":
         show_people()
     elif page == "Admin Panel":

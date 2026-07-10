@@ -9,3 +9,4 @@ pandas
 requests
 markdown
 python-docx
+openpyxl

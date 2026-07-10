@@ -16,7 +16,10 @@ import html as _htmllib
 import streamlit as st
 
 from core.supabase_client import supabase
-from db import get_settings, compute_delay_stats, get_conference_paper_tasks, get_comment_counts
+from db import (
+    get_settings, compute_delay_stats, get_conference_paper_tasks, get_comment_counts,
+    get_pending_timesheets,
+)
 from utils.helpers import (
     PRIORITY_ORDER, strip_markdown, deliverable_chip_html, fmt_date, sort_tasks_by_deadline,
     comment_badge_html, TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX,
@@ -550,6 +553,38 @@ def _render_personal_metrics(email: str) -> None:
     )
 
 
+def _render_timesheet_reminder(email: str) -> None:
+    """Remind contractors of the months they still have to file.
+
+    Silent for PhD students and for anyone without an active contractor
+    contract, and silent if the contracts tables are not migrated yet.
+    """
+    try:
+        pending = get_pending_timesheets(email)
+    except Exception:
+        return
+    if not pending:
+        return
+
+    from utils.timesheet import MONTHS_IT
+
+    months = ", ".join(
+        f"{MONTHS_IT[p['month']]} {p['year']}"
+        + (" (draft)" if p["status"] == "draft" else "")
+        for p in pending
+    )
+    st.warning(
+        f"🧾 **Time sheet to file — {months}.**  \n"
+        "Steps: open **Time Sheets** → **Autofill** and adjust the hours → "
+        "**Mark as completed** → **Download Excel** → print/export to PDF, sign it, "
+        "and email it to your supervisor."
+    )
+    if st.button("Open Time Sheets →", key="dash_ts_open"):
+        st.session_state["current_page"] = "Time Sheets"
+        st.rerun()
+    st.divider()
+
+
 def _render_conference_priority(email: str, user_map: dict) -> None:
     """Priority section: the user's active conference paper tasks (owner or
     supervisor), shown above everything else so submission deadlines stay
@@ -631,6 +666,7 @@ def show_dashboard():
     # Comment counts for the 💬 badges (one query, read by the row renderers).
     st.session_state["_comment_counts"] = get_comment_counts()
 
+    _render_timesheet_reminder(email)
     _render_personal_metrics(email)
 
     try:
