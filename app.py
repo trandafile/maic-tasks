@@ -213,7 +213,7 @@ def main():
         st.markdown("---")
 
         # Main workspace pages
-        pages = ["Dashboard", "Active Tasks", "Deliverables", "Calendar", "Reports", "Time Sheets"]
+        pages = ["Dashboard", "Projects", "Deliverables", "Calendar", "Reports", "Time Sheets"]
 
         # Paper-related pages, grouped under a "Papers" heading
         paper_pages = ["My Papers", "My Paper Drafts", "Conference Calendar", "Conference Paper Drafts"]
@@ -266,7 +266,7 @@ def main():
     
     if page == "Dashboard":
         show_dashboard()
-    elif page == "Active Tasks":
+    elif page in ("Projects", "Active Tasks"):  # old label kept for stale sessions
         show_projects()
     elif page == "Deliverables":
         show_deliverables()

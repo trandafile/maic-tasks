@@ -638,7 +638,11 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
 # ─── Main view ──────────────────────────────────────────────────────────────────
 
 def show_projects():
-    st.title("Active Tasks")
+    st.title("Projects")
+    st.caption(
+        "The full work breakdown: project → deliverable → task → subtask. "
+        "Create and organise here; the **Dashboard** tells you what is urgent."
+    )
 
     # Compact row rhythm for dense task/subtask tables in this page.
     st.markdown(
