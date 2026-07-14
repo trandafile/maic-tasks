@@ -23,7 +23,7 @@ from db import (
 )
 from utils.helpers import (
     PRIORITY_ORDER, strip_markdown, sort_tasks_by_deadline, comment_badge_html,
-    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX,
+    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX, stable_colour,
 )
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
 
@@ -56,10 +56,8 @@ _BUCKETS = [
 ]
 _BUCKET_META = {k: (label, fg, bg) for k, label, fg, bg in _BUCKETS}
 
-_PROJECT_PALETTE = [
-    "#1565C0", "#2E7D32", "#E65100", "#6A1B9A",
-    "#00695C", "#AD1457", "#0277BD", "#4527A0",
-]
+# Colours come from utils.helpers.stable_colour so the app and the notification
+# emails always agree on a project's colour.
 
 
 # ─── small helpers ────────────────────────────────────────────────────────────
@@ -77,14 +75,10 @@ def _esc(v) -> str:
     return _htmllib.escape(str(v or ""))
 
 
-def _proj_colour(label: str) -> str:
-    return _PROJECT_PALETTE[abs(hash(label or "?")) % len(_PROJECT_PALETTE)]
-
-
 def _proj_chip(label: str) -> str:
     if not label:
         return ""
-    c = _proj_colour(label)
+    c = stable_colour(label)
     return (
         f"<span style='background:{c};color:#fff;border-radius:4px;padding:1px 7px;"
         f"font-size:10px;font-weight:700;white-space:nowrap'>{_esc(label)}</span>"

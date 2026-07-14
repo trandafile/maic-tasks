@@ -136,6 +136,25 @@ TASK_ROW_CLASS = "maic-task-row"
 SUBTASK_ROW_CLASS = "maic-subtask-row"
 
 
+# ── Stable project colours ────────────────────────────────────────────────────
+# Python's builtin hash() is salted per process (PYTHONHASHSEED), so a palette
+# indexed by hash(name) silently reshuffles every time the server restarts — and
+# could never match the colours used in the notification emails. crc32 is stable.
+
+PROJECT_PALETTE = [
+    "#1565C0", "#2E7D32", "#E65100", "#6A1B9A",
+    "#00695C", "#AD1457", "#0277BD", "#4527A0",
+]
+
+
+def stable_colour(label: str | None, palette: list[str] | None = None) -> str:
+    """Deterministic colour for a label — same everywhere, across restarts."""
+    import zlib
+    pal = palette or PROJECT_PALETTE
+    key = (label or "?").strip().lower().encode("utf-8")
+    return pal[zlib.crc32(key) % len(pal)]
+
+
 def comment_badge_html(n: int | None) -> str:
     """Small '💬 N' chip for task rows; empty string when there are no comments."""
     if not n:

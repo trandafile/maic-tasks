@@ -20,8 +20,13 @@ def _get_settings() -> dict:
         return {}
 
 
-def _send(subject: str, body: str, to_email: str) -> bool:
-    """Low-level send via STARTTLS. Returns True on success."""
+def _send(subject: str, body: str, to_email: str, html_body: str | None = None) -> bool:
+    """Low-level send via STARTTLS. Returns True on success.
+
+    Sends multipart/alternative: the plain-text part stays the fallback for
+    clients that refuse HTML, the HTML part is what people actually see. Order
+    matters — the last part attached is the preferred one.
+    """
     cfg = _get_settings()
 
     if not cfg.get("notifications_enabled"):
@@ -43,6 +48,8 @@ def _send(subject: str, body: str, to_email: str) -> bool:
     msg["From"]    = f"{from_name} <{user}>"
     msg["To"]      = to_email
     msg.attach(MIMEText(body, "plain", "utf-8"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
         with smtplib.SMTP(host, port, timeout=10) as server:
@@ -109,7 +116,28 @@ def send_task_assigned(task: dict, assignee_email: str, assigner_name: str) -> b
         f"Accedi all'app per i dettagli: {app_url}\n\n"
         f"— MAIC LAB Task Manager"
     )
-    return _send(subject, body, assignee_email)
+
+    from utils import email_templates as T
+    html = T.shell(
+        preheader=f"{seq_id} — {task_name}",
+        heading="Ti è stato assegnato un task",
+        body_html="".join([
+            T.paragraph(f"Ciao <b>{T.esc(recipient_name)}</b>,"),
+            T.paragraph(
+                f"<b>{T.esc(assigner_name)}</b> ti ha assegnato un nuovo task"
+                + (f" nel progetto <b>{T.esc(project)}</b>." if project else ".")
+            ),
+            T.section("📌 NUOVO TASK", "normal", [task]),
+            T.paragraph(
+                f"Priorità: <b>{T.esc(priority)}</b>"
+                + (f" · Deliverable: <b>{T.esc(deliv)}</b>" if deliv else ""),
+                size=13, color=T.MUTED,
+            ),
+        ]),
+        app_url=app_url,
+        cta_label="Apri il task",
+    )
+    return _send(subject, body, assignee_email, html_body=html)
 
 
 def send_task_comment(task: dict, recipient_email: str, author_name: str, body_text: str) -> bool:
@@ -140,7 +168,29 @@ def send_task_comment(task: dict, recipient_email: str, author_name: str, body_t
         f"Rispondi dall'app: {app_url}\n\n"
         f"— MAIC LAB Task Manager"
     )
-    return _send(subject, body, recipient_email)
+
+    from utils import email_templates as T
+    quote = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="margin:12px 0;"><tr>'
+        f'<td style="background:#F5F7FA;border-left:4px solid {T.BRAND};border-radius:5px;'
+        f'padding:12px 14px;font-family:{T.FONT};font-size:14px;line-height:1.6;'
+        f'color:{T.TEXT};white-space:pre-wrap;">{T.esc(snippet)}</td>'
+        f"</tr></table>"
+    )
+    html = T.shell(
+        preheader=f"{author_name}: {snippet[:80]}",
+        heading="Nuovo commento su un tuo task",
+        body_html="".join([
+            T.paragraph(f"Ciao <b>{T.esc(recipient_name)}</b>,"),
+            T.paragraph(f"<b>{T.esc(author_name)}</b> ha commentato:"),
+            quote,
+            T.section("💬 TASK", "normal", [task]),
+        ]),
+        app_url=app_url,
+        cta_label="Rispondi",
+    )
+    return _send(subject, body, recipient_email, html_body=html)
 
 
 def send_deadline_reminder(task: dict, assignee_email: str, days_left: int) -> bool:
@@ -403,7 +453,40 @@ def send_weekly_briefing(
 
     subject = f"[MAIC LAB] Riepilogo settimanale — {today.strftime('%Y/%m/%d')}"
     body = "\n".join(lines)
-    return _send(subject, body, to_email)
+
+    # ── HTML version ─────────────────────────────────────────────────────────
+    from utils import email_templates as T
+
+    blocks = [
+        T.paragraph(f"Ciao <b>{T.esc(first_name)}</b>,"),
+        T.paragraph(
+            f"ecco il tuo riepilogo per la settimana del "
+            f"<b>{T._fmt(monday.isoformat())} – {T._fmt(friday.isoformat())}</b>.",
+        ),
+        T.stat_tiles([
+            ("scaduti", len(overdue_sorted), "overdue"),
+            (f"entro {threshold}g", len(upcoming_sorted), "due_soon"),
+            ("da sbloccare", len(supervised_sorted), "blocked"),
+        ]),
+        T.section("🔴 SCADUTI", "overdue", overdue_sorted, threshold),
+        T.section(f"🟠 IN SCADENZA ENTRO {threshold} GIORNI", "due_soon", upcoming_sorted, threshold),
+        T.section("🚫 DA SBLOCCARE — IN SUPERVISIONE", "blocked", supervised_sorted, threshold),
+        T.section("📋 TUTTI I TUOI TASK ATTIVI", "normal", combined, threshold),
+    ]
+    if not combined and not overdue_sorted and not upcoming_sorted:
+        blocks.append(T.paragraph(
+            "✅ Non hai task attivi in questo momento. Buona settimana!",
+            color=T.URGENCY["normal"][0],
+        ))
+
+    html = T.shell(
+        preheader=intro,
+        heading="Il tuo riepilogo settimanale",
+        body_html="".join(blocks),
+        app_url=app_url,
+        cta_label="Apri il Task Manager",
+    )
+    return _send(subject, body, to_email, html_body=html)
 
 
 def send_overdue_alert(task: dict, to_email: str) -> bool:
@@ -429,4 +512,22 @@ def send_overdue_alert(task: dict, to_email: str) -> bool:
         f"Aggiorna lo status sull'app: {app_url}\n\n"
         "— MAIC LAB Task Manager"
     )
-    return _send(subject, body, to_email)
+
+    from utils import email_templates as T
+    html = T.shell(
+        preheader=f"{seq_id} — {task_name} è scaduto",
+        heading="Un task è scaduto",
+        body_html="".join([
+            T.paragraph("Il task seguente è <b>scaduto ieri</b> e non risulta completato."),
+            T.section("🔴 SCADUTO", "overdue", [task]),
+            T.paragraph(
+                "Se il lavoro è concluso, aggiorna lo stato. Se sei bloccato, "
+                "segnalalo mettendo il task su <b>Blocked</b>: il supervisore lo vedrà "
+                "subito in dashboard.",
+                size=13, color=T.MUTED,
+            ),
+        ]),
+        app_url=app_url,
+        cta_label="Aggiorna lo stato",
+    )
+    return _send(subject, body, to_email, html_body=html)

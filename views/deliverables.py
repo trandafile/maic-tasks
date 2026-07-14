@@ -13,7 +13,7 @@ import streamlit as st
 
 from core.supabase_client import supabase
 from db import get_settings
-from utils.helpers import fmt_date, deliverable_chip_html
+from utils.helpers import fmt_date, deliverable_chip_html, stable_colour
 from utils.modals import person_pill_html
 from utils.pdf_generator import generate_deliverables_pdf
 
@@ -38,14 +38,8 @@ _URGENCY_STYLE = {
     "done":     ("transparent", "#2E7D32"),
 }
 
-_PROJECT_PALETTE = [
-    "#1565C0", "#2E7D32", "#E65100", "#6A1B9A",
-    "#00695C", "#AD1457", "#0277BD", "#4527A0",
-]
-
-
 def _proj_colour(label: str) -> str:
-    return _PROJECT_PALETTE[abs(hash(label or "?")) % len(_PROJECT_PALETTE)]
+    return stable_colour(label)
 
 
 def _parse_date(value) -> datetime.date | None:

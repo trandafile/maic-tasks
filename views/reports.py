@@ -8,6 +8,7 @@ from utils.modals import person_pill_html, task_details_modal, subtask_details_m
 from utils.helpers import (
     fmt_date, sort_tasks_by_deadline, deliverable_chip_html, comment_badge_html,
     TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX, TASK_ROW_CLASS, SUBTASK_ROW_CLASS,
+    stable_colour,
 )
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
@@ -51,10 +52,10 @@ def _esc(text) -> str:
 
 
 def _avatar_colour(name: str) -> str:
-    return AVATAR_PALETTE[abs(hash(name)) % len(AVATAR_PALETTE)]
+    return stable_colour(name, AVATAR_PALETTE)
 
 def _proj_badge_color(acronym: str) -> str:
-    return _PROJECT_PALETTE[abs(hash(acronym or "?")) % len(_PROJECT_PALETTE)]
+    return stable_colour(acronym, _PROJECT_PALETTE)
 
 def _initials(name: str) -> str:
     parts = (name or "?").split()

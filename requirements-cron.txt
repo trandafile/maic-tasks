@@ -1,0 +1,4 @@
+# Dependencies for the GitHub Actions weekly-briefing cron only.
+# The scheduler, e-mail templates and SMTP code are pure standard library,
+# so Streamlit and the reporting stack are deliberately NOT installed here.
+supabase

@@ -1,0 +1,45 @@
+name: Weekly briefing
+
+# Sends the weekly digest even when nobody opens the app (a Streamlit Cloud app
+# sleeps when idle, so the in-app scheduler alone is not reliable).
+#
+# Setup, once: repo → Settings → Secrets and variables → Actions → add
+#   SUPABASE_URL   and   SUPABASE_KEY
+# SMTP settings are read from the `settings` table in Supabase, so they do not
+# need to be duplicated here.
+
+on:
+  schedule:
+    # 06:00 UTC every Monday (07:00 Italy in winter, 08:00 in summer).
+    # GitHub queues cron jobs on shared runners, so it can fire a few minutes
+    # late — harmless: the briefing is deduplicated per ISO week.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+concurrency:
+  # Never let a manual run and the cron send twice at the same time.
+  group: weekly-briefing
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        # Only the Supabase client: the scheduler, the mail templates and the
+        # SMTP code are pure standard library, so Streamlit is not needed here.
+        run: pip install -r requirements-cron.txt
+
+      - name: Send weekly briefing
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/send_weekly_briefing.py

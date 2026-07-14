@@ -1,8 +1,17 @@
 """utils/scheduler.py — Weekly briefing and overdue alert scheduler.
 
-Call check_and_send_deadline_reminders() once per session from app.py.
-Users.last_reminder_sent deduplicates Monday briefings.
-Tasks/Subtasks.last_reminder_sent deduplicate the one-shot overdue alert.
+Two entry points, same code:
+
+* app.py calls check_and_send_deadline_reminders() once per session — a
+  best-effort fallback;
+* scripts/send_weekly_briefing.py runs it from a GitHub Actions cron, so the
+  mail goes out even when nobody opens the app.
+
+Cadence: **once per ISO week, per user**. The old rule was "today is Monday",
+which silently skipped the whole week if no session happened on a Monday (and a
+Streamlit Cloud app sleeps when idle). Anchoring to the ISO week means the
+briefing is sent on Monday when the cron fires, and otherwise on the first day
+of the week somebody shows up — never twice in the same week, never drifting.
 """
 
 import datetime
@@ -14,7 +23,25 @@ from utils.notifications import send_overdue_alert, send_weekly_briefing
 _CLOSED = {"Completed", "Cancelled"}
 
 
-def check_and_send_deadline_reminders():
+def _iso_week(d: datetime.date) -> tuple[int, int]:
+    y, w, _ = d.isocalendar()
+    return (y, w)
+
+
+def _should_send_weekly(last_sent: str | None, today: datetime.date) -> bool:
+    """True when no briefing was sent to this user in the current ISO week."""
+    if not last_sent:
+        return True
+    try:
+        last = datetime.date.fromisoformat(str(last_sent)[:10])
+    except (TypeError, ValueError):
+        return True  # unreadable value → treat as never sent
+    return _iso_week(last) < _iso_week(today)
+
+
+def check_and_send_deadline_reminders() -> dict:
+    """Send due briefings and overdue alerts. Returns a summary for the cron."""
+    summary = {"briefings_sent": 0, "alerts_sent": 0, "skipped": None, "error": None}
     try:
         from core.supabase_client import supabase
 
@@ -23,12 +50,13 @@ def check_and_send_deadline_reminders():
         cfg = get_settings()
 
         if not cfg.get("notifications_enabled"):
-            return
+            summary["skipped"] = "notifications_enabled is off"
+            return summary
         if not cfg.get("smtp_password"):
-            return
+            summary["skipped"] = "smtp_password is not configured"
+            return summary
 
         threshold = int(cfg.get("expiring_threshold_days", 14))
-        is_monday = today.weekday() == 0
         yesterday = (today - datetime.timedelta(days=1)).isoformat()
 
         users = (
@@ -82,42 +110,44 @@ def check_and_send_deadline_reminders():
             if subtask.get("status") not in _CLOSED
         ]
 
-        if is_monday:
-            for user in users:
-                email = user.get("email")
-                if not email or user.get("last_reminder_sent") == today_str:
-                    continue
+        # ── Weekly briefing: once per ISO week, per user ──────────────────────
+        for user in users:
+            email = user.get("email")
+            if not email or not _should_send_weekly(user.get("last_reminder_sent"), today):
+                continue
 
-                owned_items = [item for item in all_active if item.get("owner_email") == email]
-                overdue = [item for item in owned_items if _deadline_before(item.get("deadline"), today)]
-                upcoming = [
-                    item for item in owned_items
-                    if _deadline_within(item.get("deadline"), today, threshold)
-                ]
-                overdue_keys = {_item_key(item) for item in overdue}
-                upcoming_keys = {_item_key(item) for item in upcoming}
-                active = [
-                    item for item in owned_items
-                    if _item_key(item) not in overdue_keys and _item_key(item) not in upcoming_keys
-                ]
-                supervised_blocked = [
-                    item for item in all_active
-                    if item.get("supervisor_email") == email
-                    and item.get("status") == "Blocked"
-                    and item.get("owner_email") != email
-                ]
+            owned_items = [item for item in all_active if item.get("owner_email") == email]
+            overdue = [item for item in owned_items if _deadline_before(item.get("deadline"), today)]
+            upcoming = [
+                item for item in owned_items
+                if _deadline_within(item.get("deadline"), today, threshold)
+            ]
+            overdue_keys = {_item_key(item) for item in overdue}
+            upcoming_keys = {_item_key(item) for item in upcoming}
+            active = [
+                item for item in owned_items
+                if _item_key(item) not in overdue_keys and _item_key(item) not in upcoming_keys
+            ]
+            supervised_blocked = [
+                item for item in all_active
+                if item.get("supervisor_email") == email
+                and item.get("status") == "Blocked"
+                and item.get("owner_email") != email
+            ]
 
-                if send_weekly_briefing(
-                    to_email=email,
-                    name=user.get("name") or email,
-                    overdue=overdue,
-                    upcoming=upcoming,
-                    active=active,
-                    supervised_blocked=supervised_blocked,
-                    threshold=threshold,
-                ):
-                    _update_user_last_reminder(supabase, email, today_str)
+            if send_weekly_briefing(
+                to_email=email,
+                name=user.get("name") or email,
+                overdue=overdue,
+                upcoming=upcoming,
+                active=active,
+                supervised_blocked=supervised_blocked,
+                threshold=threshold,
+            ):
+                _update_user_last_reminder(supabase, email, today_str)
+                summary["briefings_sent"] += 1
 
+        # ── One-shot alert the day after a deadline passed ────────────────────
         for table_name, records, is_subtask in (
             ("tasks", tasks, False),
             ("subtasks", subtasks, True),
@@ -141,13 +171,19 @@ def check_and_send_deadline_reminders():
 
                 sent_any = False
                 for email in recipients:
-                    sent_any = send_overdue_alert(enriched, email) or sent_any
+                    if send_overdue_alert(enriched, email):
+                        sent_any = True
+                        summary["alerts_sent"] += 1
 
                 if sent_any:
                     _update_item_last_reminder(supabase, table_name, record["id"], today_str)
 
+        return summary
+
     except Exception as e:
         print(f"[scheduler] Errore durante il check scadenze: {e}")
+        summary["error"] = str(e)
+        return summary
 
 
 def _item_key(item: dict) -> tuple:
