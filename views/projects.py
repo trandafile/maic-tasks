@@ -733,6 +733,8 @@ def show_projects():
         # ── Collapsed by default ──────────────────────────────────────────────
         with st.expander(f"📁 {proj_name} ({acronym}){arch_tag}", expanded=False):
 
+            proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
+
             # ── Top-bar: add deliverable + add generic task ───────────────────
             tc1, tc2, _ = st.columns([2, 2, 6])
             with tc1:
@@ -742,13 +744,15 @@ def show_projects():
             with tc2:
                 if st.button("➕ Generic Task", key=f"add_generic_t_{proj_id}", use_container_width=True):
                     add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=None)
-
-            st.write("")
-
-            proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
-
-            if not proj_deliverables:
-                st.caption("*No deliverables defined for this project.*")
+            with _:
+                if not proj_deliverables:
+                    st.markdown(
+                        "<div style='font-style:italic;color:#888;font-size:0.85rem;"
+                        "line-height:2.2rem;padding-left:0.25rem'>"
+                        "No deliverables defined for this project."
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
 
             # ── One styled block per deliverable ──────────────────────────────
             for d in proj_deliverables:
@@ -851,10 +855,6 @@ def show_projects():
                     "color:#666;text-transform:uppercase'>Tasks without deliverable</span>"
                 )
                 with st.container(border=True):
-                    st.html(
-                        "<p style='font-style:italic;color:#888;font-size:0.83rem;margin:0 0 6px 0'>"
-                        "General tasks not linked to a specific deliverable</p>"
-                    )
                     for t in unassigned:
                         _render_task_row(
                             t,
