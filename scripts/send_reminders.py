@@ -1,9 +1,11 @@
 #!/usr/bin/env python
-"""Headless entry point for the weekly briefing — run by GitHub Actions.
+"""Headless entry point for the e-mail reminders — run DAILY by GitHub Actions.
 
 Sends, to every approved user:
-  * the weekly briefing (once per ISO week, so a retry the next day is safe);
-  * the one-shot alert for deadlines that passed yesterday.
+  * the weekly briefing — deduplicated per ISO week, so running this every day
+    still delivers it once, on the first run of the week (Monday);
+  * the one-shot alert for deadlines that passed yesterday — which is precisely
+    why this has to run daily and not only on Mondays.
 
 SMTP settings are read from the `settings` row in Supabase, so the only secrets
 this needs are SUPABASE_URL / SUPABASE_KEY.
@@ -14,7 +16,7 @@ Exit codes: 0 = ran (even if nothing had to be sent), 1 = misconfigured or faile
 import os
 import sys
 
-# Allow "python scripts/send_weekly_briefing.py" from the repo root.
+# Allow "python scripts/send_reminders.py" from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.scheduler import check_and_send_deadline_reminders  # noqa: E402

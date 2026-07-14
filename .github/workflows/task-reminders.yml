@@ -1,0 +1,52 @@
+name: Task reminders
+
+# Sends reminders even when nobody opens the app (a Streamlit Cloud app sleeps
+# when idle, so the in-app scheduler alone is not reliable).
+#
+# Runs DAILY on purpose, although the digest is weekly:
+#   * the weekly briefing dedupes itself per ISO week, so it still goes out only
+#     once — on Monday, the first run of the week;
+#   * the "deadline passed yesterday" alerts must be checked EVERY day, or a
+#     Wednesday deadline would never trigger its Thursday alert.
+# One schedule, both behaviours correct.
+#
+# Setup, once: repo → Settings → Secrets and variables → Actions → add
+#   SUPABASE_URL   and   SUPABASE_KEY
+# SMTP settings are read from the `settings` table in Supabase, so they are not
+# duplicated here.
+
+on:
+  schedule:
+    # 06:00 UTC daily → 07:00 Italy in winter, 08:00 in summer.
+    # GitHub queues cron jobs on shared runners and can fire a few minutes late;
+    # harmless, since every send is deduplicated in the database.
+    - cron: "0 6 * * *"
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+concurrency:
+  # Never let a manual run and the cron send at the same time.
+  group: task-reminders
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        # Only the Supabase client: the scheduler, the mail templates and the
+        # SMTP code are pure standard library, so Streamlit is not needed here.
+        run: pip install -r requirements-cron.txt
+
+      - name: Send reminders (weekly briefing + overdue alerts)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scripts/send_reminders.py
