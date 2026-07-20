@@ -219,7 +219,7 @@ def generate_projects_pdf(
 
     elements: list = []
     elements.append(Paragraph("Projects Overview — MAIC LAB", h1))
-    elements.append(Paragraph(f"Generated on {_dt.date.today().strftime('%d/%m/%Y')}", small))
+    elements.append(Paragraph(f"Generated on {datetime.date.today().strftime('%d/%m/%Y')}", small))
     elements.append(Spacer(1, 8))
 
     for idx, proj in enumerate(sorted(projects, key=lambda p: (p.get("name") or "").lower())):
