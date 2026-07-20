@@ -772,7 +772,7 @@ def show_projects():
     user_email = st.session_state.get('user_email')
     is_admin   = st.session_state.get('user_role') == 'admin'
 
-    col_tools, c_scope, c_arch = st.columns([1.4, 2.2, 1.4])
+    col_tools, c_scope, c_actions = st.columns([1.4, 2.2, 2.2])
     with col_tools:
         if is_admin:
             if st.button("➕ New Project", type="primary", use_container_width=True):
@@ -788,8 +788,16 @@ def show_projects():
         else:
             # Non-admins are already scoped to the projects they are involved in.
             show_all = True
-    with c_arch:
-        show_archived = st.checkbox("Show Archived", value=False)
+    with c_actions:
+        a_exp, a_col, a_arch = st.columns([1.0, 1.0, 1.3])
+        with a_exp:
+            if st.button("Expand all", key="proj_expand_all", use_container_width=True):
+                st.session_state["_projects_expand_mode"] = "all"
+        with a_col:
+            if st.button("Collapse all", key="proj_collapse_all", use_container_width=True):
+                st.session_state["_projects_expand_mode"] = "none"
+        with a_arch:
+            show_archived = st.checkbox("Show Archived", value=False)
 
     only_mine = is_admin and not show_all
     if only_mine:
@@ -919,6 +927,9 @@ def show_projects():
     subtasks = filtered_subtasks
 
     expand_all_once = bool(st.session_state.get("_projects_expand_all_once", False))
+    expand_mode = st.session_state.get("_projects_expand_mode")
+    expand_all_now = (expand_mode == "all") or expand_all_once
+    collapse_all_now = expand_mode == "none"
 
     for proj in projects:
         proj_id   = proj["id"]
@@ -926,8 +937,11 @@ def show_projects():
         acronym   = proj.get("acronym", "")
         arch_tag  = " 🗄️ ARCHIVED" if proj.get("is_archived") else ""
 
-        # Open all folders only on the rerun triggered by a filter change.
-        with st.expander(f"📁 {proj_name} ({acronym}){arch_tag}", expanded=expand_all_once):
+        # Open all on filter-change one-shot or when requested via top command bar.
+        with st.expander(
+            f"📁 {proj_name} ({acronym}){arch_tag}",
+            expanded=expand_all_now if not collapse_all_now else False,
+        ):
 
             proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
 
