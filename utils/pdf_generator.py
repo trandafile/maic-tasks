@@ -212,7 +212,7 @@ def generate_projects_pdf(
         seq_id = task.get("sequence_id") or f"T-{task.get('id')}"
         lines = [
             f"{seq_id} — {task.get('name') or 'Unnamed task'}",
-            f"Status: {task.get('status') or 'Not started'} | Priority: {(task.get('priority') or 'none').lower()} | Deadline: {fmt_date(task.get('deadline'))}",
+            f"Status: {task.get('status') or 'Not started'} | Priority: {(task.get('priority') or 'none').lower()} | Deadline: {_fmt_date(task.get('deadline'))}",
             f"Owner: {owner}" + (f" | Supervisor: {supervisor}" if task.get("supervisor_email") else ""),
         ]
         return lines
@@ -247,7 +247,7 @@ def generate_projects_pdf(
                 d_name = d.get("name") or "Unnamed deliverable"
                 d_type = d.get("type") or "generic"
                 elements.append(Paragraph(f"Deliverable ({d_type}): {d_name}", styles["Normal"]))
-                elements.append(Paragraph(f"Deadline: {fmt_date(d.get('deadline'))}", small))
+                elements.append(Paragraph(f"Deadline: {_fmt_date(d.get('deadline'))}", small))
                 elements.append(Spacer(1, 2))
 
                 d_tasks = [t for t in tasks if t.get("deliverable_id") == d.get("id")]
@@ -264,7 +264,7 @@ def generate_projects_pdf(
                             s_supervisor = _assignee_name(s.get("supervisor_email"))
                             elements.append(Paragraph(f"↳ {s.get('name') or 'Unnamed subtask'}", small))
                             elements.append(Paragraph(
-                                f"Status: {s.get('status') or 'Not started'} | Deadline: {fmt_date(s.get('deadline'))} | Owner: {s_owner}" +
+                                f"Status: {s.get('status') or 'Not started'} | Deadline: {_fmt_date(s.get('deadline'))} | Owner: {s_owner}" +
                                 (f" | Supervisor: {s_supervisor}" if s.get("supervisor_email") else ""),
                                 small,
                             ))
