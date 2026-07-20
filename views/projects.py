@@ -812,67 +812,72 @@ def show_projects():
     user_labels = [f"{u['name']} ({u['email']})" for u in users if u.get("email")]
     user_label_to_email = {f"{u['name']} ({u['email']})": u["email"] for u in users if u.get("email")}
 
-    c_owner = c_sup = None
-    if is_admin:
-        c_owner, c_sup, c_dead = st.columns([2.2, 2.2, 1.4])
-        with c_owner:
-            owner_label = st.selectbox(
-                "Filter by owner",
-                ["All owners"] + user_labels,
-                key="proj_filter_owner",
+    with st.container(border=True):
+        st.markdown("**View filters**")
+        if is_admin:
+            c_owner, c_sup, c_dead, c_export = st.columns([2.1, 2.1, 1.4, 1.6])
+            with c_owner:
+                owner_label = st.selectbox(
+                    "Owner",
+                    ["All owners"] + user_labels,
+                    key="proj_filter_owner",
+                )
+            with c_sup:
+                supervisor_label = st.selectbox(
+                    "Supervisor",
+                    ["All supervisors"] + user_labels,
+                    key="proj_filter_supervisor",
+                )
+        else:
+            c_dead, c_export = st.columns([2.0, 1.6])
+            owner_label = "All owners"
+            supervisor_label = "All supervisors"
+
+        with c_dead:
+            deadline_label = st.selectbox(
+                "Deadline",
+                ["All deadlines", "Within a week", "Within a month"],
+                key="proj_filter_deadline",
             )
-        with c_sup:
-            supervisor_label = st.selectbox(
-                "Filter by supervisor",
-                ["All supervisors"] + user_labels,
-                key="proj_filter_supervisor",
+
+        owner_email = user_label_to_email.get(owner_label) if is_admin and owner_label != "All owners" else None
+        supervisor_email = user_label_to_email.get(supervisor_label) if is_admin and supervisor_label != "All supervisors" else None
+        deadline_scope = {
+            "Within a week": "week",
+            "Within a month": "month",
+        }.get(deadline_label)
+
+        filtered_projects, filtered_deliverables, filtered_tasks, filtered_subtasks = _apply_projects_filters(
+            projects,
+            deliverables,
+            tasks,
+            subtasks,
+            is_admin=is_admin,
+            owner_email=owner_email,
+            supervisor_email=supervisor_email,
+            deadline_scope=deadline_scope,
+        )
+
+        with c_export:
+            pdf_buf = generate_projects_pdf(
+                filtered_projects,
+                filtered_deliverables,
+                filtered_tasks,
+                filtered_subtasks,
+                users,
             )
-    else:
-        c_dead = st.container()
-        owner_label = "All owners"
-        supervisor_label = "All supervisors"
+            st.download_button(
+                "📄 Export PDF",
+                data=pdf_buf,
+                file_name=f"projects_view_{_dt.date.today().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
 
-    with c_dead:
-        deadline_label = st.selectbox(
-            "Deadline",
-            ["All deadlines", "Within a week", "Within a month"],
-            key="proj_filter_deadline",
-        )
-
-    owner_email = user_label_to_email.get(owner_label) if is_admin and owner_label != "All owners" else None
-    supervisor_email = user_label_to_email.get(supervisor_label) if is_admin and supervisor_label != "All supervisors" else None
-    deadline_scope = {
-        "Within a week": "week",
-        "Within a month": "month",
-    }.get(deadline_label)
-
-    filtered_projects, filtered_deliverables, filtered_tasks, filtered_subtasks = _apply_projects_filters(
-        projects,
-        deliverables,
-        tasks,
-        subtasks,
-        is_admin=is_admin,
-        owner_email=owner_email,
-        supervisor_email=supervisor_email,
-        deadline_scope=deadline_scope,
-    )
-
-    export_col, _ = st.columns([1.6, 8.4])
-    with export_col:
-        pdf_buf = generate_projects_pdf(
-            filtered_projects,
-            filtered_deliverables,
-            filtered_tasks,
-            filtered_subtasks,
-            users,
-        )
-        st.download_button(
-            "📄 Export current view",
-            data=pdf_buf,
-            file_name=f"projects_view_{_dt.date.today().strftime('%Y%m%d')}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        if is_admin:
+            st.caption("Admins can filter by owner and supervisor. Everyone can filter by deadline.")
+        else:
+            st.caption("You can filter the view by deadline.")
 
     st.divider()
 
