@@ -234,7 +234,7 @@ def generate_projects_pdf(
         if proj.get("funding_agency"):
             elements.append(Paragraph(f"Funding: {proj.get('funding_agency')}", small))
         if proj.get("start_date") or proj.get("end_date"):
-            elements.append(Paragraph(f"Period: {fmt_date(proj.get('start_date'))} -> {fmt_date(proj.get('end_date'))}", small))
+            elements.append(Paragraph(f"Period: {_fmt_date(proj.get('start_date'))} -> {_fmt_date(proj.get('end_date'))}", small))
         elements.append(Spacer(1, 4))
 
         pid = proj.get("id")

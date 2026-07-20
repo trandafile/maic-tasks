@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^python -c \"from utils\\.pdf_generator import generate_projects_pdf; buf = generate_projects_pdf\\(\\[\\{'id': 1, 'name': 'Test Project', 'acronym': 'TP', 'start_date': '2024-01-01', 'end_date': '2024-12-31'\\}\\], \\[\\], \\[\\], \\[\\], \\[\\]\\); print\\(len\\(buf\\.getvalue\\(\\)\\)\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
