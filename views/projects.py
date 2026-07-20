@@ -4,6 +4,7 @@ import json
 from core.supabase_client import supabase
 from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
 from db import delete_task_cascade, log_status_change
+from utils.pdf_generator import generate_projects_pdf
 from utils.notifications import send_task_assigned
 from utils.helpers import (
     fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles, deliverable_chip_html,
@@ -442,6 +443,90 @@ def _deadline_html(deadline_str: str | None, status: str, threshold: int = 7) ->
     )
 
 
+def _parse_date(value: str | None) -> _dt.date | None:
+    if not value:
+        return None
+    try:
+        return _dt.date.fromisoformat(str(value)[:10])
+    except Exception:
+        return None
+
+
+def _deadline_window_days(scope: str | None) -> int | None:
+    mapping = {
+        "week": 7,
+        "month": 30,
+    }
+    return mapping.get(scope or "")
+
+
+def _matches_people(item: dict, owner_email: str | None, supervisor_email: str | None) -> bool:
+    if owner_email and item.get("owner_email") != owner_email:
+        return False
+    if supervisor_email and item.get("supervisor_email") != supervisor_email:
+        return False
+    return True
+
+
+def _matches_deadline(item: dict, deadline_days: int | None) -> bool:
+    if deadline_days is None:
+        return True
+    dl = _parse_date(item.get("deadline"))
+    if not dl:
+        return False
+    delta = (dl - _dt.date.today()).days
+    return 0 <= delta <= deadline_days
+
+
+def _apply_projects_filters(
+    projects: list[dict],
+    deliverables: list[dict],
+    tasks: list[dict],
+    subtasks: list[dict],
+    *,
+    is_admin: bool,
+    owner_email: str | None = None,
+    supervisor_email: str | None = None,
+    deadline_scope: str | None = None,
+):
+    deadline_days = _deadline_window_days(deadline_scope)
+    owner_filter = owner_email if is_admin else None
+    supervisor_filter = supervisor_email if is_admin else None
+
+    def _task_visible(task: dict) -> bool:
+        return _matches_people(task, owner_filter, supervisor_filter) and _matches_deadline(task, deadline_days)
+
+    def _subtask_visible(subtask: dict) -> bool:
+        return _matches_people(subtask, owner_filter, supervisor_filter) and _matches_deadline(subtask, deadline_days)
+
+    visible_subtask_ids = {s["id"] for s in subtasks if s.get("id") is not None and _subtask_visible(s)}
+    visible_task_ids = {
+        t["id"]
+        for t in tasks
+        if t.get("id") is not None and (
+            _task_visible(t)
+            or any(s.get("task_id") == t.get("id") for s in subtasks if s.get("id") in visible_subtask_ids)
+        )
+    }
+    visible_deliv_ids = {
+        d["id"]
+        for d in deliverables
+        if d.get("id") is not None and any(t.get("deliverable_id") == d.get("id") for t in tasks if t.get("id") in visible_task_ids)
+    }
+    visible_project_ids = {
+        t.get("project_id")
+        for t in tasks
+        if t.get("id") in visible_task_ids and t.get("project_id") is not None
+    }
+
+    filtered_projects = [p for p in projects if p.get("id") in visible_project_ids]
+    filtered_deliverables = [d for d in deliverables if d.get("id") in visible_deliv_ids]
+    filtered_tasks = [t for t in tasks if t.get("id") in visible_task_ids]
+    filtered_subtasks = [s for s in subtasks if s.get("task_id") in visible_task_ids]
+
+    return filtered_projects, filtered_deliverables, filtered_tasks, filtered_subtasks
+
+
 def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix, threshold: int):
     t_id      = t["id"]
     is_owner  = t.get("owner_email") == user_email
@@ -723,6 +808,78 @@ def show_projects():
         else:
             st.info("No active tasks found. Create a new task to get started.")
         return
+
+    user_labels = [f"{u['name']} ({u['email']})" for u in users if u.get("email")]
+    user_label_to_email = {f"{u['name']} ({u['email']})": u["email"] for u in users if u.get("email")}
+
+    c_owner = c_sup = None
+    if is_admin:
+        c_owner, c_sup, c_dead = st.columns([2.2, 2.2, 1.4])
+        with c_owner:
+            owner_label = st.selectbox(
+                "Filter by owner",
+                ["All owners"] + user_labels,
+                key="proj_filter_owner",
+            )
+        with c_sup:
+            supervisor_label = st.selectbox(
+                "Filter by supervisor",
+                ["All supervisors"] + user_labels,
+                key="proj_filter_supervisor",
+            )
+    else:
+        c_dead = st.container()
+        owner_label = "All owners"
+        supervisor_label = "All supervisors"
+
+    with c_dead:
+        deadline_label = st.selectbox(
+            "Deadline",
+            ["All deadlines", "Within a week", "Within a month"],
+            key="proj_filter_deadline",
+        )
+
+    owner_email = user_label_to_email.get(owner_label) if is_admin and owner_label != "All owners" else None
+    supervisor_email = user_label_to_email.get(supervisor_label) if is_admin and supervisor_label != "All supervisors" else None
+    deadline_scope = {
+        "Within a week": "week",
+        "Within a month": "month",
+    }.get(deadline_label)
+
+    filtered_projects, filtered_deliverables, filtered_tasks, filtered_subtasks = _apply_projects_filters(
+        projects,
+        deliverables,
+        tasks,
+        subtasks,
+        is_admin=is_admin,
+        owner_email=owner_email,
+        supervisor_email=supervisor_email,
+        deadline_scope=deadline_scope,
+    )
+
+    export_col, _ = st.columns([1.6, 8.4])
+    with export_col:
+        pdf_buf = generate_projects_pdf(
+            filtered_projects,
+            filtered_deliverables,
+            filtered_tasks,
+            filtered_subtasks,
+            users,
+        )
+        st.download_button(
+            "📄 Export current view",
+            data=pdf_buf,
+            file_name=f"projects_view_{_dt.date.today().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+    st.divider()
+
+    projects = filtered_projects
+    deliverables = filtered_deliverables
+    tasks = filtered_tasks
+    subtasks = filtered_subtasks
 
     for proj in projects:
         proj_id   = proj["id"]

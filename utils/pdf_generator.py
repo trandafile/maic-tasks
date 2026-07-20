@@ -162,6 +162,121 @@ def generate_deliverables_pdf(
     return buf
 
 
+def generate_projects_pdf(
+    projects: list[dict],
+    deliverables: list[dict],
+    tasks: list[dict],
+    subtasks: list[dict],
+    users: list[dict],
+) -> "BytesIO":
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=20 * mm,
+        rightMargin=20 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+    )
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("PH1", parent=styles["Heading1"], fontSize=16, spaceAfter=4)
+    h2 = ParagraphStyle("PH2", parent=styles["Heading2"], fontSize=11, spaceAfter=2)
+    small = ParagraphStyle("PS", parent=styles["Normal"], fontSize=8, textColor=colors.grey)
+    label = ParagraphStyle(
+        "PL",
+        parent=styles["Normal"],
+        fontSize=7,
+        textColor=colors.grey,
+        fontName="Helvetica-BoldOblique",
+        spaceAfter=3,
+    )
+
+    users_by_email = {u.get("email"): u for u in users if u.get("email")}
+    proj_by_id = {p.get("id"): p for p in projects if p.get("id") is not None}
+    tasks_by_id = {t.get("id"): t for t in tasks if t.get("id") is not None}
+    subtasks_by_task: dict[int, list[dict]] = {}
+    for s in subtasks:
+        task_id = s.get("task_id")
+        if task_id is None:
+            continue
+        subtasks_by_task.setdefault(task_id, []).append(s)
+
+    def _assignee_name(email: str | None) -> str:
+        if not email:
+            return "—"
+        return users_by_email.get(email, {}).get("name", email)
+
+    def _task_lines(task: dict) -> list:
+        owner = _assignee_name(task.get("owner_email"))
+        supervisor = _assignee_name(task.get("supervisor_email"))
+        seq_id = task.get("sequence_id") or f"T-{task.get('id')}"
+        lines = [
+            f"{seq_id} — {task.get('name') or 'Unnamed task'}",
+            f"Status: {task.get('status') or 'Not started'} | Priority: {(task.get('priority') or 'none').lower()} | Deadline: {fmt_date(task.get('deadline'))}",
+            f"Owner: {owner}" + (f" | Supervisor: {supervisor}" if task.get("supervisor_email") else ""),
+        ]
+        return lines
+
+    elements: list = []
+    elements.append(Paragraph("Projects Overview — MAIC LAB", h1))
+    elements.append(Paragraph(f"Generated on {_dt.date.today().strftime('%d/%m/%Y')}", small))
+    elements.append(Spacer(1, 8))
+
+    for idx, proj in enumerate(sorted(projects, key=lambda p: (p.get("name") or "").lower())):
+        if idx > 0:
+            elements.append(PageBreak())
+
+        pname = proj.get("name") or "Unnamed project"
+        acronym = proj.get("acronym") or ""
+        title = f"{pname} ({acronym})" if acronym else pname
+        elements.append(Paragraph(title, h2))
+
+        if proj.get("funding_agency"):
+            elements.append(Paragraph(f"Funding: {proj.get('funding_agency')}", small))
+        if proj.get("start_date") or proj.get("end_date"):
+            elements.append(Paragraph(f"Period: {fmt_date(proj.get('start_date'))} -> {fmt_date(proj.get('end_date'))}", small))
+        elements.append(Spacer(1, 4))
+
+        pid = proj.get("id")
+        proj_deliverables = [d for d in deliverables if d.get("project_id") == pid]
+        proj_deliverables = sorted(proj_deliverables, key=lambda d: d.get("deadline") or "9999-12-31")
+
+        if proj_deliverables:
+            elements.append(Paragraph("Deliverables", label))
+            for d in proj_deliverables:
+                d_name = d.get("name") or "Unnamed deliverable"
+                d_type = d.get("type") or "generic"
+                elements.append(Paragraph(f"Deliverable ({d_type}): {d_name}", styles["Normal"]))
+                elements.append(Paragraph(f"Deadline: {fmt_date(d.get('deadline'))}", small))
+                elements.append(Spacer(1, 2))
+
+                d_tasks = [t for t in tasks if t.get("deliverable_id") == d.get("id")]
+                d_tasks = sorted(d_tasks, key=lambda t: t.get("deadline") or "9999-12-31")
+                if not d_tasks:
+                    elements.append(Paragraph("No tasks matching filters.", small))
+                else:
+                    for t in d_tasks:
+                        for line in _task_lines(t):
+                            elements.append(Paragraph(line, small))
+                        t_subtasks = sorted(subtasks_by_task.get(t.get("id"), []), key=lambda s: s.get("deadline") or "9999-12-31")
+                        for s in t_subtasks:
+                            s_owner = _assignee_name(s.get("owner_email"))
+                            s_supervisor = _assignee_name(s.get("supervisor_email"))
+                            elements.append(Paragraph(f"↳ {s.get('name') or 'Unnamed subtask'}", small))
+                            elements.append(Paragraph(
+                                f"Status: {s.get('status') or 'Not started'} | Deadline: {fmt_date(s.get('deadline'))} | Owner: {s_owner}" +
+                                (f" | Supervisor: {s_supervisor}" if s.get("supervisor_email") else ""),
+                                small,
+                            ))
+                elements.append(Spacer(1, 4))
+        else:
+            elements.append(Paragraph("No deliverables matching filters.", small))
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf
+
+
 def generate_report_pdf(
     projects, deliverables, tasks, subtasks, users_dict,
     filter_proj=None, filter_user=None, filter_status=None,
