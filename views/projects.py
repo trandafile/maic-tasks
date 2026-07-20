@@ -527,6 +527,18 @@ def _apply_projects_filters(
     return filtered_projects, filtered_deliverables, filtered_tasks, filtered_subtasks
 
 
+def _is_projects_filter_active(*, is_admin: bool, owner_email: str | None, supervisor_email: str | None, deadline_scope: str | None) -> bool:
+    """Return True when at least one Projects filter is actively restricting the view."""
+    people_filter_active = is_admin and (owner_email is not None or supervisor_email is not None)
+    deadline_filter_active = deadline_scope is not None
+    return people_filter_active or deadline_filter_active
+
+
+def _get_projects_filter_signature(*, is_admin: bool, owner_email: str | None, supervisor_email: str | None, deadline_scope: str | None) -> tuple:
+    """Build a stable signature used to detect filter changes across reruns."""
+    return (is_admin, owner_email, supervisor_email, deadline_scope)
+
+
 def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix, threshold: int):
     t_id      = t["id"]
     is_owner  = t.get("owner_email") == user_email
@@ -846,6 +858,26 @@ def show_projects():
             "Within a week": "week",
             "Within a month": "month",
         }.get(deadline_label)
+        filters_active = _is_projects_filter_active(
+            is_admin=is_admin,
+            owner_email=owner_email,
+            supervisor_email=supervisor_email,
+            deadline_scope=deadline_scope,
+        )
+        filter_signature = _get_projects_filter_signature(
+            is_admin=is_admin,
+            owner_email=owner_email,
+            supervisor_email=supervisor_email,
+            deadline_scope=deadline_scope,
+        )
+
+        prev_signature = st.session_state.get("_projects_last_filter_signature")
+        if prev_signature is None:
+            st.session_state["_projects_last_filter_signature"] = filter_signature
+            st.session_state.setdefault("_projects_expand_all_once", False)
+        elif prev_signature != filter_signature:
+            st.session_state["_projects_last_filter_signature"] = filter_signature
+            st.session_state["_projects_expand_all_once"] = filters_active
 
         filtered_projects, filtered_deliverables, filtered_tasks, filtered_subtasks = _apply_projects_filters(
             projects,
@@ -886,14 +918,16 @@ def show_projects():
     tasks = filtered_tasks
     subtasks = filtered_subtasks
 
+    expand_all_once = bool(st.session_state.get("_projects_expand_all_once", False))
+
     for proj in projects:
         proj_id   = proj["id"]
         proj_name = proj.get("name", "Project")
         acronym   = proj.get("acronym", "")
         arch_tag  = " 🗄️ ARCHIVED" if proj.get("is_archived") else ""
 
-        # ── Collapsed by default ──────────────────────────────────────────────
-        with st.expander(f"📁 {proj_name} ({acronym}){arch_tag}", expanded=False):
+        # Open all folders only on the rerun triggered by a filter change.
+        with st.expander(f"📁 {proj_name} ({acronym}){arch_tag}", expanded=expand_all_once):
 
             proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
 
@@ -1028,3 +1062,6 @@ def show_projects():
                             key_prefix=f"p{proj_id}_u",
                             threshold=threshold,
                         )
+
+    if expand_all_once:
+        st.session_state["_projects_expand_all_once"] = False
