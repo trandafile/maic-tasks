@@ -734,6 +734,60 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
 
 # ─── Main view ──────────────────────────────────────────────────────────────────
 
+def _render_archive_completed(tasks: list, subtasks: list) -> None:
+    """Admin-only: archive every Completed item currently in view.
+
+    Scoped to what the filters show, so it can be used per project rather than
+    only globally. Archiving hides, never deletes — the data stays for the
+    punctuality and trend reports, which read archived rows on purpose.
+    """
+    done_t = [t for t in tasks if (t.get("status") or "") == "Completed" and not t.get("is_archived")]
+    done_s = [s for s in subtasks if (s.get("status") or "") == "Completed" and not s.get("is_archived")]
+    total = len(done_t) + len(done_s)
+    if not total:
+        return
+
+    key = "_confirm_archive_completed"
+    c_info, c_btn = st.columns([6, 2])
+    with c_info:
+        st.caption(
+            f"🗄️ **{total} completed items in view** "
+            f"({len(done_t)} tasks, {len(done_s)} subtasks) — archiving clears the "
+            "board without losing history."
+        )
+    with c_btn:
+        if st.session_state.get(key):
+            if st.button(f"✅ Confirm ({total})", key="arch_done_ok",
+                         type="primary", use_container_width=True):
+                ok_t = ok_s = 0
+                try:
+                    if done_t:
+                        supabase.table("tasks").update({"is_archived": True}).in_(
+                            "id", [t["id"] for t in done_t]).execute()
+                        ok_t = len(done_t)
+                    if done_s:
+                        supabase.table("subtasks").update({"is_archived": True}).in_(
+                            "id", [s["id"] for s in done_s]).execute()
+                        ok_s = len(done_s)
+                    st.session_state.pop(key, None)
+                    st.success(f"Archived {ok_t} tasks and {ok_s} subtasks.")
+                    st.rerun()
+                except Exception as e:
+                    st.session_state.pop(key, None)
+                    st.error(f"Archiving failed: {e}")
+        else:
+            if st.button("🗄️ Archive completed", key="arch_done",
+                         use_container_width=True,
+                         help="Archive every Completed task/subtask currently shown."):
+                st.session_state[key] = True
+                st.rerun()
+    if st.session_state.get(key):
+        st.warning(
+            f"Archive **{total}** completed items now in view? They disappear from the "
+            "board but stay in the database (and in the reports). Use *Show Archived* to see them."
+        )
+
+
 def show_projects():
     st.title("Projects")
     st.caption(
@@ -803,8 +857,6 @@ def show_projects():
     if only_mine:
         st.caption("Showing only tasks where you are owner or supervisor.")
 
-    st.divider()
-
     projects, deliverables, tasks, subtasks, users, user_map = fetch_hierarchy(
         show_archived,
         user_email=user_email,
@@ -832,8 +884,7 @@ def show_projects():
     user_labels = [f"{u['name']} ({u['email']})" for u in users if u.get("email")]
     user_label_to_email = {f"{u['name']} ({u['email']})": u["email"] for u in users if u.get("email")}
 
-    with st.container(border=True):
-        st.markdown("**View filters**")
+    with st.expander("⚙️ View filters", expanded=False):
         if is_admin:
             c_owner, c_sup, c_dead, c_export = st.columns([2.1, 2.1, 1.4, 1.6])
             with c_owner:
@@ -919,7 +970,12 @@ def show_projects():
         else:
             st.caption("You can filter the view by deadline.")
 
-    st.divider()
+    if filters_active:
+        st.caption("🔎 Filters are active — some projects may be hidden.")
+
+    # ── Admin housekeeping: clear the backlog of finished work ───────────────
+    if is_admin:
+        _render_archive_completed(filtered_tasks, filtered_subtasks)
 
     projects = filtered_projects
     deliverables = filtered_deliverables

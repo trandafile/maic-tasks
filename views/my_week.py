@@ -50,13 +50,13 @@ def _parse(v):
 def _deadline_bit(deadline, threshold: int) -> str:
     d = _parse(deadline)
     if not d:
-        return "<span style='color:#aaa;font-size:11px'>senza scadenza</span>"
+        return "<span style='color:#aaa;font-size:11px'>no deadline</span>"
     delta = (d - datetime.date.today()).days
     if delta < 0:
         return (f"<span style='color:#C62828;font-size:11px;font-weight:700'>"
-                f"📅 {d.strftime('%d/%m/%Y')} · scaduto da {abs(delta)}g</span>")
+                f"📅 {d.strftime('%d/%m/%Y')} · {abs(delta)}d overdue</span>")
     if delta <= threshold:
-        lbl = "oggi" if delta == 0 else f"tra {delta}g"
+        lbl = "today" if delta == 0 else f"in {delta}d"
         return (f"<span style='color:#B26A00;font-size:11px;font-weight:700'>"
                 f"📅 {d.strftime('%d/%m/%Y')} · {lbl}</span>")
     return f"<span style='color:#666;font-size:11px'>📅 {d.strftime('%d/%m/%Y')}</span>"
@@ -72,10 +72,10 @@ def _stale_bit(item: dict, threshold: int) -> str:
     elif d >= threshold:
         fg, bg = "#B26A00", "#FFF4E5"
     else:
-        return (f"<span style='color:#5C9929;font-size:11px'>aggiornato "
-                f"{'oggi' if d == 0 else f'{d}g fa'}</span>")
+        return (f"<span style='color:#5C9929;font-size:11px'>updated "
+                f"{'today' if d == 0 else f'{d}d ago'}</span>")
     return (f"<span style='background:{bg};color:{fg};border-radius:4px;padding:1px 7px;"
-            f"font-size:11px;font-weight:700'>⏳ fermo da {d}g</span>")
+            f"font-size:11px;font-weight:700'>⏳ idle {d}d</span>")
 
 
 def _proj_chip(label: str) -> str:
@@ -121,21 +121,21 @@ def _row(item: dict, kind: str, ctx: dict, idx: int):
         with c_status:
             opts = _STATUSES if status in _STATUSES else _STATUSES + [status]
             new_status = st.selectbox(
-                "Stato", opts, index=opts.index(status),
+                "Status", opts, index=opts.index(status),
                 key=f"{key}_st", label_visibility="collapsed",
             )
         with c_note:
             note = st.text_input(
-                "Aggiornamento", key=f"{key}_note", label_visibility="collapsed",
-                placeholder="A che punto sei? (una riga — resta nelle note, con la data)",
+                "Update", key=f"{key}_note", label_visibility="collapsed",
+                placeholder="Where are you with this? (one line — appended to the notes, dated)",
             )
         with c_save:
             clicked = st.button("💾", key=f"{key}_save", use_container_width=True,
-                                help="Salva stato e nota")
+                                help="Save status and note")
 
         if clicked:
             if new_status == status and not (note or "").strip():
-                st.warning("Niente da salvare: cambia lo stato o scrivi una riga.")
+                st.warning("Nothing to save: change the status or write a line.")
             else:
                 ok, err = quick_update(
                     table, item["id"],
@@ -148,22 +148,22 @@ def _row(item: dict, kind: str, ctx: dict, idx: int):
                 )
                 if ok:
                     st.session_state[f"{key}_note"] = ""
-                    st.toast(f"Aggiornato: {item.get('name','')[:40]}")
+                    st.toast(f"Updated: {item.get('name','')[:40]}")
                     st.rerun()
                 else:
-                    st.error(f"Errore: {err}")
+                    st.error(f"Error: {err}")
 
 
 def show_my_week():
-    st.title("🎯 La mia settimana")
+    st.title("🎯 My Week")
     st.caption(
-        "Tutto ciò di cui sei responsabile, aggiornabile qui senza aprire nulla. "
-        "Una riga su dove sei vale più di un cambio di stato."
+        "Everything you own, updatable right here without opening anything. "
+        "One line on where you are is worth more than a status change."
     )
 
     email = st.session_state.get("user_email")
     if not email:
-        st.error("Devi effettuare l'accesso.")
+        st.error("You must be logged in.")
         return
 
     threshold = stale_threshold()
@@ -172,7 +172,7 @@ def show_my_week():
             [{**s, "_kind": "subtask"} for s in data["subtasks"]]
 
     if not items:
-        st.success("✅ Non hai task attivi assegnati. Buona settimana!")
+        st.success("✅ Nothing assigned to you right now. Have a good week!")
         return
 
     ctx = {
@@ -187,15 +187,15 @@ def show_my_week():
     stale = [i for i in items if (dd := days_since_update(i)) is not None and dd >= threshold]
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Da aggiornare", len(items))
-    m2.metric("🔴 Scaduti", len(overdue))
-    m3.metric("🚫 Bloccati", len(blocked))
-    m4.metric(f"⏳ Fermi ≥{threshold}g", len(stale))
+    m1.metric("To update", len(items))
+    m2.metric("🔴 Overdue", len(overdue))
+    m3.metric("🚫 Blocked", len(blocked))
+    m4.metric(f"⏳ Idle ≥{threshold}d", len(stale))
 
     if stale:
         st.info(
-            f"**{len(stale)}** elementi non vengono aggiornati da almeno {threshold} giorni. "
-            "Per i task lunghi basta una riga su dove sei: è il segnale che conta più della scadenza."
+            f"**{len(stale)}** items have had no update for {threshold}+ days. "
+            "On a long task one line on where you are is the signal that matters — more than the deadline."
         )
 
     # ── Ordering: what needs a word first ────────────────────────────────────
@@ -208,7 +208,7 @@ def show_my_week():
                 PRIORITY_ORDER.get((i.get("priority") or "none").lower(), 4))
 
     only_stale = st.checkbox(
-        f"Mostra solo quelli fermi da ≥{threshold} giorni", value=False, key="mw_only_stale"
+        f"Show only items idle for ≥{threshold} days", value=False, key="mw_only_stale"
     )
     shown = [i for i in items if i in stale] if only_stale else items
     shown = sorted(shown, key=order)
@@ -222,23 +222,22 @@ def show_my_week():
     stats = get_activity_stats(user_email=email, weeks=8)
     if not stats.get("available"):
         st.caption(
-            "ℹ️ L'andamento personale sarà disponibile dopo la migration "
-            "'Status history & trend'."
+            "ℹ️ Your personal trend becomes available after the 'Status history & trend' migration."
         )
         return
     if not stats["by_week"]:
-        st.caption("Nessun aggiornamento registrato nelle ultime 8 settimane.")
+        st.caption("No updates recorded in the last 8 weeks.")
         return
 
     import pandas as pd
     weeks = sorted(set(stats["by_week"]) | set(stats["completed_by_week"]))
     df = pd.DataFrame({
-        "Aggiornamenti": [stats["by_week"].get(w, 0) for w in weeks],
-        "Completati": [stats["completed_by_week"].get(w, 0) for w in weeks],
+        "Updates": [stats["by_week"].get(w, 0) for w in weeks],
+        "Completed": [stats["completed_by_week"].get(w, 0) for w in weeks],
     }, index=weeks)
     done = sum(stats["completed_by_week"].values())
     st.markdown(
-        f"**Il tuo andamento** — {stats['total']} aggiornamenti e "
-        f"**{done} task completati** nelle ultime 8 settimane."
+        f"**Your trend** — {stats['total']} updates and "
+        f"**{done} tasks completed** in the last 8 weeks."
     )
     st.bar_chart(df, height=200)

@@ -4,7 +4,7 @@ import json
 import html as _html
 from core.supabase_client import supabase
 from db import (
-    get_settings, log_status_change, now_iso,
+    get_settings, log_status_change, now_iso, update_row,
     get_comments, add_comment, update_comment, delete_comment,
 )
 from utils.md_editor import markdown_editor
@@ -578,9 +578,9 @@ def task_details_modal(task, can_edit, deliverables=None):
                 # Any real edit refreshes the freshness signal, not just a
                 # status change — writing where you are must clear "stale".
                 changed["updated_at"] = now_iso()
-                res = supabase.table("tasks").update(changed).eq("id", task["id"]).execute()
-                if not getattr(res, "data", None):
-                    st.error("Save failed: the database did not confirm the update.")
+                ok, err, _ = update_row("tasks", task["id"], changed)
+                if not ok:
+                    st.error(f"Save failed: {err}")
                     return
 
                 if "status" in changed:
@@ -758,9 +758,9 @@ def subtask_details_modal(subtask, can_edit):
                     return
 
                 changed["updated_at"] = now_iso()
-                res = supabase.table("subtasks").update(changed).eq("id", subtask["id"]).execute()
-                if not getattr(res, "data", None):
-                    st.error("Save failed: the database did not confirm the update.")
+                ok, err, _ = update_row("subtasks", subtask["id"], changed)
+                if not ok:
+                    st.error(f"Save failed: {err}")
                     return
 
                 if "status" in changed:

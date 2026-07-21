@@ -1420,12 +1420,9 @@ def quick_update(table: str, item_id: int, *, status: str | None = None,
         line = f"**{stamp}** — {note_append.strip()}"
         payload["notes"] = (current_notes + "\n\n" + line).strip() if current_notes else line
 
-    try:
-        res = supabase.table(table).update(payload).eq("id", item_id).execute()
-        if not getattr(res, "data", None):
-            return False, "The database did not confirm the update."
-    except Exception as exc:
-        return False, str(exc)
+    ok, err, _ = update_row(table, item_id, payload)
+    if not ok:
+        return False, err
 
     if status and status != old_status:
         log_status_change(
@@ -1433,6 +1430,41 @@ def quick_update(table: str, item_id: int, *, status: str | None = None,
             item_id, project_id, old_status, status, user_email,
         )
     return True, ""
+
+
+def update_row(table: str, item_id: int, payload: dict) -> tuple[bool, str, object]:
+    """Update a row, tolerating columns the database does not have yet.
+
+    PostgREST answers PGRST204 when a column is missing from its schema cache.
+    An optional enrichment (updated_at, added by a pending migration) must never
+    block the write the user actually asked for, so the offending column is
+    dropped and the update retried once. Returns (ok, error, response_data).
+    """
+    import re as _re
+
+    attempt = dict(payload)
+    for _ in range(len(payload) + 1):
+        try:
+            res = supabase.table(table).update(attempt).eq("id", item_id).execute()
+            data = getattr(res, "data", None)
+            if not data:
+                return False, "The database did not confirm the update.", None
+            return True, "", data
+        except Exception as exc:
+            msg = str(exc)
+            if "PGRST204" not in msg and "schema cache" not in msg:
+                return False, msg, None
+            m = _re.search(r"'([^']+)' column", msg)
+            col = m.group(1) if m else None
+            if not col or col not in attempt:
+                return False, msg, None
+            # Drop the unknown column and retry with what the schema supports.
+            attempt.pop(col, None)
+            print(f"[db.update_row] '{col}' missing on {table} — retrying without it "
+                  f"(run the pending migration to enable it)")
+            if not attempt:
+                return False, "Nothing left to update.", None
+    return False, "Could not reconcile the payload with the schema.", None
 
 
 def touch(table: str, item_id: int) -> None:

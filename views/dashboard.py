@@ -134,7 +134,7 @@ def _stale_badge(item: dict, threshold: int) -> str:
         return ""
     fg, bg = ("#B80D48", "#FBE7EE") if d >= threshold * 2 else ("#B26A00", "#FFF4E5")
     return (f"<span style='background:{bg};color:{fg};border-radius:4px;padding:1px 7px;"
-            f"font-size:11px;font-weight:700;white-space:nowrap'>⏳ fermo {d}g</span>")
+            f"font-size:11px;font-weight:700;white-space:nowrap'>⏳ idle {d}d</span>")
 
 
 def _people_pills(owner_email, sup_email, user_map: dict) -> str:
@@ -475,13 +475,13 @@ def _render_supervision(ctx: dict) -> None:
     from db import get_supervisor_digest
     dig = get_supervisor_digest(email, days=7)
     d1, d2, d3 = st.columns(3)
-    d1.metric("✅ Chiusi (7g)", len(dig["completed"]))
-    d2.metric("📈 Mossi (7g)", len(dig["moved"]))
-    d3.metric(f"⏳ Fermi ≥{stale_threshold()}g", len(dig["stuck"]))
+    d1.metric("✅ Closed (7d)", len(dig["completed"]))
+    d2.metric("📈 Moved (7d)", len(dig["moved"]))
+    d3.metric(f"⏳ Idle ≥{stale_threshold()}d", len(dig["stuck"]))
     if dig["stuck"]:
         st.caption(
-            "I 'fermi' non sono necessariamente in ritardo: semplicemente nessuno "
-            "li aggiorna. Su un task lungo è il segnale più affidabile che hai."
+            "'Idle' does not mean late — it means nobody has touched it. On a long "
+            "task that is the most reliable signal you have."
         )
 
     # ── What needs the supervisor, across everyone ───────────────────────────
