@@ -14,7 +14,7 @@ import streamlit as st
 from core.supabase_client import supabase
 from db import get_settings
 from utils.helpers import fmt_date, deliverable_chip_html, stable_colour
-from utils.modals import person_pill_html
+from utils.modals import person_pill_html, deliverable_details_modal
 from utils.pdf_generator import generate_deliverables_pdf
 
 
@@ -166,41 +166,46 @@ def _project_chip(label: str) -> str:
     )
 
 
-def _build_table(rows: list[dict], settings: dict, user_map: dict,
-                 threshold: int, today: datetime.date) -> str:
-    head = (
-        "<thead><tr>"
-        "<th style='width:34%'>Deliverable</th>"
-        "<th style='width:10%'>Project</th>"
-        "<th style='width:10%'>Type</th>"
-        "<th style='width:12%'>Status</th>"
-        "<th style='width:12%'>Deadline</th>"
-        "<th style='width:22%'>Owner / Supervisor</th>"
-        "</tr></thead>"
+# Column geometry, shared by the header and every row so the list still reads
+# as a table even though each row is a Streamlit block (needed for the per-row
+# Edit button: a real <table> cannot host widgets).
+_COLS = [("Deliverable", 34), ("Project", 11), ("Type", 11),
+         ("Status", 13), ("Deadline", 14), ("Owner / Supervisor", 17)]
+
+
+def _cell(content: str, pct: int, extra: str = "") -> str:
+    return (f"<div style='flex:0 0 {pct}%;max-width:{pct}%;padding:0 6px;"
+            f"overflow:hidden;{extra}'>{content}</div>")
+
+
+def _header_row() -> str:
+    cells = "".join(
+        _cell(f"<span style='font-size:11px;font-weight:700;letter-spacing:0.06em;"
+              f"text-transform:uppercase;color:#5F6368'>{html.escape(lbl)}</span>", pct)
+        for lbl, pct in _COLS
     )
+    return (f"<div style='display:flex;align-items:center;background:#F1F3F5;"
+            f"border-bottom:2px solid #DDE1E5;padding:7px 4px;border-radius:4px 4px 0 0'>"
+            f"{cells}</div>")
 
-    body = []
-    for d in rows:
-        tier = d["_tier"]
-        days = d["_days"]
-        bg, accent = _URGENCY_STYLE[tier]
-        status = d.get("status") or "Not started"
-        name = html.escape(d.get("name") or "—")
-        muted = "opacity:0.6;" if tier == "done" else ""
 
-        body.append(
-            f"<tr style='background:{bg};{muted}'>"
-            f"<td style='border-left:3px solid {accent}'>"
-            f"<span style='{_DELIV_NAME_STYLE}'>{name}</span></td>"
-            f"<td>{_project_chip(d['_proj_label'])}</td>"
-            f"<td>{deliverable_chip_html(d.get('type') or 'generic', settings)}</td>"
-            f"<td>{_status_chip(status)}</td>"
-            f"<td>{_deadline_cell(d, tier, days)}</td>"
-            f"<td>{_owner_sup_html(d, user_map)}</td>"
-            f"</tr>"
-        )
+def _row_html(d: dict, settings: dict, user_map: dict) -> str:
+    tier, days = d["_tier"], d["_days"]
+    bg, accent = _URGENCY_STYLE[tier]
+    muted = "opacity:0.62;" if tier == "done" else ""
+    name = html.escape(d.get("name") or "—")
 
-    return f"<table class='maic-deliv-table'>{head}<tbody>{''.join(body)}</tbody></table>"
+    cells = (
+        _cell(f"<span style='{_DELIV_NAME_STYLE}'>{name}</span>", _COLS[0][1])
+        + _cell(_project_chip(d["_proj_label"]), _COLS[1][1])
+        + _cell(deliverable_chip_html(d.get("type") or "generic", settings), _COLS[2][1])
+        + _cell(_status_chip(d.get("status") or "Not started"), _COLS[3][1])
+        + _cell(_deadline_cell(d, tier, days), _COLS[4][1])
+        + _cell(_owner_sup_html(d, user_map), _COLS[5][1])
+    )
+    return (f"<div style='display:flex;align-items:center;background:{bg};{muted}"
+            f"border-left:3px solid {accent};border-bottom:1px solid #ECEFF1;"
+            f"padding:7px 4px;min-height:38px'>{cells}</div>")
 
 
 # Injected once via st.markdown (the proven pattern for CSS in this app).
@@ -215,6 +220,11 @@ _TABLE_CSS = """
 }
 .maic-deliv-table td {padding:8px 10px;border-bottom:1px solid #ECEFF1;vertical-align:middle;}
 .maic-deliv-table tr:hover td {background:rgba(0,0,0,0.02);}
+/* This page lays rows out with columns (needed for the per-row Edit button),
+   so neutralise the global row striping that would fight the urgency tints. */
+div[data-testid='stHorizontalBlock'] {background-color: transparent !important;
+    border-bottom: none !important; padding-top: 0 !important; padding-bottom: 0 !important;}
+div[data-testid='stButton'] > button {min-height:1.6rem;padding:0.1rem 0.4rem;}
 </style>
 """
 
@@ -252,7 +262,7 @@ def show_deliverables():
     m3.metric(f"Due within {threshold}d", n_soon)
 
     # ── Filters ───────────────────────────────────────────────────────────────
-    f1, f2, f3 = st.columns([2, 2, 2])
+    f1, f_type, f2, f3 = st.columns([2, 1.6, 2, 2])
     with f1:
         proj_opts = {"All projects": None}
         proj_opts.update({
@@ -261,6 +271,10 @@ def show_deliverables():
             if any(d.get("project_id") == p["id"] for d in deliverables)
         })
         sel_proj = proj_opts[st.selectbox("Project", list(proj_opts.keys()), key="dv_proj")]
+    with f_type:
+        # Types come from the data, so custom deliverable tags appear here too.
+        types = sorted({(d.get("type") or "generic").strip() or "generic" for d in deliverables})
+        sel_type = st.selectbox("Type", ["All types"] + types, key="dv_type")
     with f2:
         status_opts = ["All", "Active only", "Not started", "Working on", "Blocked", "Completed"]
         sel_status = st.selectbox("Status", status_opts, key="dv_status")
@@ -273,6 +287,8 @@ def show_deliverables():
     rows = list(deliverables)
     if sel_proj is not None:
         rows = [d for d in rows if d.get("project_id") == sel_proj]
+    if sel_type != "All types":
+        rows = [d for d in rows if ((d.get("type") or "generic").strip() or "generic") == sel_type]
     if sel_status == "Active only":
         rows = [d for d in rows if (d.get("status") or "Not started") not in _INACTIVE]
     elif sel_status != "All":
@@ -298,7 +314,33 @@ def show_deliverables():
     )
 
     st.markdown(_TABLE_CSS, unsafe_allow_html=True)
-    st.html(_build_table(rows, settings, user_map, threshold, today))
+
+    is_admin = st.session_state.get("user_role") == "admin"
+    email = st.session_state.get("user_email")
+
+    h_row, h_btn = st.columns([9, 1])
+    with h_row:
+        st.html(_header_row())
+    with h_btn:
+        st.html("<div style='height:34px'></div>")
+
+    for d in rows:
+        c_row, c_btn = st.columns([9, 1])
+        with c_row:
+            st.html(_row_html(d, settings, user_map))
+        with c_btn:
+            if st.button("✏️", key=f"dv_edit_{d['id']}", use_container_width=True,
+                         help="Open details"):
+                # Editing follows the app-wide rule: admin, owner or supervisor.
+                can_edit = (
+                    is_admin
+                    or d.get("owner_email") == email
+                    or d.get("supervisor_email") == email
+                )
+                deliverable_details_modal(
+                    d, can_edit=can_edit,
+                    breadcrumb=f"Deliverables / {d.get('_proj_name', '')}",
+                )
 
     # ── PDF export of exactly what is on screen ──────────────────────────────
     st.write("")

@@ -279,79 +279,104 @@ _STATUS_COLOUR = {
 _ROWS_PER_SLIDE = 15
 
 
-def _tree_header(slide, prs, y):
-    """Column captions for the tree table."""
-    W = prs.slide_width
-    x0 = Inches(0.6)
-    cols = _tree_cols(W)
-    for label, x in (("ITEM", x0), ("STATUS", cols["status"]),
-                     ("DEADLINE", cols["deadline"]), ("OWNER / SUP.", cols["people"]),
-                     ("UPDATED", cols["fresh"])):
-        _text(slide, x, y, Inches(2.0), Inches(0.22), label,
-              size=8, bold=True, color=MUTED)
-    _rect(slide, x0, y + Inches(0.24), W - Inches(1.2), Emu(9525), RULE)
-    return y + Inches(0.34)
+_TREE_COLS = [("ITEM", 6.45), ("STATUS", 1.35), ("DEADLINE", 1.15),
+              ("OWNER / SUP.", 2.10), ("UPDATED", 1.08)]
 
 
-def _tree_cols(W):
-    return {
-        "status":   W - Inches(6.05),
-        "deadline": W - Inches(4.35),
-        "people":   W - Inches(3.05),
-        "fresh":    W - Inches(1.05),
-    }
+def _cell_text(cell, text, *, size=10, bold=False, color=INK, font=FONT_B,
+               align=PP_ALIGN.LEFT, indent=0.0):
+    """Write into a table cell with tight margins, so rows stay dense."""
+    tf = cell.text_frame
+    tf.word_wrap = False
+    tf.margin_left = Inches(0.06 + indent)
+    tf.margin_right = Inches(0.04)
+    tf.margin_top = tf.margin_bottom = Emu(9525)
+    p = tf.paragraphs[0]
+    p.alignment = align
+    r = p.add_run()
+    r.text = str(text)
+    r.font.size = Pt(size)
+    r.font.bold = bold
+    r.font.color.rgb = color
+    r.font.name = font
+
+
+def _cell_fill(cell, colour):
+    cell.fill.solid()
+    cell.fill.fore_color.rgb = colour
 
 
 def _tree_rows(prs, title, subtitle, rows, footer=""):
-    """Render an indented tree across as many slides as it needs."""
+    """Render the tree as a REAL PowerPoint table, paginated across slides.
+
+    A native table (rather than floating text boxes) can be edited, re-sorted
+    and restyled in PowerPoint like any other table, and the columns stay
+    aligned whatever the content length. Hierarchy is carried by per-cell
+    indentation plus a tinted band on deliverable rows.
+    """
     slides = []
     pages = [rows[i:i + _ROWS_PER_SLIDE] for i in range(0, len(rows), _ROWS_PER_SLIDE)] or [[]]
     W = prs.slide_width
-    cols = _tree_cols(W)
 
     for pi, page in enumerate(pages):
         s = _new_slide(prs)
         _header(s, prs, title if pi == 0 else f"{title} (cont.)", subtitle)
-        y = _tree_header(s, prs, Inches(1.5))
-
-        for r in page:
-            lvl = r.get("level", 0)
-            indent = Inches(0.6) + Inches(0.28) * lvl
-            kind = r.get("kind", "task")
-
-            if kind in ("deliverable", "group"):
-                _rect(s, Inches(0.6), y - Inches(0.03), W - Inches(1.2),
-                      Inches(0.30), RGBColor(0xEF, 0xF3, 0xF4))
-                marker, size, bold, colour = "▸", 12, True, TEAL
-            elif kind == "subtask":
-                marker, size, bold, colour = "›", 10, False, MUTED
-            else:
-                marker, size, bold, colour = "•", 11, False, INK
-
-            _text(s, indent, y, Inches(0.2), Inches(0.26), marker,
-                  size=size, bold=bold, color=colour)
-            _text(s, indent + Inches(0.22), y, cols["status"] - indent - Inches(0.3),
-                  Inches(0.26), r.get("name", ""), size=size, bold=bold, color=colour, wrap=False)
-
-            if r.get("status"):
-                _text(s, cols["status"], y + Emu(9525), Inches(1.6), Inches(0.24),
-                      r["status"], size=9,
-                      color=_STATUS_COLOUR.get(r["status"], MUTED), bold=True)
-            if r.get("deadline"):
-                _text(s, cols["deadline"], y + Emu(9525), Inches(1.2), Inches(0.24),
-                      _fmt(r["deadline"]), size=9, color=INK)
-            if r.get("people"):
-                _text(s, cols["people"], y + Emu(9525), Inches(2.0), Inches(0.24),
-                      r["people"], size=9, color=MUTED, wrap=False)
-            if r.get("fresh"):
-                _text(s, cols["fresh"], y + Emu(9525), Inches(0.9), Inches(0.24),
-                      r["fresh"], size=9, bold=r.get("sev") in ("warn", "bad"),
-                      color=_SEV_COLOUR.get(r.get("sev", "none"), MUTED))
-            y += Inches(0.33)
 
         if not page:
             _text(s, Inches(0.6), Inches(1.7), W - Inches(1.2), Inches(0.3),
                   "Nothing to show.", size=12, color=MUTED)
+            _footer(s, prs, footer or "UPDATED = days since anyone last touched the item.")
+            slides.append(s)
+            continue
+
+        n_rows = len(page) + 1                       # + header row
+        gframe = s.shapes.add_table(
+            n_rows, len(_TREE_COLS), Inches(0.6), Inches(1.5),
+            W - Inches(1.2), Inches(0.28) * n_rows,
+        )
+        table = gframe.table
+        table.first_row = True                       # header emphasis from the theme
+        table.horz_banding = False                   # we colour the rows ourselves
+
+        for i, (_, w_in) in enumerate(_TREE_COLS):
+            table.columns[i].width = Inches(w_in)
+
+        for i, (label, _) in enumerate(_TREE_COLS):
+            c = table.cell(0, i)
+            _cell_fill(c, TEAL)
+            _cell_text(c, label, size=8, bold=True, color=WHITE)
+        table.rows[0].height = Inches(0.26)
+
+        for ri, r in enumerate(page, start=1):
+            table.rows[ri].height = Inches(0.26)
+            kind = r.get("kind", "task")
+            lvl = int(r.get("level", 0))
+
+            if kind in ("deliverable", "group"):
+                band, marker, size, bold, colour = (
+                    RGBColor(0xE9, 0xEF, 0xEF), "▸", 11, True, TEAL)
+            elif kind == "subtask":
+                band, marker, size, bold, colour = (
+                    RGBColor(0xFB, 0xFC, 0xFC), "›", 9, False, MUTED)
+            else:
+                band, marker, size, bold, colour = (WHITE, "•", 10, False, INK)
+
+            for ci in range(len(_TREE_COLS)):
+                _cell_fill(table.cell(ri, ci), band)
+
+            _cell_text(table.cell(ri, 0), f"{marker} {r.get('name','')}",
+                       size=size, bold=bold, color=colour, indent=0.22 * lvl)
+
+            status = r.get("status") or ""
+            _cell_text(table.cell(ri, 1), status, size=8, bold=bool(status),
+                       color=_STATUS_COLOUR.get(status, MUTED))
+            _cell_text(table.cell(ri, 2), _fmt(r["deadline"]) if r.get("deadline") else "",
+                       size=8, color=INK)
+            _cell_text(table.cell(ri, 3), r.get("people") or "", size=8, color=MUTED)
+            _cell_text(table.cell(ri, 4), r.get("fresh") or "", size=8,
+                       bold=r.get("sev") in ("warn", "bad"),
+                       color=_SEV_COLOUR.get(r.get("sev", "none"), MUTED))
+
         _footer(s, prs, footer or "UPDATED = days since anyone last touched the item.")
         slides.append(s)
     return slides

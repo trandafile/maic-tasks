@@ -686,11 +686,11 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
                   <span></span>
                   <div>
                     <div style='display:flex;align-items:center;gap:7px;
-                                flex-wrap:wrap;margin-bottom:5px;'>
+                                flex-wrap:wrap;margin-bottom:3px;'>
                       <span style='{SUBTASK_NAME_STYLE}'>{SUBTASK_PREFIX} {s_name}</span>
                       {s_badge}
+                      {f"<span style='margin-left:6px;'>{s_dl_html}</span>" if s_dl_html else ""}
                     </div>
-                    {f"<div style='margin-bottom:5px;'>{s_dl_html}</div>" if s_dl_html else ""}
                     {f"<div>{s_pills}</div>" if s_pills else ""}
                   </div>
                   <div></div>
@@ -744,19 +744,29 @@ def _render_archive_completed(tasks: list, subtasks: list) -> None:
     done_t = [t for t in tasks if (t.get("status") or "") == "Completed" and not t.get("is_archived")]
     done_s = [s for s in subtasks if (s.get("status") or "") == "Completed" and not s.get("is_archived")]
     total = len(done_t) + len(done_s)
-    if not total:
-        return
 
     key = "_confirm_archive_completed"
     c_info, c_btn = st.columns([6, 2])
     with c_info:
-        st.caption(
-            f"🗄️ **{total} completed items in view** "
-            f"({len(done_t)} tasks, {len(done_s)} subtasks) — archiving clears the "
-            "board without losing history."
-        )
+        if total:
+            st.caption(
+                f"🗄️ **{total} completed items in view** "
+                f"({len(done_t)} tasks, {len(done_s)} subtasks) — archiving clears the "
+                "board without losing history."
+            )
+        else:
+            # Always render the control, otherwise it is impossible to find when
+            # the current scope happens to contain nothing completed.
+            st.caption(
+                "🗄️ No completed items in the current view. Tick **All tasks and "
+                "projects** (or clear the filters) to reach everyone's."
+            )
     with c_btn:
-        if st.session_state.get(key):
+        if not total:
+            st.button("🗄️ Archive completed", key="arch_done_none",
+                      use_container_width=True, disabled=True,
+                      help="Nothing completed in the current view.")
+        elif st.session_state.get(key):
             if st.button(f"✅ Confirm ({total})", key="arch_done_ok",
                          type="primary", use_container_width=True):
                 ok_t = ok_s = 0
@@ -847,9 +857,15 @@ def show_projects():
         with a_exp:
             if st.button("Expand all", key="proj_expand_all", use_container_width=True):
                 st.session_state["_projects_expand_mode"] = "all"
+                st.session_state["_projects_expand_nonce"] = \
+                    int(st.session_state.get("_projects_expand_nonce", 0)) + 1
+                st.rerun()
         with a_col:
             if st.button("Collapse all", key="proj_collapse_all", use_container_width=True):
                 st.session_state["_projects_expand_mode"] = "none"
+                st.session_state["_projects_expand_nonce"] = \
+                    int(st.session_state.get("_projects_expand_nonce", 0)) + 1
+                st.rerun()
         with a_arch:
             show_archived = st.checkbox("Show Archived", value=False)
 
@@ -987,6 +1003,14 @@ def show_projects():
     expand_all_now = (expand_mode == "all") or expand_all_once
     collapse_all_now = expand_mode == "none"
 
+    # Streamlit only applies `expanded=` when the expander is a *new* element.
+    # The default is already expanded=False, so after opening a project by hand
+    # "Collapse all" passed False again — an unchanged value — and Streamlit kept
+    # the user's manual state: the button did nothing. Flipping an invisible
+    # zero-width space in the label changes the element identity on every click,
+    # which forces the expander to remount and honour `expanded`.
+    _nonce = "​" * (int(st.session_state.get("_projects_expand_nonce", 0)) % 2)
+
     for proj in projects:
         proj_id   = proj["id"]
         proj_name = proj.get("name", "Project")
@@ -995,7 +1019,7 @@ def show_projects():
 
         # Open all on filter-change one-shot or when requested via top command bar.
         with st.expander(
-            f"📁 {proj_name} ({acronym}){arch_tag}",
+            f"📁 {proj_name} ({acronym}){arch_tag}{_nonce}",
             expanded=expand_all_now if not collapse_all_now else False,
         ):
 
