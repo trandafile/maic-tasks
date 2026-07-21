@@ -1827,8 +1827,33 @@ def get_meeting_delta(since: _dt_date, until: _dt_date | None = None) -> dict:
         out["totals"]["blocked"] += len(blocked)
         out["totals"]["stale"] += len(stale)
 
-    # Whoever needs the most help goes first.
-    out["by_person"].sort(key=lambda p: (-(len(p["blocked"]) + len(p["stale"])), p["name"]))
+    # Chained speaking order: consecutive people talk about related work.
+    # Each person gets a dominant project (most frequent among their delta
+    # items); people are grouped by it, groups are ordered by how much
+    # attention they need (blocked + idle), and the same rule orders people
+    # inside a group. The meeting still starts where help is needed most,
+    # but similar activities now follow one another.
+    from collections import Counter
+
+    def _attention(p: dict) -> int:
+        return len(p["blocked"]) + len(p["stale"])
+
+    for p in out["by_person"]:
+        items = p["completed"] + p["moved"] + p["blocked"] + p["stale"]
+        counts = Counter(i.get("_project") or "" for i in items)
+        p["dominant_project"] = counts.most_common(1)[0][0] if counts else ""
+
+    group_attention: dict[str, int] = {}
+    for p in out["by_person"]:
+        g = p["dominant_project"]
+        group_attention[g] = group_attention.get(g, 0) + _attention(p)
+
+    out["by_person"].sort(key=lambda p: (
+        -group_attention.get(p["dominant_project"], 0),
+        p["dominant_project"],
+        -_attention(p),
+        p["name"],
+    ))
     return out
 
 

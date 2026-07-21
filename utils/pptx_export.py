@@ -451,8 +451,13 @@ def build_meeting_deck(pack: dict) -> BytesIO:
     )
     for person in people:
         s = _new_slide(prs)
-        _header(s, prs, person.get("name", "—"),
-                f"{period}   ·   {person.get('active', 0)} active tasks")
+        dom = person.get("dominant_project") or ""
+        sub = f"{period}   ·   {person.get('active', 0)} active tasks"
+        if dom:
+            # The speaking order chains people by this project — say so, or the
+            # ordering looks arbitrary to whoever reads the deck.
+            sub += f"   ·   mainly {dom}"
+        _header(s, prs, person.get("name", "—"), sub)
         colw = (W - Inches(1.5)) / 2
         left, right = Inches(0.6), Inches(0.6) + colw + Inches(0.3)
 
