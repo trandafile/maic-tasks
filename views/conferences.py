@@ -48,7 +48,8 @@ _DEFAULT_TOPICS = (
     "RF/microwave/mm-wave integrated circuits and antennas; MMIC (SiGe BiCMOS, "
     "GaN, FD-SOI CMOS); antenna-on-chip (AoC) and antenna-in-package (AiP); "
     "phased arrays, transmitarrays, reflectarrays; K/Ka/E/W/D-band front-ends; "
-    "5G/6G, SatCom and radar front-ends"
+    "5G and 6G communication systems; non-terrestrial networks (NTN); "
+    "SatCom and radar front-ends"
 )
 
 # Geographic macro-areas selectable for the Gemini prompt (travel constraints).
@@ -512,27 +513,63 @@ def show_conference_calendar() -> None:
     # ── Upcoming submission deadlines (highlighted list) ──────────────────────
     st.subheader("Upcoming submission deadlines")
     today = datetime.date.today()
-    with_sub = [
-        (c, _iso(c.get("submission_deadline")))
-        for c in conferences
-        if _iso(c.get("submission_deadline"))
-    ]
-    with_sub.sort(key=lambda x: x[1])
 
-    if not with_sub:
-        st.caption("No submission deadlines recorded.")
-    for c, sub in with_sub:
-        days = (sub - today).days
-        if days < 0:
-            badge = "<span style='background:#ECEFF1;color:#607D8B;padding:1px 8px;border-radius:4px;font-size:11px'>passed</span>"
-        elif days <= 30:
-            badge = f"<span style='background:#FDECEC;color:#C62828;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:700'>in {days}d</span>"
-        elif days <= 90:
-            badge = f"<span style='background:#FFF3E0;color:#E65100;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:700'>in {days}d</span>"
+    # Every conference belongs in this list. The old version silently dropped
+    # the ones whose submission deadline is not announced yet (typical for
+    # next-year editions) — which are precisely the ones to keep an eye on.
+    future = sorted(
+        [(c, _iso(c.get("submission_deadline"))) for c in conferences
+         if _iso(c.get("submission_deadline")) and _iso(c.get("submission_deadline")) >= today],
+        key=lambda x: x[1],
+    )
+    tbd = sorted(
+        [(c, None) for c in conferences if not _iso(c.get("submission_deadline"))],
+        key=lambda x: (x[0].get("year") or 9999, str(x[0].get("acronym") or x[0].get("name") or "")),
+    )
+    past = sorted(
+        [(c, _iso(c.get("submission_deadline"))) for c in conferences
+         if _iso(c.get("submission_deadline")) and _iso(c.get("submission_deadline")) < today],
+        key=lambda x: x[1], reverse=True,
+    )
+
+    lc1, lc2, lc3 = st.columns([1.1, 2.2, 3])
+    with lc1:
+        show_n = st.selectbox("Show", ["10", "30", "All"], index=0, key="conf_list_n")
+    with lc2:
+        include_past = st.checkbox(
+            f"Include passed deadlines ({len(past)})", value=False, key="conf_list_past",
+        )
+
+    entries = future + tbd + (past if include_past else [])
+    limit = None if show_n == "All" else int(show_n)
+    shown = entries[:limit] if limit else entries
+
+    if not entries:
+        st.caption("No conferences recorded.")
+    elif limit and len(entries) > limit:
+        st.caption(f"Showing {len(shown)} of {len(entries)} — upcoming first, "
+                   f"then deadlines not yet announced.")
+
+    for c, sub in shown:
+        if sub is None:
+            badge = ("<span style='background:#E8F1FC;color:#1565C0;padding:1px 8px;"
+                     "border-radius:4px;font-size:11px;font-weight:700'>TBD</span>")
+            when_txt = "deadline not announced"
         else:
-            badge = f"<span style='background:#E8F5E9;color:#2E7D32;padding:1px 8px;border-radius:4px;font-size:11px'>in {days}d</span>"
+            days = (sub - today).days
+            if days < 0:
+                badge = "<span style='background:#ECEFF1;color:#607D8B;padding:1px 8px;border-radius:4px;font-size:11px'>passed</span>"
+            elif days <= 30:
+                badge = f"<span style='background:#FDECEC;color:#C62828;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:700'>in {days}d</span>"
+            elif days <= 90:
+                badge = f"<span style='background:#FFF3E0;color:#E65100;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:700'>in {days}d</span>"
+            else:
+                badge = f"<span style='background:#E8F5E9;color:#2E7D32;padding:1px 8px;border-radius:4px;font-size:11px'>in {days}d</span>"
+            when_txt = f"submission {fmt_date(sub.isoformat())}"
 
         label = c.get("acronym") or c.get("name")
+        if c.get("year"):
+            label = f"{label} {c['year']}"
         rank = f" · rank {html.escape(str(c.get('rank')))}" if c.get("rank") else ""
         loc = f" · {html.escape(str(c.get('location')))}" if c.get("location") else ""
         url = c.get("url")
@@ -543,7 +580,7 @@ def show_conference_calendar() -> None:
         row_html = (
             f"<div style='display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:3px 0'>"
             f"<span style='font-weight:700'>{title_html}</span>"
-            f"<span style='color:#555;font-size:12px'>submission {fmt_date(sub.isoformat())}{rank}{loc}</span>"
+            f"<span style='color:#555;font-size:12px'>{when_txt}{rank}{loc}</span>"
             f"{badge}</div>"
         )
 
