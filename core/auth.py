@@ -77,7 +77,18 @@ def login_button():
     }
     auth_url = 'https://accounts.google.com/o/oauth2/auth?' + urllib.parse.urlencode(params)
 
-    st.link_button("🔑 Accedi con Google", auth_url, use_container_width=False, type="primary")
+    # NOT st.link_button: that renders target="_blank", so Google opened in a
+    # SECOND tab and, after the redirect, that new tab became the logged-in
+    # session while the original tab sat forever on the login screen (Streamlit
+    # sessions are per-tab). target="_self" keeps the whole round trip —
+    # login page → Google → redirect back with ?code= — in one tab.
+    st.markdown(
+        f"<a href='{auth_url}' target='_self' style='display:inline-block;"
+        f"background:#FF4B4B;color:#ffffff;padding:0.5rem 1.1rem;border-radius:8px;"
+        f"font-weight:600;text-decoration:none;font-size:1rem;'>"
+        f"🔑 Accedi con Google</a>",
+        unsafe_allow_html=True,
+    )
 
 def process_login(email: str, name: str):
     """Verifica e processa l'utente a livello Supabase dopo il login Google."""
