@@ -1,0 +1,43 @@
+name: Keep alive
+
+# Stops the free tiers from going to sleep:
+#   * Supabase pauses a free project after ~7 days without activity;
+#   * Streamlit Community Cloud sleeps an app that gets no traffic.
+#
+# Runs every 6 hours. Each run takes a few seconds and installs nothing
+# (the script is standard-library only), so the cost is negligible.
+#
+# Setup, once: repo → Settings → Secrets and variables → Actions
+#   Secrets:   SUPABASE_URL, SUPABASE_KEY   (already added for task-reminders)
+#   Variables: STREAMLIT_APP_URL            (optional, e.g.
+#              https://maiclab-tasks.streamlit.app — not a secret, so a
+#              *variable* rather than a secret)
+#
+# ⚠ GitHub disables scheduled workflows in a repository with no activity for
+# 60 days, and mails the owner. If the repo ever goes quiet that long, re-enable
+# this from the Actions tab — otherwise the keep-alive itself dies quietly.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # 00:17, 06:17, 12:17, 18:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # No setup-python step and no pip install: the runner's system Python is
+      # enough, which keeps this job independent of the app's dependencies.
+      - name: Ping Supabase (and Streamlit)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          STREAMLIT_APP_URL: ${{ vars.STREAMLIT_APP_URL }}
+        run: python3 scripts/keep_alive.py
