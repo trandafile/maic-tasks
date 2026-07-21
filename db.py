@@ -1651,6 +1651,188 @@ def get_meeting_delta(since: _dt_date, until: _dt_date | None = None) -> dict:
     return out
 
 
+def _people_label(item: dict, umap: dict) -> str:
+    """'Owner / Supervisor' in short form for a dense slide row."""
+    def short(email):
+        n = umap.get(email, {}).get("name") or email or ""
+        parts = n.split()
+        return f"{parts[0]} {parts[-1][0]}." if len(parts) > 1 else n
+    o = short(item.get("owner_email")) if item.get("owner_email") else "—"
+    s = short(item.get("supervisor_email")) if item.get("supervisor_email") else ""
+    return f"{o} / {s}" if s and s != o else o
+
+
+def _fresh_label(item: dict, threshold: int) -> tuple[str, str]:
+    """(text, severity) describing how recently the item was touched."""
+    d = days_since_update(item)
+    if d is None:
+        return "—", "none"
+    if d == 0:
+        return "today", "ok"
+    if d < threshold:
+        return f"{d}d", "ok"
+    return f"{d}d", "bad" if d >= threshold * 2 else "warn"
+
+
+def get_upcoming_deliverables(months: int = 3) -> list[dict]:
+    """Deliverables due within the horizon — section 1 of the meeting deck."""
+    today = _dt_date.today()
+    limit = (today + _dt_mod.timedelta(days=int(30.44 * months))).isoformat()
+    try:
+        delivs = supabase.table("deliverables").select("*").eq(
+            "is_archived", False).order("deadline").execute().data or []
+        projects = supabase.table("projects").select("id, name, acronym, identifier").execute().data or []
+        tasks = supabase.table("tasks").select(
+            "id, deliverable_id, status").eq("is_archived", False).execute().data or []
+        users = supabase.table("users").select("email, name").execute().data or []
+    except Exception as exc:
+        print(f"[db.get_upcoming_deliverables] {exc}")
+        return []
+    pmap = {p["id"]: p for p in projects}
+    umap = {u["email"]: u for u in users}
+
+    out = []
+    for d in delivs:
+        dl = _norm_conf_date(d.get("deadline"))
+        if not dl or dl > limit:
+            continue
+        if (d.get("status") or "") in ("Completed", "Cancelled"):
+            continue
+        dts = [t for t in tasks if t.get("deliverable_id") == d["id"]
+               and (t.get("status") or "") != "Cancelled"]
+        done = len([t for t in dts if t.get("status") == "Completed"])
+        p = pmap.get(d.get("project_id"), {})
+        out.append({
+            **d,
+            "_project": p.get("acronym") or p.get("identifier") or p.get("name") or "",
+            "_people": _people_label(d, umap),
+            "_days": (_dt_date.fromisoformat(dl) - today).days,
+            "_done": done, "_total": len(dts),
+            "_pct": round(100 * done / len(dts)) if dts else 0,
+        })
+    out.sort(key=lambda x: x["_days"])
+    return out
+
+
+def get_project_trees() -> list[dict]:
+    """project → deliverable → task → subtask, flattened into slide rows.
+
+    Section 2 of the deck. Each row carries owner/supervisor, deadline and how
+    fresh it is, because on long tasks freshness is the real progress signal.
+    """
+    threshold = stale_threshold()
+    try:
+        projects = supabase.table("projects").select("*").eq(
+            "is_archived", False).order("name").execute().data or []
+        delivs = supabase.table("deliverables").select("*").eq(
+            "is_archived", False).execute().data or []
+        tasks = supabase.table("tasks").select("*").eq("is_archived", False).execute().data or []
+        subs = supabase.table("subtasks").select("*").eq("is_archived", False).execute().data or []
+        users = supabase.table("users").select("email, name").execute().data or []
+    except Exception as exc:
+        print(f"[db.get_project_trees] {exc}")
+        return []
+    umap = {u["email"]: u for u in users}
+    live = lambda i: (i.get("status") or "") != "Cancelled"
+
+    def row(item, level, kind):
+        fresh, sev = _fresh_label(item, threshold)
+        return {
+            "level": level, "kind": kind, "name": item.get("name") or "—",
+            "status": item.get("status") or "Not started",
+            "deadline": item.get("deadline"),
+            "people": _people_label(item, umap),
+            "fresh": fresh, "sev": sev,
+        }
+
+    out = []
+    for p in projects:
+        rows = []
+        p_delivs = sorted([d for d in delivs if d.get("project_id") == p["id"]],
+                          key=lambda d: d.get("deadline") or "9999-12-31")
+        p_tasks = [t for t in tasks if t.get("project_id") == p["id"] and live(t)]
+        for d in p_delivs:
+            rows.append(row(d, 0, "deliverable"))
+            d_tasks = sorted([t for t in p_tasks if t.get("deliverable_id") == d["id"]],
+                             key=lambda t: t.get("deadline") or "9999-12-31")
+            for t in d_tasks:
+                rows.append(row(t, 1, "task"))
+                for s in [s for s in subs if s.get("task_id") == t["id"] and live(s)]:
+                    rows.append(row(s, 2, "subtask"))
+        orphans = sorted([t for t in p_tasks if not t.get("deliverable_id")],
+                         key=lambda t: t.get("deadline") or "9999-12-31")
+        if orphans:
+            rows.append({"level": 0, "kind": "group", "name": "No deliverable",
+                         "status": "", "deadline": None, "people": "", "fresh": "", "sev": "none"})
+            for t in orphans:
+                rows.append(row(t, 1, "task"))
+                for s in [s for s in subs if s.get("task_id") == t["id"] and live(s)]:
+                    rows.append(row(s, 2, "subtask"))
+        if rows:
+            out.append({
+                "name": p.get("name"), "acronym": p.get("acronym") or p.get("identifier") or "",
+                "rows": rows,
+                "counts": {"deliverables": len(p_delivs), "tasks": len(p_tasks)},
+            })
+    return out
+
+
+def get_conference_pack(months: int = 12) -> list[dict]:
+    """Upcoming conferences with the paper drafts targeting each — section 4.
+
+    Papers are linked through the deliverable that ``ensure_conference_deliverable``
+    creates inside the Conference Papers project, named "<ACRONYM> <year>".
+    """
+    today = _dt_date.today()
+    limit = (today + _dt_mod.timedelta(days=int(30.44 * months))).isoformat()
+    threshold = stale_threshold()
+    confs = get_conferences(show_archived=False)
+    if not confs:
+        return []
+
+    proj = get_or_create_conference_project(create=False)
+    papers, delivs, umap = [], [], {}
+    try:
+        users = supabase.table("users").select("email, name").execute().data or []
+        umap = {u["email"]: u for u in users}
+        if proj:
+            delivs = supabase.table("deliverables").select("id, name").eq(
+                "project_id", proj["id"]).execute().data or []
+            papers = supabase.table("tasks").select("*").eq(
+                "project_id", proj["id"]).eq("is_archived", False).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_conference_pack] {exc}")
+    dname = {d["id"]: (d.get("name") or "") for d in delivs}
+
+    out = []
+    for c in confs:
+        sub = _norm_conf_date(c.get("submission_deadline"))
+        if not sub or sub > limit:
+            continue
+        label = (c.get("acronym") or c.get("name") or "").strip()
+        key = f"{label} {c['year']}".strip() if c.get("year") else label
+        mine = []
+        for t in papers:
+            if (t.get("status") or "") == "Cancelled":
+                continue
+            if dname.get(t.get("deliverable_id"), "").strip().lower() == key.lower():
+                fresh, sev = _fresh_label(t, threshold)
+                mine.append({
+                    "level": 1, "kind": "task", "name": t.get("name") or "—",
+                    "status": t.get("status") or "Not started",
+                    "deadline": t.get("deadline"), "people": _people_label(t, umap),
+                    "fresh": fresh, "sev": sev,
+                })
+        out.append({
+            **c,
+            "_label": key or "Conference",
+            "_days": (_dt_date.fromisoformat(sub) - today).days,
+            "_papers": mine,
+        })
+    out.sort(key=lambda x: x["_days"])
+    return out
+
+
 def get_project_review(project_id: int, period_label: str = "") -> dict:
     """Cumulative status per deliverable — feeds the review deck.
 
@@ -1684,12 +1866,12 @@ def get_project_review(project_id: int, period_label: str = "") -> dict:
                 continue
             dl = _norm_conf_date(t.get("deadline"))
             if t.get("status") == "Blocked":
-                risks.append({**t, "_why": "bloccato"})
+                risks.append({**t, "_why": "blocked"})
             elif dl and dl < today.isoformat():
                 days = (today - _dt_date.fromisoformat(dl)).days
-                risks.append({**t, "_why": f"in ritardo di {days}g"})
+                risks.append({**t, "_why": f"{days}d overdue"})
             elif is_stale(t, threshold):
-                risks.append({**t, "_why": f"fermo da {days_since_update(t)}g"})
+                risks.append({**t, "_why": f"idle {days_since_update(t)}d"})
         total = len(ts)
         return {
             "completed": done, "in_progress": prog, "risks": risks,

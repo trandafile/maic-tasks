@@ -41,8 +41,10 @@ RULE    = RGBColor(0xE0, 0xE3, 0xE7)
 FONT_H = "Calibri Light"
 FONT_B = "Calibri"
 
-MONTHS_IT = {1:"gennaio",2:"febbraio",3:"marzo",4:"aprile",5:"maggio",6:"giugno",
-             7:"luglio",8:"agosto",9:"settembre",10:"ottobre",11:"novembre",12:"dicembre"}
+# The decks are in English: the team is international and the same deck is
+# shown at the lab meeting and to partners.
+MONTHS_EN = {1:"January",2:"February",3:"March",4:"April",5:"May",6:"June",
+             7:"July",8:"August",9:"September",10:"October",11:"November",12:"December"}
 
 
 def _d(v):
@@ -60,7 +62,7 @@ def _fmt(v) -> str:
 
 
 def _long_date(d: datetime.date) -> str:
-    return f"{d.day} {MONTHS_IT[d.month]} {d.year}"
+    return f"{d.day} {MONTHS_EN[d.month]} {d.year}"
 
 
 # ── Low-level drawing ─────────────────────────────────────────────────────────
@@ -252,59 +254,285 @@ def _items(slide, x, y, w, items, colour, *, max_rows=6, line=Inches(0.32),
     return y
 
 
-# ── Deck 1: weekly meeting (delta) ────────────────────────────────────────────
+# ── Section dividers and tree rendering ───────────────────────────────────────
 
-def build_meeting_deck(delta: dict, since: datetime.date, until: datetime.date) -> BytesIO:
-    """delta = {"by_person": {email: {...}}, "totals": {...}} — see db.get_meeting_delta."""
-    prs = _open()
-    period = f"{_long_date(since)} — {_long_date(until)}"
+def _divider_slide(prs, number: int, title: str, subtitle: str = ""):
+    """A numbered section break, so the deck reads as an agenda."""
+    s = _new_slide(prs)
+    W, H = prs.slide_width, prs.slide_height
+    _rect(s, 0, 0, W, H, TEAL)
+    _text(s, Inches(0.9), H / 2 - Inches(1.05), W - Inches(1.8), Inches(0.5),
+          f"{number:02d}", size=54, bold=True, color=RGBColor(0x9F, 0xC4, 0xC5), font=FONT_H)
+    _text(s, Inches(0.9), H / 2 - Inches(0.25), W - Inches(1.8), Inches(0.8),
+          title, size=34, bold=True, color=WHITE, font=FONT_H)
+    if subtitle:
+        _text(s, Inches(0.9), H / 2 + Inches(0.6), W - Inches(1.8), Inches(0.5),
+              subtitle, size=14, color=RGBColor(0xCB, 0xE0, 0xE1))
+    return s
 
-    _title_slide(prs, "Riunione di laboratorio",
-                 "Cosa è cambiato dall'ultima volta", period)
 
-    t = delta.get("totals", {})
-    _summary_slide(
-        prs, "In sintesi", period,
-        [("completati", t.get("completed", 0), GREEN),
-         ("avanzati",   t.get("moved", 0),     CYAN),
-         ("bloccati",   t.get("blocked", 0),   CRIMSON),
-         ("fermi",      t.get("stale", 0),     ORANGE)],
-        footer="Fermi = nessun aggiornamento nel periodo di soglia. "
-               "Su un task lungo conta più della scadenza.",
-    )
+_SEV_COLOUR = {"ok": GREEN, "warn": ORANGE, "bad": CRIMSON, "none": MUTED}
+_STATUS_COLOUR = {
+    "Completed": GREEN, "Working on": CYAN, "Blocked": CRIMSON,
+    "Not started": MUTED, "Cancelled": MUTED,
+}
+_ROWS_PER_SLIDE = 15
 
+
+def _tree_header(slide, prs, y):
+    """Column captions for the tree table."""
     W = prs.slide_width
-    for person in delta.get("by_person", []):
+    x0 = Inches(0.6)
+    cols = _tree_cols(W)
+    for label, x in (("ITEM", x0), ("STATUS", cols["status"]),
+                     ("DEADLINE", cols["deadline"]), ("OWNER / SUP.", cols["people"]),
+                     ("UPDATED", cols["fresh"])):
+        _text(slide, x, y, Inches(2.0), Inches(0.22), label,
+              size=8, bold=True, color=MUTED)
+    _rect(slide, x0, y + Inches(0.24), W - Inches(1.2), Emu(9525), RULE)
+    return y + Inches(0.34)
+
+
+def _tree_cols(W):
+    return {
+        "status":   W - Inches(6.05),
+        "deadline": W - Inches(4.35),
+        "people":   W - Inches(3.05),
+        "fresh":    W - Inches(1.05),
+    }
+
+
+def _tree_rows(prs, title, subtitle, rows, footer=""):
+    """Render an indented tree across as many slides as it needs."""
+    slides = []
+    pages = [rows[i:i + _ROWS_PER_SLIDE] for i in range(0, len(rows), _ROWS_PER_SLIDE)] or [[]]
+    W = prs.slide_width
+    cols = _tree_cols(W)
+
+    for pi, page in enumerate(pages):
+        s = _new_slide(prs)
+        _header(s, prs, title if pi == 0 else f"{title} (cont.)", subtitle)
+        y = _tree_header(s, prs, Inches(1.5))
+
+        for r in page:
+            lvl = r.get("level", 0)
+            indent = Inches(0.6) + Inches(0.28) * lvl
+            kind = r.get("kind", "task")
+
+            if kind in ("deliverable", "group"):
+                _rect(s, Inches(0.6), y - Inches(0.03), W - Inches(1.2),
+                      Inches(0.30), RGBColor(0xEF, 0xF3, 0xF4))
+                marker, size, bold, colour = "▸", 12, True, TEAL
+            elif kind == "subtask":
+                marker, size, bold, colour = "›", 10, False, MUTED
+            else:
+                marker, size, bold, colour = "•", 11, False, INK
+
+            _text(s, indent, y, Inches(0.2), Inches(0.26), marker,
+                  size=size, bold=bold, color=colour)
+            _text(s, indent + Inches(0.22), y, cols["status"] - indent - Inches(0.3),
+                  Inches(0.26), r.get("name", ""), size=size, bold=bold, color=colour, wrap=False)
+
+            if r.get("status"):
+                _text(s, cols["status"], y + Emu(9525), Inches(1.6), Inches(0.24),
+                      r["status"], size=9,
+                      color=_STATUS_COLOUR.get(r["status"], MUTED), bold=True)
+            if r.get("deadline"):
+                _text(s, cols["deadline"], y + Emu(9525), Inches(1.2), Inches(0.24),
+                      _fmt(r["deadline"]), size=9, color=INK)
+            if r.get("people"):
+                _text(s, cols["people"], y + Emu(9525), Inches(2.0), Inches(0.24),
+                      r["people"], size=9, color=MUTED, wrap=False)
+            if r.get("fresh"):
+                _text(s, cols["fresh"], y + Emu(9525), Inches(0.9), Inches(0.24),
+                      r["fresh"], size=9, bold=r.get("sev") in ("warn", "bad"),
+                      color=_SEV_COLOUR.get(r.get("sev", "none"), MUTED))
+            y += Inches(0.33)
+
+        if not page:
+            _text(s, Inches(0.6), Inches(1.7), W - Inches(1.2), Inches(0.3),
+                  "Nothing to show.", size=12, color=MUTED)
+        _footer(s, prs, footer or "UPDATED = days since anyone last touched the item.")
+        slides.append(s)
+    return slides
+
+
+# ── Deck 1: lab meeting ───────────────────────────────────────────────────────
+
+def build_meeting_deck(pack: dict) -> BytesIO:
+    """The weekly lab meeting deck, in four sections:
+
+    1. Deliverables due soon   2. Projects (tree)
+    3. Individual work         4. Next deadlines (conferences)
+    """
+    prs = _open()
+    since, until = pack["since"], pack["until"]
+    period = f"{_long_date(since)} — {_long_date(until)}"
+    W = prs.slide_width
+
+    _title_slide(prs, "Lab meeting", "Status review", period)
+
+    # ── 1. Deliverables due soon ─────────────────────────────────────────────
+    horizon = pack.get("horizon_months", 3)
+    ups = pack.get("upcoming", [])
+    _divider_slide(prs, 1, "Deliverables due soon",
+                   f"Next {horizon} months · {len(ups)} deliverables")
+    rows = []
+    for d in ups:
+        days = d["_days"]
+        sev = "bad" if days < 0 else ("warn" if days <= 30 else "ok")
+        when = f"{abs(days)}d overdue" if days < 0 else (
+            "today" if days == 0 else f"in {days}d")
+        rows.append({
+            "level": 0, "kind": "deliverable",
+            "name": f"[{d['_project']}] {d.get('name','')}",
+            "status": d.get("status") or "Not started",
+            "deadline": d.get("deadline"), "people": d["_people"],
+            "fresh": when, "sev": sev,
+        })
+        rows.append({
+            "level": 1, "kind": "task",
+            "name": f"{d['_done']}/{d['_total']} tasks completed · {d['_pct']}%",
+            "status": "", "deadline": None, "people": "", "fresh": "", "sev": "none",
+        })
+    _tree_rows(prs, "Deliverables due soon",
+               f"Deadline within {horizon} months · sorted by urgency", rows,
+               footer="The right-hand column is time to deadline, not freshness.")
+
+    # ── 2. Projects ──────────────────────────────────────────────────────────
+    trees = pack.get("trees", [])
+    _divider_slide(prs, 2, "Projects",
+                   f"{len(trees)} active projects · deliverables, tasks and subtasks")
+    for t in trees:
+        head = f"{t['acronym']} — {t['name']}" if t["acronym"] else t["name"]
+        c = t["counts"]
+        _tree_rows(prs, head,
+                   f"{c['deliverables']} deliverables · {c['tasks']} tasks",
+                   t["rows"])
+
+    # ── 3. Individual work ───────────────────────────────────────────────────
+    delta = pack.get("delta", {})
+    people = delta.get("by_person", [])
+    tot = delta.get("totals", {})
+    _divider_slide(prs, 3, "Individual work", f"{period} · {len(people)} people")
+    _summary_slide(
+        prs, "What changed", period,
+        [("completed", tot.get("completed", 0), GREEN),
+         ("moved",     tot.get("moved", 0),     CYAN),
+         ("blocked",   tot.get("blocked", 0),   CRIMSON),
+         ("idle",      tot.get("stale", 0),     ORANGE)],
+        footer="Idle = no update for the staleness threshold. On a long task "
+               "that matters more than the deadline.",
+    )
+    for person in people:
         s = _new_slide(prs)
         _header(s, prs, person.get("name", "—"),
-                f"{period}   ·   {person.get('active', 0)} task attivi")
+                f"{period}   ·   {person.get('active', 0)} active tasks")
         colw = (W - Inches(1.5)) / 2
         left, right = Inches(0.6), Inches(0.6) + colw + Inches(0.3)
 
-        y = _section(s, left, Inches(1.55), colw, "COMPLETATI", GREEN,
+        y = _section(s, left, Inches(1.55), colw, "COMPLETED", GREEN,
                      len(person.get("completed", [])))
         y = _items(s, left, y, colw, person.get("completed", []), GREEN,
                    sub=lambda it: it.get("_project", ""))
-        y = _section(s, left, y + Inches(0.15), colw, "AVANZATI", CYAN,
+        y = _section(s, left, y + Inches(0.15), colw, "MOVED", CYAN,
                      len(person.get("moved", [])))
         _items(s, left, y, colw, person.get("moved", []), CYAN,
                sub=lambda it: f"{it.get('_project','')} · {it.get('status','')}")
 
-        y = _section(s, right, Inches(1.55), colw, "BLOCCATI", CRIMSON,
+        y = _section(s, right, Inches(1.55), colw, "BLOCKED", CRIMSON,
                      len(person.get("blocked", [])))
         y = _items(s, right, y, colw, person.get("blocked", []), CRIMSON,
-                   sub=lambda it: f"{it.get('_project','')} · da {it.get('_stale','?')}g")
-        y = _section(s, right, y + Inches(0.15), colw, "FERMI", ORANGE,
+                   sub=lambda it: f"{it.get('_project','')} · idle {it.get('_stale','?')}d")
+        y = _section(s, right, y + Inches(0.15), colw, "IDLE", ORANGE,
                      len(person.get("stale", [])))
         _items(s, right, y, colw, person.get("stale", []), ORANGE,
-               sub=lambda it: f"{it.get('_project','')} · fermo da {it.get('_stale','?')}g")
+               sub=lambda it: f"{it.get('_project','')} · idle {it.get('_stale','?')}d")
 
-        _footer(s, prs, "Bloccati e fermi sono i punti da discutere adesso.")
+        _footer(s, prs, "Blocked and idle items are what this meeting is for.")
+
+    # ── 4. Next deadlines (conferences) ──────────────────────────────────────
+    confs = pack.get("conferences", [])
+    ch = pack.get("conf_horizon_months", 12)
+    _divider_slide(prs, 4, "Next deadlines",
+                   f"Conference submissions · next {ch} months")
+    if confs:
+        _timeline_slide(prs, confs, ch)
+        crows = []
+        for c in confs:
+            days = c["_days"]
+            sev = "bad" if days <= 30 else ("warn" if days <= 90 else "ok")
+            loc = f" · {c.get('location')}" if c.get("location") else ""
+            crows.append({
+                "level": 0, "kind": "deliverable",
+                "name": f"{c['_label']}{loc}",
+                "status": "", "deadline": c.get("submission_deadline"),
+                "people": (c.get("rank") or ""),
+                "fresh": f"in {days}d" if days >= 0 else f"{abs(days)}d ago",
+                "sev": sev,
+            })
+            if c["_papers"]:
+                crows.extend(c["_papers"])
+            else:
+                crows.append({"level": 1, "kind": "subtask", "name": "no paper draft yet",
+                              "status": "", "deadline": None, "people": "",
+                              "fresh": "", "sev": "none"})
+        _tree_rows(prs, "Conferences and paper drafts",
+                   "Submission deadline, and the papers targeting each",
+                   crows, footer="A conference with no draft is a decision waiting to be made.")
+    else:
+        s = _new_slide(prs)
+        _header(s, prs, "Next deadlines", "No conference in the horizon")
+        _text(s, Inches(0.6), Inches(1.8), W - Inches(1.2), Inches(0.4),
+              "No conference with a submission deadline in the selected window. "
+              "Add them under Conference Calendar.", size=13, color=MUTED)
 
     buf = BytesIO()
     prs.save(buf)
     buf.seek(0)
     return buf
+
+
+def _timeline_slide(prs, confs, months):
+    """A wide horizontal timeline: one marker per conference submission."""
+    s = _new_slide(prs)
+    _header(s, prs, "Submission timeline", f"Next {months} months")
+    W, H = prs.slide_width, prs.slide_height
+    x0, x1 = Inches(1.0), W - Inches(1.0)
+    y = Inches(3.5)
+    span = max(months * 30.44, 1)
+
+    _rect(s, x0, y, x1 - x0, Emu(19050), RGBColor(0xC9, 0xD1, 0xD6))
+
+    # month ticks
+    today = datetime.date.today()
+    for m in range(months + 1):
+        d = today + datetime.timedelta(days=int(30.44 * m))
+        fx = x0 + (x1 - x0) * (30.44 * m) / span
+        _rect(s, fx, y - Inches(0.07), Emu(9525), Inches(0.14), RGBColor(0xC9, 0xD1, 0xD6))
+        if m % max(1, months // 6) == 0:
+            _text(s, fx - Inches(0.35), y + Inches(0.16), Inches(0.7), Inches(0.2),
+                  d.strftime("%b %y"), size=8, color=MUTED, align=PP_ALIGN.CENTER)
+
+    above = True
+    for c in confs:
+        days = max(c["_days"], 0)
+        fx = x0 + (x1 - x0) * min(days / span, 1.0)
+        colour = CRIMSON if c["_days"] <= 30 else (ORANGE if c["_days"] <= 90 else TEAL)
+        _rect(s, fx - Emu(28575), y - Inches(0.12), Emu(57150), Inches(0.28), colour)
+        ly = y - Inches(0.95) if above else y + Inches(0.5)
+        _rect(s, fx - Emu(4763), min(ly + Inches(0.4), y), Emu(9525),
+              Inches(0.45), RGBColor(0xDD, 0xE2, 0xE5))
+        _text(s, fx - Inches(0.95), ly, Inches(1.9), Inches(0.24),
+              c["_label"], size=10, bold=True, color=colour, align=PP_ALIGN.CENTER, wrap=False)
+        _text(s, fx - Inches(0.95), ly + Inches(0.22), Inches(1.9), Inches(0.2),
+              f"{_fmt(c.get('submission_deadline'))} · {len(c['_papers'])} draft"
+              f"{'' if len(c['_papers']) == 1 else 's'}",
+              size=8, color=MUTED, align=PP_ALIGN.CENTER, wrap=False)
+        above = not above
+
+    _footer(s, prs, "Red: within 30 days · orange: within 90 days.")
+    return s
 
 
 # ── Deck 2: project review (cumulative) ───────────────────────────────────────
@@ -317,19 +545,19 @@ def build_review_deck(review: dict) -> BytesIO:
     acr = proj.get("acronym") or proj.get("identifier") or ""
     today = datetime.date.today()
 
-    period = review.get("period_label") or f"Stato al {_long_date(today)}"
+    period = review.get("period_label") or f"Status as of {_long_date(today)}"
     _title_slide(prs, f"{acr}" if acr else name,
-                 name if acr else "Stato di avanzamento", period)
+                 name if acr else "Progress status", period)
 
     t = review.get("totals", {})
     done, total = t.get("completed", 0), t.get("total", 0)
     pct = round(100 * done / total) if total else 0
     _summary_slide(
-        prs, "Stato di avanzamento", f"{name}   ·   {period}",
-        [("completamento", f"{pct}%", GREEN if pct >= 66 else CYAN),
-         ("task totali",   total,                 TEAL),
-         ("in ritardo",    t.get("overdue", 0),   CRIMSON),
-         ("a rischio",     t.get("at_risk", 0),   ORANGE)],
+        prs, "Progress status", f"{name}   ·   {period}",
+        [("completion", f"{pct}%", GREEN if pct >= 66 else CYAN),
+         ("total tasks", total,                 TEAL),
+         ("overdue",     t.get("overdue", 0),   CRIMSON),
+         ("at risk",     t.get("at_risk", 0),   ORANGE)],
         footer=f"CUP {proj.get('cup') or '—'}   ·   {proj.get('funding_agency') or ''}",
     )
 
@@ -339,41 +567,41 @@ def build_review_deck(review: dict) -> BytesIO:
         dt = d.get("totals", {})
         dpct = dt.get("pct", 0) / 100.0
         _header(s, prs, d.get("name", "Deliverable"),
-                f"{d.get('type','')}   ·   scadenza {_fmt(d.get('deadline'))}"
-                f"   ·   {dt.get('completed',0)}/{dt.get('total',0)} task completati")
+                f"{d.get('type','')}   ·   due {_fmt(d.get('deadline'))}"
+                f"   ·   {dt.get('completed',0)}/{dt.get('total',0)} tasks completed")
 
         # progress bar
         _bar(s, Inches(0.6), Inches(1.5), W - Inches(1.2), Inches(0.22), dpct,
              GREEN if dpct >= 0.66 else (CYAN if dpct >= 0.33 else ORANGE))
         _text(s, Inches(0.6), Inches(1.78), W - Inches(1.2), Inches(0.3),
-              f"{dt.get('pct',0)}% completato", size=11, bold=True, color=MUTED)
+              f"{dt.get('pct',0)}% complete", size=11, bold=True, color=MUTED)
 
         colw = (W - Inches(1.5)) / 2
         left, right = Inches(0.6), Inches(0.6) + colw + Inches(0.3)
 
-        y = _section(s, left, Inches(2.3), colw, "COMPLETATI", GREEN, len(d.get("completed", [])))
+        y = _section(s, left, Inches(2.3), colw, "COMPLETED", GREEN, len(d.get("completed", [])))
         _items(s, left, y, colw, d.get("completed", []), GREEN, max_rows=7,
-               sub=lambda it: f"chiuso il {_fmt(it.get('completion_date'))}")
+               sub=lambda it: f"closed {_fmt(it.get('completion_date'))}")
 
-        y = _section(s, right, Inches(2.3), colw, "IN CORSO", CYAN, len(d.get("in_progress", [])))
+        y = _section(s, right, Inches(2.3), colw, "IN PROGRESS", CYAN, len(d.get("in_progress", [])))
         y = _items(s, right, y, colw, d.get("in_progress", []), CYAN, max_rows=5,
-                   sub=lambda it: f"scadenza {_fmt(it.get('deadline'))}")
+                   sub=lambda it: f"due {_fmt(it.get('deadline'))}")
         risks = d.get("risks", [])
-        y = _section(s, right, y + Inches(0.15), colw, "RISCHI", CRIMSON, len(risks))
+        y = _section(s, right, y + Inches(0.15), colw, "RISKS", CRIMSON, len(risks))
         _items(s, right, y, colw, risks, CRIMSON, max_rows=4,
                sub=lambda it: it.get("_why", ""))
 
-        _footer(s, prs, f"{name}   ·   generato il {_long_date(today)}")
+        _footer(s, prs, f"{name}   ·   generated {_long_date(today)}")
 
     # Tasks with no deliverable, if any
     orphans = review.get("no_deliverable", [])
     if orphans:
         s = _new_slide(prs)
-        _header(s, prs, "Attività non associate a deliverable",
-                f"{len(orphans)} task")
+        _header(s, prs, "Tasks not linked to a deliverable",
+                f"{len(orphans)} tasks")
         _items(s, Inches(0.6), Inches(1.7), prs.slide_width - Inches(1.2),
                orphans, TEAL, max_rows=12,
-               sub=lambda it: f"{it.get('status','')} · scadenza {_fmt(it.get('deadline'))}")
+               sub=lambda it: f"{it.get('status','')} · due {_fmt(it.get('deadline'))}")
 
     buf = BytesIO()
     prs.save(buf)

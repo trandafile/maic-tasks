@@ -1761,7 +1761,8 @@ def _render_trend_report():
 
 def _render_slides_tab():
     """Two decks on the MAIC template: the weekly delta and the SAL review."""
-    from db import get_meeting_delta, get_project_review
+    from db import (get_meeting_delta, get_project_review,
+                    get_upcoming_deliverables, get_project_trees, get_conference_pack)
     from utils.pptx_export import build_meeting_deck, build_review_deck
 
     st.caption(
@@ -1790,29 +1791,47 @@ def _render_slides_tab():
             st.error("La data iniziale è successiva a quella finale.")
             return
 
+        h1, h2 = st.columns(2)
+        with h1:
+            horizon = st.slider("Deliverable horizon (months)", 1, 12, 3, key="sl_horizon",
+                                help="Section 1: deliverables due within this window.")
+        with h2:
+            conf_h = st.slider("Conference horizon (months)", 3, 24, 12, key="sl_confh",
+                               help="Section 4: conferences with a submission deadline ahead.")
+
         delta = get_meeting_delta(since, until)
+        upcoming = get_upcoming_deliverables(months=horizon)
+        trees = get_project_trees()
+        confs = get_conference_pack(months=conf_h)
+
         t = delta["totals"]
         m = st.columns(4)
-        m[0].metric("Completati", t["completed"])
-        m[1].metric("Avanzati", t["moved"])
-        m[2].metric("Bloccati", t["blocked"])
-        m[3].metric("Fermi", t["stale"])
-
-        if not delta["by_person"]:
-            st.info("Nessun movimento nel periodo: niente da presentare.")
+        m[0].metric("Deliverables due", len(upcoming))
+        m[1].metric("Projects", len(trees))
+        m[2].metric("People with news", len(delta["by_person"]))
+        m[3].metric("Conferences", len(confs))
+        st.caption(
+            f"Sections: 1 · deliverables due within {horizon} months — "
+            f"2 · {len(trees)} project trees — 3 · individual work "
+            f"({t['completed']} completed, {t['blocked']} blocked, {t['stale']} idle) — "
+            f"4 · {len(confs)} conferences and their paper drafts."
+        )
+        if not (upcoming or trees or delta["by_person"] or confs):
+            st.info("Nothing to present for this period.")
             return
-        st.caption(f"{len(delta['by_person'])} persone con qualcosa da discutere "
-                   "(ordinate da chi ha più blocchi).")
+        pack = {"since": since, "until": until, "delta": delta,
+                "upcoming": upcoming, "trees": trees, "conferences": confs,
+                "horizon_months": horizon, "conf_horizon_months": conf_h}
         try:
-            buf = build_meeting_deck(delta, since, until)
+            buf = build_meeting_deck(pack)
             st.download_button(
-                "⬇️ Scarica il deck della riunione (.pptx)", data=buf,
-                file_name=f"MAIC_riunione_{until.strftime('%Y%m%d')}.pptx",
+                "⬇️ Download the lab meeting deck (.pptx)", data=buf,
+                file_name=f"MAIC_lab_meeting_{until.strftime('%Y%m%d')}.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 type="primary",
             )
         except Exception as e:
-            st.error(f"Errore nella generazione: {e}")
+            st.error(f"Generation failed: {e}")
 
     else:
         try:
@@ -1847,13 +1866,13 @@ def _render_slides_tab():
             buf = build_review_deck(review)
             acr = (proj.get("acronym") or proj.get("identifier") or "progetto").replace(" ", "")
             st.download_button(
-                "⬇️ Scarica il deck di review (.pptx)", data=buf,
+                "⬇️ Download the review deck (.pptx)", data=buf,
                 file_name=f"MAIC_review_{acr}_{today.strftime('%Y%m%d')}.pptx",
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 type="primary",
             )
         except Exception as e:
-            st.error(f"Errore nella generazione: {e}")
+            st.error(f"Generation failed: {e}")
 
 
 # ─── Engagement (is any of this working?) ─────────────────────────────────────
