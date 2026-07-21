@@ -320,7 +320,7 @@ def _fmt_date_slash(d: str | None) -> str:
     if not d:
         return "—"
     try:
-        return datetime.date.fromisoformat(d).strftime("%Y/%m/%d")
+        return datetime.date.fromisoformat(d).strftime("%d/%m/%Y")
     except Exception:
         return d
 
@@ -451,7 +451,7 @@ def send_weekly_briefing(
         "Università della Calabria",
     ])
 
-    subject = f"[MAIC LAB] Riepilogo settimanale — {today.strftime('%Y/%m/%d')}"
+    subject = f"[MAIC LAB] Riepilogo settimanale — {today.strftime('%d/%m/%Y')}"
     body = "\n".join(lines)
 
     # ── HTML version ─────────────────────────────────────────────────────────

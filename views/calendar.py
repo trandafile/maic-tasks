@@ -26,7 +26,7 @@ def _iso_to_date(value: str | None) -> datetime.date | None:
 
 def _fmt_date(value: str | None) -> str:
     d = _iso_to_date(value)
-    return d.strftime("%Y/%m/%d") if d else "-"
+    return d.strftime("%d/%m/%Y") if d else "-"
 
 
 def _safe_ics_text(text: str) -> str:
@@ -439,7 +439,7 @@ def show_calendar():
                 st.markdown("---")
                 md_lines.append("---")
                 line = (
-                    f"**Deliverable: {item['project']} - {name}** - Due on {item['date'].isoformat()}"
+                    f"**Deliverable: {item['project']} - {name}** - Due on {item['date'].strftime('%d/%m/%Y')}"
                 )
                 meta = f"Owner: {item['owner']} | Supervisor: {item['sup']}"
                 st.markdown(line + "\n" + meta)
@@ -448,12 +448,12 @@ def show_calendar():
                 open_block = True
             else:
                 line = (
-                    f"&nbsp;&nbsp;**{item['project']} - {name}** - Due on {item['date'].isoformat()}"
+                    f"&nbsp;&nbsp;**{item['project']} - {name}** - Due on {item['date'].strftime('%d/%m/%Y')}"
                 )
                 meta = f"&nbsp;&nbsp;Owner: {item['owner']} | Supervisor: {item['sup']}"
                 st.markdown(line + "\n" + meta)
                 md_lines.append(
-                    f"  **{item['project']} - {name}** - Due on {item['date'].isoformat()}"
+                    f"  **{item['project']} - {name}** - Due on {item['date'].strftime('%d/%m/%Y')}"
                 )
                 md_lines.append(
                     f"  Owner: {item['owner']} | Supervisor: {item['sup']}"

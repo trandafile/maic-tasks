@@ -67,8 +67,8 @@ def _phd_progress_block(user: dict) -> None:
         st.markdown("#### 🎓 PhD progress")
         m1, m2, m3 = st.columns(3)
         m1.metric("Year", f"{current_year} of {total_years}")
-        m2.metric("Start", start.strftime("%Y/%m/%d"))
-        m3.metric("End", end.strftime("%Y/%m/%d"))
+        m2.metric("Start", start.strftime("%d/%m/%Y"))
+        m3.metric("End", end.strftime("%d/%m/%Y"))
         st.progress(pct, text=f"{pct * 100:.0f}% of the PhD timeline elapsed")
 
 

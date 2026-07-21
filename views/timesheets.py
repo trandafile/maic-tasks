@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from core.supabase_client import supabase
+from utils.helpers import fmt_date
 from db import (
     get_contracts, get_timesheet_contracts, get_project_activities,
     get_timesheet, save_timesheet, contract_covers,
@@ -145,7 +146,7 @@ def show_timesheets():
     with c1:
         c_opts = {
             f"{proj_by_id.get(c['project_id'], {}).get('acronym') or 'Project'} "
-            f"({c.get('start_date')} → {c.get('end_date') or '…'})": c
+            f"({fmt_date(c.get('start_date'))} → {fmt_date(c.get('end_date')) if c.get('end_date') else '…'})": c
             for c in contracts
         }
         contract = c_opts[st.selectbox("Contract", list(c_opts.keys()), key="ts_contract")]
@@ -181,7 +182,8 @@ def show_timesheets():
     if not (contract_covers(contract, first) or contract_covers(contract, last)):
         st.error(
             f"{MONTHS_IT[month]} {year} falls entirely outside this contract "
-            f"({contract.get('start_date')} → {contract.get('end_date') or '…'})."
+            f"({fmt_date(contract.get('start_date'))} → "
+            f"{fmt_date(contract.get('end_date')) if contract.get('end_date') else '…'})."
         )
         return
 
@@ -212,8 +214,8 @@ def show_timesheets():
     badge = {"completed": "🟢 completed", "draft": "🟡 draft", "missing": "⚪ not started"}[status]
     with a4:
         st.caption(
-            f"Status: **{badge}** · contract {contract.get('start_date')} → "
-            f"{contract.get('end_date') or '…'} · {daily:g}h/working day"
+            f"Status: **{badge}** · contract {fmt_date(contract.get('start_date'))} → "
+            f"{fmt_date(contract.get('end_date')) if contract.get('end_date') else '…'} · {daily:g}h/working day"
         )
 
     grid = st.session_state[state_key]

@@ -758,7 +758,7 @@ def generate_detailed_report_pdf(
 
     import datetime as _dt
 
-    today_str    = _dt.date.today().strftime("%Y/%m/%d")
+    today_str    = _dt.date.today().strftime("%d/%m/%Y")
     active_tasks = [t for t in tasks if t.get("status") not in ("Cancelled",)]
     today_iso    = _dt.date.today().isoformat()
     completed    = [t for t in active_tasks if t.get("status") == "Completed"]

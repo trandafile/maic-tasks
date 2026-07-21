@@ -28,7 +28,7 @@ def _fmt_date(d: str | None) -> str:
     if not d:
         return "—"
     try:
-        return datetime.date.fromisoformat(d).strftime("%Y/%m/%d")
+        return datetime.date.fromisoformat(d).strftime("%d/%m/%Y")
     except Exception:
         return d or "—"
 

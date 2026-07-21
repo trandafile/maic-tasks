@@ -87,7 +87,7 @@ def _deadline_html(deadline_str: str | None) -> str:
         dl    = datetime.date.fromisoformat(deadline_str)
         delta = (dl - datetime.date.today()).days
         colour = "#C62828" if delta <= 3 else "#333333"
-        label  = dl.strftime("%Y/%m/%d")
+        label  = dl.strftime("%d/%m/%Y")
         return f"<span style='color:{colour};font-weight:{'700' if delta<=3 else '400'}'>{label}</span>"
     except Exception:
         return deadline_str
@@ -125,7 +125,7 @@ def _fmt_date(d: str | None) -> str:
     if not d:
         return "—"
     try:
-        return datetime.date.fromisoformat(d).strftime("%Y/%m/%d")
+        return datetime.date.fromisoformat(d).strftime("%d/%m/%Y")
     except Exception:
         return d or "—"
 
@@ -165,7 +165,7 @@ def _build_main_report_markdown(
     """Build Markdown export for the Project Report tab with active filters applied."""
     lines = [
         "# Project Report",
-        f"Generated: {datetime.date.today().strftime('%Y/%m/%d')}",
+        f"Generated: {datetime.date.today().strftime('%d/%m/%Y')}",
         "",
     ]
 
@@ -1136,7 +1136,7 @@ def _render_detailed_report():
         caption_parts.append(proj["funding_agency"])
     if proj.get("start_date"):
         caption_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
-    caption_parts.append(f"Generated: {datetime.date.today().strftime('%Y/%m/%d')}")
+    caption_parts.append(f"Generated: {datetime.date.today().strftime('%d/%m/%Y')}")
     st.caption("  ·  ".join(caption_parts))
 
     delay_stats = compute_delay_stats(
@@ -1217,7 +1217,7 @@ def _render_detailed_report():
         # Build markdown export
         md_lines = [
             f"# {proj.get('name')} ({acronym}) — Detailed Report",
-            f"Generated: {datetime.date.today().strftime('%Y/%m/%d')}",
+            f"Generated: {datetime.date.today().strftime('%d/%m/%Y')}",
         ]
         if caption_parts:
             md_lines.append(f"Funding: {'  ·  '.join(caption_parts)}")

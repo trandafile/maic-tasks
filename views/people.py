@@ -26,7 +26,7 @@ def _parse_date(value: str | None) -> datetime.date | None:
 
 def _fmt_date(value: str | None) -> str:
     d = _parse_date(value)
-    return d.strftime("%Y/%m/%d") if d else "—"
+    return d.strftime("%d/%m/%Y") if d else "—"
 
 
 def _year_breakdown(result: dict) -> pd.DataFrame:
@@ -74,9 +74,9 @@ def _phd_status_label(user: dict) -> str:
     total_years = max(1, round(total_days / 365.25))
 
     if today < start:
-        return f"PhD (starts {start.strftime('%Y/%m/%d')})"
+        return f"PhD (starts {start.strftime('%d/%m/%Y')})"
     if today >= end:
-        return f"PhD completed ({end.strftime('%Y/%m/%d')})"
+        return f"PhD completed ({end.strftime('%d/%m/%Y')})"
 
     current_year = min(total_years, max(1, int((today - start).days // 365.25) + 1))
     return f"PhD year {current_year}/{total_years}"

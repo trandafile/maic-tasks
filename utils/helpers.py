@@ -23,7 +23,10 @@ DEFAULT_DELIVERABLE_TAG_STYLES = [
 
 
 def fmt_date(d) -> str:
-    """Return a YYYY/MM/DD string from a date, datetime, ISO string, or None."""
+    """Return a DD/MM/YYYY string from a date, datetime, ISO string, or None.
+
+    This is THE display format for dates app-wide. Do not add another.
+    """
     if d is None:
         return "—"
     if isinstance(d, str):

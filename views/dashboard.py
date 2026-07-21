@@ -108,7 +108,7 @@ def _deadline_html(deadline, threshold: int) -> str:
     if not dl:
         return "<span style='font-size:11px;color:#aaa;'>no deadline</span>"
     delta = (dl - datetime.date.today()).days
-    label = dl.strftime("%Y/%m/%d")
+    label = dl.strftime("%d/%m/%Y")
     if delta < 0:
         return (
             f"<span style='font-size:11px;color:#C62828;font-weight:700;'>📅 {label}</span>"

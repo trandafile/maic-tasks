@@ -416,7 +416,7 @@ def _deadline_html(deadline_str: str | None, status: str, threshold: int = 7) ->
     try:
         dl = _dt.date.fromisoformat(deadline_str)
         delta = (dl - _dt.date.today()).days
-        label = dl.strftime("%Y/%m/%d")
+        label = dl.strftime("%d/%m/%Y")
     except Exception:
         return ""
 

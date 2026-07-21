@@ -57,7 +57,7 @@ def _fmt_timestamp(value: str | None) -> str:
         # Supabase returns ISO with optional timezone; normalise.
         clean = value.replace("Z", "+00:00")
         dt = datetime.datetime.fromisoformat(clean)
-        return dt.strftime("%Y/%m/%d %H:%M")
+        return dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
         return value
 
