@@ -1578,6 +1578,187 @@ def get_supervisor_digest(user_email: str, days: int = 7) -> dict:
     return res
 
 
+# ── Task labels (used for the "tentative" paper flag) ─────────────────────────
+#
+# The labels / task_labels tables have been in the schema since day one and
+# were never used. They are exactly what the "tentative topic" flag needs, so
+# no migration: a paper proposed by a student carries the 'tentative' label
+# until the supervisor approves it (removes the label).
+
+TENTATIVE_LABEL = "tentative"
+
+
+def get_label_id(name: str, create: bool = True) -> int | None:
+    try:
+        rows = supabase.table("labels").select("id").eq("name", name).limit(1).execute().data
+        if rows:
+            return rows[0]["id"]
+        if not create:
+            return None
+        ins = supabase.table("labels").insert({"name": name, "color": "#1565C0"}).execute().data
+        return ins[0]["id"] if ins else None
+    except Exception as exc:
+        print(f"[db.get_label_id] {exc}")
+        return None
+
+
+def get_labelled_task_ids(name: str) -> set[int]:
+    """Task ids carrying the given label. Empty set on any failure."""
+    try:
+        lid = get_label_id(name, create=False)
+        if lid is None:
+            return set()
+        rows = supabase.table("task_labels").select("task_id").eq("label_id", lid).execute().data or []
+        return {r["task_id"] for r in rows}
+    except Exception as exc:
+        print(f"[db.get_labelled_task_ids] {exc}")
+        return set()
+
+
+def set_task_label(task_id: int, name: str, on: bool) -> bool:
+    try:
+        lid = get_label_id(name, create=True)
+        if lid is None:
+            return False
+        if on:
+            existing = supabase.table("task_labels").select("task_id").eq(
+                "task_id", task_id).eq("label_id", lid).execute().data
+            if not existing:
+                supabase.table("task_labels").insert(
+                    {"task_id": task_id, "label_id": lid}).execute()
+        else:
+            supabase.table("task_labels").delete().eq(
+                "task_id", task_id).eq("label_id", lid).execute()
+        return True
+    except Exception as exc:
+        print(f"[db.set_task_label] {exc}")
+        return False
+
+
+# ── My Status deck (personal portfolio for 1:1s and PhD reviews) ──────────────
+
+def get_my_status_pack(email: str, since: _dt_date) -> dict:
+    """Everything one person shows at a review: tasks, papers, targets, PhD.
+
+    Scopus publications are fetched by the VIEW (network + API key) and added
+    to the pack afterwards; everything here is database-only and degrades to
+    empty sections.
+    """
+    threshold = stale_threshold()
+    today = _dt_date.today()
+    pack = {"user": {}, "since": since, "until": today,
+            "task_rows": [], "completed": [], "counts": {},
+            "paper_drafts": [], "conf_papers": [], "conferences": [],
+            "publications": None}
+
+    try:
+        urows = supabase.table("users").select("*").eq("email", email).execute().data or []
+        pack["user"] = urows[0] if urows else {"email": email, "name": email}
+        projects = supabase.table("projects").select("id, name, acronym, identifier").eq(
+            "is_archived", False).execute().data or []
+        tasks = supabase.table("tasks").select("*").eq("owner_email", email).execute().data or []
+        subs = supabase.table("subtasks").select("*").eq("owner_email", email).eq(
+            "is_archived", False).execute().data or []
+        all_tasks = supabase.table("tasks").select("id, name, project_id").execute().data or []
+        users = supabase.table("users").select("email, name").execute().data or []
+    except Exception as exc:
+        print(f"[db.get_my_status_pack] {exc}")
+        return pack
+
+    pmap = {p["id"]: p for p in projects}
+    tmap = {t["id"]: t for t in all_tasks}
+    umap = {u["email"]: u for u in users}
+    plabel = lambda pid: (pmap.get(pid, {}).get("acronym")
+                          or pmap.get(pid, {}).get("identifier")
+                          or pmap.get(pid, {}).get("name") or "")
+
+    conf_proj = get_or_create_conference_project(create=False)
+    conf_pid = conf_proj["id"] if conf_proj else None
+
+    live = [t for t in tasks if (t.get("status") or "") != "Cancelled"]
+    # Conference papers are shown in their own section, not among the tasks.
+    plain = [t for t in live if t.get("project_id") != conf_pid]
+
+    active = [t for t in plain if not t.get("is_archived")
+              and (t.get("status") or "") != "Completed"
+              and t.get("project_id") in pmap]
+    done_period = [t for t in plain
+                   if t.get("status") == "Completed"
+                   and (cd := _norm_conf_date(t.get("completion_date")))
+                   and cd >= since.isoformat()]
+
+    def _row(item, level, kind, pid):
+        fresh, sev = _fresh_label(item, threshold)
+        return {"level": level, "kind": kind, "name": item.get("name") or "—",
+                "status": item.get("status") or "Not started",
+                "deadline": item.get("deadline"),
+                "people": _people_label(item, umap), "fresh": fresh, "sev": sev}
+
+    # Task tree grouped by project
+    by_proj: dict[int, list] = {}
+    for t in active:
+        by_proj.setdefault(t.get("project_id"), []).append(t)
+    for pid in sorted(by_proj, key=lambda p: plabel(p)):
+        pack["task_rows"].append({"level": 0, "kind": "group",
+                                  "name": f"{plabel(pid)} — {pmap.get(pid, {}).get('name', '')}",
+                                  "status": "", "deadline": None, "people": "",
+                                  "fresh": "", "sev": "none"})
+        for t in sorted(by_proj[pid], key=lambda x: x.get("deadline") or "9999-12-31"):
+            pack["task_rows"].append(_row(t, 1, "task", pid))
+            for s in [s for s in subs if s.get("task_id") == t["id"]
+                      and (s.get("status") or "") not in ("Completed", "Cancelled")]:
+                pack["task_rows"].append(_row(s, 2, "subtask", pid))
+
+    pack["completed"] = [
+        {"level": 1, "kind": "task",
+         "name": f"[{plabel(t.get('project_id'))}] {t.get('name','')}",
+         "status": "Completed", "deadline": t.get("completion_date"),
+         "people": "", "fresh": "", "sev": "ok"}
+        for t in sorted(done_period, key=lambda x: x.get("completion_date") or "")
+    ]
+
+    # Paper deliverables (journal drafts etc.) where I am owner or supervisor
+    try:
+        pd_rows = supabase.table("deliverables").select("*").eq("type", "paper").eq(
+            "is_archived", False).or_(rbac_or_filter(email)).execute().data or []
+        pack["paper_drafts"] = [
+            {**d, "_project": plabel(d.get("project_id"))} for d in pd_rows
+        ]
+    except Exception as exc:
+        print(f"[db.get_my_status_pack] paper drafts: {exc}")
+
+    # Conference papers I own or supervise, with target + tentative flag
+    tentative_ids = get_labelled_task_ids(TENTATIVE_LABEL)
+    if conf_pid:
+        conf_delivs = {}
+        try:
+            conf_delivs = {d["id"]: d.get("name") or "" for d in
+                           supabase.table("deliverables").select("id, name").eq(
+                               "project_id", conf_pid).execute().data or []}
+        except Exception:
+            pass
+        mine_conf = [t for t in live if t.get("project_id") == conf_pid
+                     and not t.get("is_archived")
+                     and (t.get("owner_email") == email or t.get("supervisor_email") == email)]
+        for t in mine_conf:
+            pack["conf_papers"].append({
+                **t,
+                "_target": conf_delivs.get(t.get("deliverable_id"), ""),
+                "_tentative": t["id"] in tentative_ids,
+            })
+
+    confs = get_conferences(show_archived=False) or []
+    pack["conferences"] = confs
+
+    pack["counts"] = {
+        "active": len(active),
+        "completed": len(done_period),
+        "papers": len(pack["paper_drafts"]) + len(pack["conf_papers"]),
+        "tentative": sum(1 for p in pack["conf_papers"] if p["_tentative"]),
+    }
+    return pack
+
+
 # ── Deck data: meeting delta and project review ───────────────────────────────
 
 def get_meeting_delta(since: _dt_date, until: _dt_date | None = None) -> dict:

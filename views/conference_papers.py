@@ -26,6 +26,7 @@ from db import (
     ensure_conference_deliverable,
     log_status_change,
     get_comment_counts,
+    get_labelled_task_ids, set_task_label, TENTATIVE_LABEL,
 )
 from utils.helpers import (
     fmt_date, sort_tasks_by_deadline, comment_badge_html, TASK_NAME_STYLE, TASK_ROW_CLASS,
@@ -121,6 +122,12 @@ def _add_paper_modal(project_id: int, users: list[dict], conferences: list[dict]
                 "Deadline (defaults to submission)", value=default_dl, format="DD/MM/YYYY"
             )
 
+        tentative = st.checkbox(
+            "💡 Tentative topic — not yet approved by the supervisor",
+            value=st.session_state.get("user_role") != "admin",
+            help="Propose an idea even before it is agreed: the supervisor sees the "
+                 "flag and can approve it. Proposing costs nothing.",
+        )
         st.caption(
             "Notes are edited afterwards from the paper's **Details** dialog — like any task."
         )
@@ -153,6 +160,8 @@ def _add_paper_modal(project_id: int, users: list[dict], conferences: list[dict]
                 seq_id = f"CONF-{t_id}"
                 supabase.table("tasks").update({"sequence_id": seq_id}).eq("id", t_id).execute()
                 log_status_change("task", t_id, project_id, None, "Not started", me)
+                if tentative:
+                    set_task_label(t_id, TENTATIVE_LABEL, True)
 
                 assigner = st.session_state.get("user_name", me or "")
                 enriched = {**new_task, "id": t_id, "sequence_id": seq_id, "project_name": "Conference Papers"}
@@ -166,12 +175,23 @@ def _add_paper_modal(project_id: int, users: list[dict], conferences: list[dict]
                 st.error(f"Error: {e}")
 
 
-def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str, comment_counts: dict):
+def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str,
+                      comment_counts: dict, tentative_ids: set | None = None,
+                      viewer_email: str | None = None, is_admin: bool = False):
     status = t.get("status", "Not started")
     s_fg, s_bg = _STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
     seq = t.get("sequence_id") or f"CONF-{t['id']}"
     pills = _people_pills(t.get("owner_email"), t.get("supervisor_email"), user_map)
     cc_html = comment_badge_html(comment_counts.get(t.get("id"), 0))
+
+    is_tentative = t.get("id") in (tentative_ids or set())
+    tent_html = ""
+    if is_tentative:
+        tent_html = (
+            "<span style='background:#FFF4E5;color:#B26A00;border:1px dashed #E0A75E;"
+            "border-radius:4px;padding:1px 7px;font-size:11px;font-weight:700;"
+            "white-space:nowrap'>💡 tentative</span>"
+        )
 
     col_l, col_r = st.columns([8, 1.6])
     with col_l:
@@ -180,6 +200,7 @@ def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str, 
             f"<span style='font-family:monospace;color:#aaa;font-size:11px'>{html.escape(seq)}</span>"
             f"<span style='{TASK_NAME_STYLE}'>{html.escape(t.get('name',''))}</span>"
             f"{_badge(status, s_fg, s_bg)}"
+            f"{tent_html}"
             f"{cc_html}"
             f"<span style='margin-left:6px'>{_deadline_html(t.get('deadline'))}</span>"
             f"</div>"
@@ -189,13 +210,24 @@ def _render_paper_row(t: dict, user_map: dict, can_edit: bool, key_prefix: str, 
     with col_r:
         if st.button("Details", key=f"{key_prefix}_{t['id']}", use_container_width=True):
             task_details_modal(t, can_edit=can_edit)
+        # Clearing the flag IS the approval act — it belongs to the supervisor
+        # (or an admin), and the student sees the badge disappear.
+        if is_tentative and (is_admin or t.get("supervisor_email") == viewer_email):
+            if st.button("✔ Approve", key=f"{key_prefix}_appr_{t['id']}",
+                         use_container_width=True,
+                         help="Approve this topic (removes the tentative flag)"):
+                set_task_label(t["id"], TENTATIVE_LABEL, False)
+                st.toast(f"Approved: {t.get('name', '')[:40]}")
+                st.rerun()
 
 
 def show_conference_papers() -> None:
     st.title("🎤 Conference Papers")
     st.caption(
         "Papers we aim to submit, one per row. Each is a task — open **Details** to "
-        "track notes, status and deadline. Group headers are the target conferences."
+        "track notes, status and deadline. Group headers are the target conferences. "
+        "**Anyone can propose a paper**: add it as a 💡 *tentative* topic and "
+        "your supervisor will approve it."
     )
 
     email = st.session_state.get("user_email")
@@ -231,6 +263,7 @@ def show_conference_papers() -> None:
     user_map = {u["email"]: u for u in users}
     conferences = get_conferences(show_archived=False) or []
     comment_counts = get_comment_counts([t["id"] for t in tasks]) if tasks else {}
+    tentative_ids = get_labelled_task_ids(TENTATIVE_LABEL)
 
     top_l, top_r = st.columns([3, 1.4])
     with top_l:
@@ -281,4 +314,6 @@ def show_conference_papers() -> None:
             unsafe_allow_html=True,
         )
         for t in sort_tasks_by_deadline(group_tasks):
-            _render_paper_row(t, user_map, can_edit=_can_edit(t), key_prefix=f"confp_{did}", comment_counts=comment_counts)
+            _render_paper_row(t, user_map, can_edit=_can_edit(t), key_prefix=f"confp_{did}",
+                              comment_counts=comment_counts, tentative_ids=tentative_ids,
+                              viewer_email=email, is_admin=is_admin)

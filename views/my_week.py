@@ -224,20 +224,88 @@ def show_my_week():
         st.caption(
             "ℹ️ Your personal trend becomes available after the 'Status history & trend' migration."
         )
-        return
-    if not stats["by_week"]:
+    elif not stats["by_week"]:
         st.caption("No updates recorded in the last 8 weeks.")
+    else:
+        import pandas as pd
+        weeks = sorted(set(stats["by_week"]) | set(stats["completed_by_week"]))
+        df = pd.DataFrame({
+            "Updates": [stats["by_week"].get(w, 0) for w in weeks],
+            "Completed": [stats["completed_by_week"].get(w, 0) for w in weeks],
+        }, index=weeks)
+        done = sum(stats["completed_by_week"].values())
+        st.markdown(
+            f"**Your trend** — {stats['total']} updates and "
+            f"**{done} tasks completed** in the last 8 weeks."
+        )
+        st.bar_chart(df, height=200)
+
+    _render_my_status_deck(email)
+
+
+def _render_my_status_deck(email: str) -> None:
+    """Personal .pptx: results, publication pipeline, open work, PhD clock.
+
+    This is the deck to bring to the lab meeting, a 1:1 or the PhD annual
+    review — generated from the data instead of hand-built, which is also the
+    incentive to keep the data fresh: a good deck requires updated tasks.
+    """
+    from db import get_my_status_pack
+    from utils.pptx_export import build_my_status_deck
+
+    st.divider()
+    st.markdown("**📊 My status deck**")
+    st.caption(
+        "Your slides for the lab meeting, a 1:1 or the PhD review: results in the "
+        "period, publication pipeline (published → drafts → targets), open tasks. "
+        "Generated from your data — keeping tasks updated is what makes it good."
+    )
+
+    d1, d2 = st.columns([1.6, 3])
+    with d1:
+        months = st.selectbox(
+            "Period", [1, 3, 6, 12],
+            format_func=lambda m: f"last {m} month{'s' if m > 1 else ''}",
+            index=2, key="msd_months",
+        )
+    since = datetime.date.today() - datetime.timedelta(days=int(30.44 * months))
+
+    try:
+        pack = get_my_status_pack(email, since)
+    except Exception as e:
+        st.error(f"Could not collect your data: {e}")
         return
 
-    import pandas as pd
-    weeks = sorted(set(stats["by_week"]) | set(stats["completed_by_week"]))
-    df = pd.DataFrame({
-        "Updates": [stats["by_week"].get(w, 0) for w in weeks],
-        "Completed": [stats["completed_by_week"].get(w, 0) for w in weeks],
-    }, index=weeks)
-    done = sum(stats["completed_by_week"].values())
-    st.markdown(
-        f"**Your trend** — {stats['total']} updates and "
-        f"**{done} tasks completed** in the last 8 weeks."
-    )
-    st.bar_chart(df, height=200)
+    # Scopus is network + API key: fetched here (not in db.py) and optional.
+    scopus_id = (pack.get("user", {}).get("scopus_id") or "").strip()
+    if scopus_id:
+        try:
+            from utils.scopus_fetcher import fetch_publications
+            result = fetch_publications(scopus_id)
+            if not result.get("error"):
+                pack["publications"] = result
+        except Exception:
+            pass  # the deck simply omits the publications lane
+
+    c = pack.get("counts", {})
+    with d2:
+        bits = [f"{c.get('active', 0)} active tasks",
+                f"{c.get('completed', 0)} completed in the period",
+                f"{c.get('papers', 0)} papers in pipeline"]
+        if c.get("tentative"):
+            bits.append(f"{c['tentative']} tentative")
+        if not scopus_id:
+            bits.append("no Scopus ID configured — publications lane omitted")
+        st.caption(" · ".join(bits))
+
+    try:
+        buf = build_my_status_deck(pack)
+        surname = (pack.get("user", {}).get("name") or email).split()[-1]
+        st.download_button(
+            "⬇️ Download my status deck (.pptx)", data=buf,
+            file_name=f"MAIC_status_{surname}_{datetime.date.today().strftime('%Y%m%d')}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            type="primary", key="msd_dl",
+        )
+    except Exception as e:
+        st.error(f"Deck generation failed: {e}")

@@ -560,6 +560,194 @@ def _timeline_slide(prs, confs, months):
     return s
 
 
+# ── Deck 3: personal status (1:1s and PhD reviews) ────────────────────────────
+
+def build_my_status_deck(pack: dict) -> BytesIO:
+    """One person's portfolio: tasks, results, publication pipeline, PhD clock.
+
+    The design goal is motivational, not managerial: it opens with what was
+    achieved, shows the pipeline (published → drafts → targets) as a timeline,
+    and only then lists the open work.
+    """
+    prs = _open()
+    W = prs.slide_width
+    user = pack.get("user", {})
+    name = user.get("name") or user.get("email") or "—"
+    since, until = pack["since"], pack["until"]
+    period = f"{_long_date(since)} — {_long_date(until)}"
+    c = pack.get("counts", {})
+
+    _title_slide(prs, name, "Status review", period)
+
+    pubs = pack.get("publications") or {}
+    pub_total = (pubs.get("totals") or {}).get("all", 0)
+    _summary_slide(
+        prs, "At a glance", period,
+        [("completed", c.get("completed", 0), GREEN),
+         ("active tasks", c.get("active", 0), CYAN),
+         ("papers in pipeline", c.get("papers", 0), TEAL),
+         ("publications", pub_total, ORANGE if not pub_total else GREEN)],
+        footer="Papers in pipeline = journal drafts + conference targets "
+               "(tentative ones included).",
+    )
+
+    # ── 1. Results first ─────────────────────────────────────────────────────
+    _tree_rows(prs, "Completed in the period", period, pack.get("completed", []),
+               footer="Completion dates from the task records.")
+
+    # ── 2. Publication pipeline timeline ─────────────────────────────────────
+    _publication_timeline(prs, pack)
+
+    # Papers detail: journal drafts + conference targets
+    rows = []
+    for d in pack.get("paper_drafts", []):
+        rows.append({"level": 0, "kind": "deliverable",
+                     "name": f"[{d.get('_project','')}] {d.get('name','')}",
+                     "status": d.get("status") or "Not started",
+                     "deadline": d.get("deadline"), "people": "journal / deliverable",
+                     "fresh": "", "sev": "none"})
+    for p in pack.get("conf_papers", []):
+        tag = "tentative — awaiting approval" if p.get("_tentative") else "approved target"
+        rows.append({"level": 0, "kind": "deliverable",
+                     "name": p.get("name") or "—",
+                     "status": p.get("status") or "Not started",
+                     "deadline": p.get("deadline"),
+                     "people": p.get("_target") or "no conference yet",
+                     "fresh": "TENT." if p.get("_tentative") else "",
+                     "sev": "warn" if p.get("_tentative") else "none"})
+    _tree_rows(prs, "Papers", "Journal drafts and conference targets", rows,
+               footer="TENT. = tentative topic, not yet approved by the supervisor.")
+
+    # ── 3. Open work ─────────────────────────────────────────────────────────
+    _tree_rows(prs, "Active tasks", f"{c.get('active', 0)} open items by project",
+               pack.get("task_rows", []))
+
+    # ── 4. PhD clock ─────────────────────────────────────────────────────────
+    if user.get("is_phd_student"):
+        _phd_slide(prs, user)
+
+    buf = BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def _publication_timeline(prs, pack):
+    """Past publications and future submission targets on one axis.
+
+    Left of today: Scopus publications per year. Right: journal-draft deadlines
+    and conference submission dates for this person's papers. The point is to
+    make the pipeline visible — a long empty right side is the nudge.
+    """
+    s = _new_slide(prs)
+    _header(s, prs, "Publication pipeline", "Published → drafts → targets")
+    W, H = prs.slide_width, prs.slide_height
+    x0, x1 = Inches(1.0), W - Inches(1.0)
+    y = Inches(3.6)
+    today = datetime.date.today()
+
+    pubs = pack.get("publications") or {}
+    by_year: dict[int, int] = {}
+    for kind in ("journals_by_year", "conferences_by_year"):
+        for yr, items in (pubs.get(kind) or {}).items():
+            by_year[int(yr)] = by_year.get(int(yr), 0) + len(items)
+
+    # Future targets
+    targets = []
+    conf_by_key = {}
+    for cconf in pack.get("conferences", []):
+        lbl = (cconf.get("acronym") or cconf.get("name") or "").strip()
+        key = f"{lbl} {cconf['year']}".strip() if cconf.get("year") else lbl
+        conf_by_key[key.lower()] = cconf
+    for p in pack.get("conf_papers", []):
+        cconf = conf_by_key.get((p.get("_target") or "").lower())
+        sub = _d((cconf or {}).get("submission_deadline")) or _d(p.get("deadline"))
+        if sub and sub >= today:
+            targets.append((sub, p.get("_target") or p.get("name", ""), bool(p.get("_tentative"))))
+    for d in pack.get("paper_drafts", []):
+        dl = _d(d.get("deadline"))
+        if dl and dl >= today:
+            targets.append((dl, f"{d.get('name','')}", False))
+    targets.sort()
+
+    years_back = sorted(by_year)[-4:] if by_year else []
+    span_start = datetime.date(years_back[0], 1, 1) if years_back else today - datetime.timedelta(days=365)
+    span_end = max([t[0] for t in targets], default=today) + datetime.timedelta(days=90)
+    span = max((span_end - span_start).days, 1)
+    fx = lambda d: x0 + (x1 - x0) * min(max((d - span_start).days / span, 0.0), 1.0)
+
+    _rect(s, x0, y, x1 - x0, Emu(19050), RGBColor(0xC9, 0xD1, 0xD6))
+
+    # Today marker
+    tx = fx(today)
+    _rect(s, tx, y - Inches(0.45), Emu(19050), Inches(1.05), INK)
+    _text(s, tx - Inches(0.4), y - Inches(0.75), Inches(0.8), Inches(0.25),
+          "today", size=9, bold=True, color=INK, align=PP_ALIGN.CENTER)
+
+    # Past: one green column per publication year
+    for yr in years_back:
+        n = by_year[yr]
+        cx = fx(datetime.date(yr, 7, 1))
+        h = Inches(0.16) * min(n, 6)
+        _rect(s, cx - Inches(0.14), y - h - Emu(19050), Inches(0.28), h, GREEN)
+        _text(s, cx - Inches(0.4), y + Inches(0.12), Inches(0.8), Inches(0.22),
+              str(yr), size=9, color=MUTED, align=PP_ALIGN.CENTER)
+        _text(s, cx - Inches(0.4), y - h - Inches(0.32), Inches(0.8), Inches(0.22),
+              str(n), size=10, bold=True, color=GREEN, align=PP_ALIGN.CENTER)
+
+    # Future: one marker per target
+    above = True
+    for sub, label, tentative in targets[:8]:
+        cx = fx(sub)
+        colour = ORANGE if tentative else TEAL
+        _rect(s, cx - Emu(28575), y - Inches(0.12), Emu(57150), Inches(0.28), colour)
+        ly = y - Inches(0.95) if above else y + Inches(0.42)
+        _text(s, cx - Inches(1.0), ly, Inches(2.0), Inches(0.22),
+              label[:26], size=9, bold=True, color=colour, align=PP_ALIGN.CENTER, wrap=False)
+        _text(s, cx - Inches(1.0), ly + Inches(0.2), Inches(2.0), Inches(0.2),
+              _fmt(sub.isoformat()) + (" · tentative" if tentative else ""),
+              size=8, color=MUTED, align=PP_ALIGN.CENTER, wrap=False)
+        above = not above
+
+    if not by_year and not targets:
+        _text(s, Inches(0.6), Inches(2.4), W - Inches(1.2), Inches(0.4),
+              "No publications recorded and no targets yet — pick a conference "
+              "under Conference Paper Drafts to start the pipeline.",
+              size=13, color=MUTED)
+
+    _footer(s, prs, "Green: published (Scopus). Teal: approved targets. "
+                    "Orange: tentative topics awaiting approval.")
+    return s
+
+
+def _phd_slide(prs, user):
+    """Where this PhD stands on the calendar — the honest clock."""
+    s = _new_slide(prs)
+    _header(s, prs, "PhD timeline", "")
+    W = prs.slide_width
+    start, end = _d(user.get("phd_start_date")), _d(user.get("phd_end_date"))
+    if not start or not end or end <= start:
+        _text(s, Inches(0.6), Inches(1.9), W - Inches(1.2), Inches(0.4),
+              "PhD start/end dates are not configured (Admin Panel → Users).",
+              size=13, color=MUTED)
+        return s
+    today = datetime.date.today()
+    total = (end - start).days
+    pct = min(max((today - start).days / total, 0.0), 1.0)
+    years = max(1, round(total / 365.25))
+    year_now = min(years, max(1, int((today - start).days // 365.25) + 1))
+
+    _text(s, Inches(0.6), Inches(1.8), W - Inches(1.2), Inches(0.5),
+          f"Year {year_now} of {years}", size=30, bold=True, color=TEAL, font=FONT_H)
+    _bar(s, Inches(0.6), Inches(2.7), W - Inches(1.2), Inches(0.3), pct,
+         GREEN if pct < 0.66 else ORANGE)
+    _text(s, Inches(0.6), Inches(3.1), W - Inches(1.2), Inches(0.3),
+          f"{_fmt(start.isoformat())} → {_fmt(end.isoformat())} · "
+          f"{pct * 100:.0f}% of the time elapsed", size=12, color=MUTED)
+    _footer(s, prs, "The pipeline slide answers the question this one raises.")
+    return s
+
+
 # ── Deck 2: project review (cumulative) ───────────────────────────────────────
 
 def build_review_deck(review: dict) -> BytesIO:
