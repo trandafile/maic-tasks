@@ -33,9 +33,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # v6 of both actions runs on Node 24. checkout@v4 and setup-python@v5
+      # still target Node 20, which GitHub has deprecated. (v7 exists but is a
+      # day old — no track record, and this job carries the notifications.)
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
