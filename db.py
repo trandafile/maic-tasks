@@ -91,6 +91,7 @@ def get_users(approved_only: bool = True) -> list:
 
 _SETTINGS_DEFAULTS = {
     "expiring_threshold_days": 14,
+    "stale_threshold_days": 14,
     "deliverable_types": json.dumps([s["name"] for s in DEFAULT_DELIVERABLE_TAG_STYLES]),
     "deliverable_tag_styles": json.dumps(DEFAULT_DELIVERABLE_TAG_STYLES),
     "smtp_host": "smtp.gmail.com",
@@ -251,6 +252,26 @@ CREATE INDEX IF NOT EXISTS idx_conferences_submission ON conferences (submission
 -- Same pattern as the rest of the schema: the app authenticates with the
 -- publishable key and RLS is disabled on application tables.
 ALTER TABLE conferences DISABLE ROW LEVEL SECURITY;
+"""
+
+
+ENGAGEMENT_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → freshness tracking ("fermo da N giorni").
+--
+-- Why a column and not status_history: the staleness signal must turn green
+-- when someone simply writes where they are. If it only counted status
+-- changes, a researcher who posts a detailed note update would still look
+-- stale — punishing exactly the behaviour we want. So every save touches
+-- updated_at: status, notes, deadline, assignment.
+ALTER TABLE tasks    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE subtasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Existing rows: seed from created_at so nothing shows as "stale forever".
+UPDATE tasks    SET updated_at = COALESCE(created_at, NOW()) WHERE updated_at IS NULL;
+UPDATE subtasks SET updated_at = COALESCE(created_at, NOW()) WHERE updated_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_updated_at    ON tasks (updated_at);
+CREATE INDEX IF NOT EXISTS idx_subtasks_updated_at ON subtasks (updated_at);
 """
 
 
@@ -1289,6 +1310,384 @@ def get_conference_paper_tasks(user_email: str | None = None) -> list:
     except Exception as exc:
         print(f"[db.get_conference_paper_tasks] {exc}")
         return []
+
+
+# ── Freshness ("fermo da N giorni") ───────────────────────────────────────────
+#
+# For long research tasks a far-off deadline says nothing for months, while
+# "not updated in 34 days" says everything at once. This is the primary
+# engagement signal, so it must react to ANY meaningful edit — see
+# ENGAGEMENT_MIGRATION_SQL for why it is a column and not derived history.
+
+import datetime as _dt_mod
+
+
+def now_iso() -> str:
+    """UTC timestamp for updated_at, in the format PostgREST accepts."""
+    return _dt_mod.datetime.utcnow().isoformat() + "Z"
+
+
+def parse_ts(value) -> _dt_mod.datetime | None:
+    if not value:
+        return None
+    try:
+        return _dt_mod.datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def days_since_update(item: dict) -> int | None:
+    """Whole days since the item was last touched. None when unknown.
+
+    Falls back to created_at so a freshly created task is never 'stale', and
+    returns None (rather than a wrong number) when the migration has not run.
+    """
+    ts = parse_ts(item.get("updated_at")) or parse_ts(item.get("created_at"))
+    if ts is None:
+        return None
+    return max(0, (_dt_mod.datetime.utcnow() - ts).days)
+
+
+def is_stale(item: dict, threshold: int) -> bool:
+    d = days_since_update(item)
+    return d is not None and d >= threshold
+
+
+def stale_threshold() -> int:
+    try:
+        return int(get_settings().get("stale_threshold_days", 14))
+    except (TypeError, ValueError):
+        return 14
+
+
+# ── "My week" — the low-friction update surface ───────────────────────────────
+
+def get_my_week(user_email: str) -> dict:
+    """Everything the user owns and can act on this week, in one round trip."""
+    out = {"tasks": [], "subtasks": [], "projects": {}, "task_map": {}}
+    try:
+        projects = supabase.table("projects").select(
+            "id, name, acronym, identifier"
+        ).eq("is_archived", False).execute().data or []
+        out["projects"] = {p["id"]: p for p in projects}
+
+        tasks = supabase.table("tasks").select("*").eq(
+            "is_archived", False
+        ).eq("owner_email", user_email).execute().data or []
+        all_tasks = supabase.table("tasks").select(
+            "id, name, project_id"
+        ).eq("is_archived", False).execute().data or []
+        out["task_map"] = {t["id"]: t for t in all_tasks}
+
+        subtasks = supabase.table("subtasks").select("*").eq(
+            "is_archived", False
+        ).eq("owner_email", user_email).execute().data or []
+
+        active = lambda i: (i.get("status") or "Not started") not in ("Completed", "Cancelled")
+        out["tasks"] = [t for t in tasks if active(t) and t.get("project_id") in out["projects"]]
+        out["subtasks"] = [
+            s for s in subtasks
+            if active(s) and out["task_map"].get(s.get("task_id"), {}).get("project_id") in out["projects"]
+        ]
+    except Exception as exc:
+        print(f"[db.get_my_week] {exc}")
+    return out
+
+
+def quick_update(table: str, item_id: int, *, status: str | None = None,
+                 note_append: str | None = None, current_notes: str = "",
+                 project_id: int | None = None, old_status: str | None = None,
+                 user_email: str | None = None) -> tuple[bool, str]:
+    """One-tap update from the My Week view: status and/or a dated note line.
+
+    Always refreshes updated_at — that is what makes the freshness signal fair:
+    writing where you are is enough to clear it, no status change required.
+    """
+    if table not in ("tasks", "subtasks"):
+        return False, "Invalid table."
+
+    payload: dict = {"updated_at": now_iso()}
+    if status:
+        payload["status"] = status
+        if table == "tasks":
+            if status == "Completed" and old_status != "Completed":
+                payload["completion_date"] = _dt_date.today().isoformat()
+            elif status != "Completed" and old_status == "Completed":
+                payload["completion_date"] = None
+
+    if (note_append or "").strip():
+        stamp = _dt_date.today().strftime("%d/%m/%Y")
+        line = f"**{stamp}** — {note_append.strip()}"
+        payload["notes"] = (current_notes + "\n\n" + line).strip() if current_notes else line
+
+    try:
+        res = supabase.table(table).update(payload).eq("id", item_id).execute()
+        if not getattr(res, "data", None):
+            return False, "The database did not confirm the update."
+    except Exception as exc:
+        return False, str(exc)
+
+    if status and status != old_status:
+        log_status_change(
+            "task" if table == "tasks" else "subtask",
+            item_id, project_id, old_status, status, user_email,
+        )
+    return True, ""
+
+
+def touch(table: str, item_id: int) -> None:
+    """Mark an item as updated without changing anything else."""
+    try:
+        supabase.table(table).update({"updated_at": now_iso()}).eq("id", item_id).execute()
+    except Exception as exc:
+        print(f"[db.touch] {exc}")
+
+
+# ── Personal + team activity stats (from status_history) ──────────────────────
+
+def get_activity_stats(user_email: str | None = None, weeks: int = 8) -> dict:
+    """Status changes grouped by ISO week, optionally for one person.
+
+    Returns {"by_week": {"YYYY-Www": n}, "completed_by_week": {...}, "total": n}.
+    Empty dicts when status_history is missing — the caller shows a hint.
+    """
+    since = (_dt_date.today() - _dt_mod.timedelta(weeks=weeks)).isoformat()
+    out = {"by_week": {}, "completed_by_week": {}, "total": 0, "available": True}
+    try:
+        q = supabase.table("status_history").select(
+            "new_status, changed_at, changed_by_email"
+        ).gte("changed_at", since)
+        if user_email:
+            q = q.eq("changed_by_email", user_email)
+        rows = q.execute().data or []
+    except Exception as exc:
+        print(f"[db.get_activity_stats] {exc}")
+        out["available"] = False
+        return out
+
+    for r in rows:
+        ts = parse_ts(r.get("changed_at"))
+        if not ts:
+            continue
+        y, w, _ = ts.isocalendar()
+        key = f"{y}-W{w:02d}"
+        out["by_week"][key] = out["by_week"].get(key, 0) + 1
+        if r.get("new_status") == "Completed":
+            out["completed_by_week"][key] = out["completed_by_week"].get(key, 0) + 1
+    out["total"] = len(rows)
+    return out
+
+
+def get_engagement_by_person(weeks: int = 4) -> list[dict]:
+    """Updates per person over the period — the measure of whether any of the
+    engagement work is actually landing. Sorted by activity, least active last."""
+    since = (_dt_date.today() - _dt_mod.timedelta(weeks=weeks)).isoformat()
+    try:
+        rows = supabase.table("status_history").select(
+            "changed_by_email, new_status, changed_at"
+        ).gte("changed_at", since).execute().data or []
+        users = supabase.table("users").select("email, name").eq(
+            "is_approved", True
+        ).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_engagement_by_person] {exc}")
+        return []
+
+    per: dict[str, dict] = {
+        u["email"]: {"email": u["email"], "name": u.get("name", u["email"]),
+                     "updates": 0, "completed": 0, "last": None}
+        for u in users
+    }
+    for r in rows:
+        e = r.get("changed_by_email")
+        if e not in per:
+            continue
+        per[e]["updates"] += 1
+        if r.get("new_status") == "Completed":
+            per[e]["completed"] += 1
+        ts = parse_ts(r.get("changed_at"))
+        if ts and (per[e]["last"] is None or ts > per[e]["last"]):
+            per[e]["last"] = ts
+
+    out = list(per.values())
+    out.sort(key=lambda x: (-x["updates"], x["name"]))
+    return out
+
+
+def get_supervisor_digest(user_email: str, days: int = 7) -> dict:
+    """What moved and what did not, among the items this person supervises."""
+    since_dt = _dt_mod.datetime.utcnow() - _dt_mod.timedelta(days=days)
+    threshold = stale_threshold()
+    res = {"moved": [], "stuck": [], "blocked": [], "completed": []}
+    try:
+        tasks = supabase.table("tasks").select("*").eq(
+            "is_archived", False
+        ).eq("supervisor_email", user_email).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_supervisor_digest] {exc}")
+        return res
+
+    for t in tasks:
+        status = t.get("status") or "Not started"
+        if status == "Cancelled":
+            continue
+        ts = parse_ts(t.get("updated_at")) or parse_ts(t.get("created_at"))
+        recent = bool(ts and ts >= since_dt)
+        if status == "Completed":
+            if recent:
+                res["completed"].append(t)
+            continue
+        if status == "Blocked":
+            res["blocked"].append(t)
+        elif recent:
+            res["moved"].append(t)
+        elif is_stale(t, threshold):
+            res["stuck"].append(t)
+    return res
+
+
+# ── Deck data: meeting delta and project review ───────────────────────────────
+
+def get_meeting_delta(since: _dt_date, until: _dt_date | None = None) -> dict:
+    """What changed per person between two dates — feeds the meeting deck.
+
+    'moved' means the status changed in the window; 'stale' means nobody has
+    touched it for at least the freshness threshold. Those two are the only
+    items worth meeting time.
+    """
+    until = until or _dt_date.today()
+    threshold = stale_threshold()
+    out = {"by_person": [], "totals": {"completed": 0, "moved": 0, "blocked": 0, "stale": 0}}
+
+    try:
+        tasks = supabase.table("tasks").select("*").eq("is_archived", False).execute().data or []
+        projects = supabase.table("projects").select("id, name, acronym, identifier").execute().data or []
+        users = supabase.table("users").select("email, name").eq("is_approved", True).order("name").execute().data or []
+    except Exception as exc:
+        print(f"[db.get_meeting_delta] {exc}")
+        return out
+    pmap = {p["id"]: (p.get("acronym") or p.get("identifier") or p.get("name") or "") for p in projects}
+
+    # Status changes in the window (optional: absent before the migration)
+    changed_ids: set[int] = set()
+    try:
+        hist = supabase.table("status_history").select("item_id, item_type, changed_at").gte(
+            "changed_at", since.isoformat()
+        ).execute().data or []
+        changed_ids = {h["item_id"] for h in hist if h.get("item_type") == "task"}
+    except Exception:
+        pass
+
+    for u in users:
+        email = u["email"]
+        mine = [t for t in tasks if t.get("owner_email") == email
+                and (t.get("status") or "") != "Cancelled"]
+        if not mine:
+            continue
+
+        completed, moved, blocked, stale = [], [], [], []
+        for t in mine:
+            t = {**t, "_project": pmap.get(t.get("project_id"), ""),
+                 "_stale": days_since_update(t)}
+            status = t.get("status") or "Not started"
+            cd = _norm_conf_date(t.get("completion_date"))
+            if status == "Completed":
+                if cd and since.isoformat() <= cd <= until.isoformat():
+                    completed.append(t)
+                continue
+            if status == "Blocked":
+                blocked.append(t)
+            elif t["id"] in changed_ids:
+                moved.append(t)
+            if status != "Blocked" and is_stale(t, threshold):
+                stale.append(t)
+
+        active = len([t for t in mine if (t.get("status") or "") not in ("Completed", "Cancelled")])
+        if not (completed or moved or blocked or stale):
+            continue
+        out["by_person"].append({
+            "email": email, "name": u.get("name", email), "active": active,
+            "completed": completed, "moved": moved, "blocked": blocked, "stale": stale,
+        })
+        out["totals"]["completed"] += len(completed)
+        out["totals"]["moved"] += len(moved)
+        out["totals"]["blocked"] += len(blocked)
+        out["totals"]["stale"] += len(stale)
+
+    # Whoever needs the most help goes first.
+    out["by_person"].sort(key=lambda p: (-(len(p["blocked"]) + len(p["stale"])), p["name"]))
+    return out
+
+
+def get_project_review(project_id: int, period_label: str = "") -> dict:
+    """Cumulative status per deliverable — feeds the review deck.
+
+    Not a delta: a funder needs 'WP2 at 70%, one open risk', not what moved
+    last week. Archived tasks are included: a completed-then-archived task is
+    still progress that was made.
+    """
+    today = _dt_date.today()
+    threshold = stale_threshold()
+    out = {"project": {}, "deliverables": [], "no_deliverable": [],
+           "totals": {"total": 0, "completed": 0, "overdue": 0, "at_risk": 0},
+           "period_label": period_label}
+    try:
+        pr = supabase.table("projects").select("*").eq("id", project_id).execute().data or []
+        out["project"] = pr[0] if pr else {}
+        delivs = supabase.table("deliverables").select("*").eq(
+            "project_id", project_id).eq("is_archived", False).order("deadline").execute().data or []
+        tasks = supabase.table("tasks").select("*").eq("project_id", project_id).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_project_review] {exc}")
+        return out
+
+    tasks = [t for t in tasks if (t.get("status") or "") != "Cancelled"]
+
+    def bucket(ts: list[dict]) -> dict:
+        done = [t for t in ts if t.get("status") == "Completed"]
+        prog = [t for t in ts if t.get("status") == "Working on"]
+        risks = []
+        for t in ts:
+            if t.get("status") == "Completed":
+                continue
+            dl = _norm_conf_date(t.get("deadline"))
+            if t.get("status") == "Blocked":
+                risks.append({**t, "_why": "bloccato"})
+            elif dl and dl < today.isoformat():
+                days = (today - _dt_date.fromisoformat(dl)).days
+                risks.append({**t, "_why": f"in ritardo di {days}g"})
+            elif is_stale(t, threshold):
+                risks.append({**t, "_why": f"fermo da {days_since_update(t)}g"})
+        total = len(ts)
+        return {
+            "completed": done, "in_progress": prog, "risks": risks,
+            "totals": {"total": total, "completed": len(done),
+                       "pct": round(100 * len(done) / total) if total else 0},
+        }
+
+    for d in delivs:
+        dts = [t for t in tasks if t.get("deliverable_id") == d["id"]]
+        b = bucket(dts)
+        out["deliverables"].append({**d, **b})
+
+    orphans = [t for t in tasks if not t.get("deliverable_id")]
+    out["no_deliverable"] = orphans
+
+    total = len(tasks)
+    out["totals"] = {
+        "total": total,
+        "completed": len([t for t in tasks if t.get("status") == "Completed"]),
+        "overdue": len([
+            t for t in tasks
+            if t.get("status") != "Completed"
+            and (dl := _norm_conf_date(t.get("deadline"))) and dl < today.isoformat()
+        ]),
+        "at_risk": len([
+            t for t in tasks
+            if t.get("status") == "Blocked" or (t.get("status") != "Completed" and is_stale(t, threshold))
+        ]),
+    }
+    return out
 
 
 # ── Contracts (PhD students and contractors) ──────────────────────────────────

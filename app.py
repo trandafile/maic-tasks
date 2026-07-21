@@ -166,6 +166,7 @@ def init_session_state():
 
 # Import views
 from views.dashboard import show_dashboard
+from views.my_week import show_my_week
 from views.projects import show_projects
 from views.deliverables import show_deliverables
 from views.calendar import show_calendar
@@ -213,7 +214,7 @@ def main():
         st.markdown("---")
 
         # Main workspace pages
-        pages = ["Dashboard", "Projects", "Deliverables", "Calendar", "Reports", "Time Sheets"]
+        pages = ["Dashboard", "My Week", "Projects", "Deliverables", "Calendar", "Reports", "Time Sheets"]
 
         # Paper-related pages, grouped under a "Papers" heading
         paper_pages = ["My Papers", "My Paper Drafts", "Conference Calendar", "Conference Paper Drafts"]
@@ -266,6 +267,8 @@ def main():
     
     if page == "Dashboard":
         show_dashboard()
+    elif page == "My Week":
+        show_my_week()
     elif page in ("Projects", "Active Tasks"):  # old label kept for stale sessions
         show_projects()
     elif page == "Deliverables":

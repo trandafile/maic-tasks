@@ -457,13 +457,32 @@ def send_weekly_briefing(
     # ── HTML version ─────────────────────────────────────────────────────────
     from utils import email_templates as T
 
+    # Open with what the person achieved, not with what they owe: a digest that
+    # only ever lists debts trains people to stop opening it.
+    completed_recent = []
+    try:
+        from db import get_activity_stats
+        _st = get_activity_stats(user_email=to_email, weeks=1)
+        completed_recent = list(_st.get("completed_by_week", {}).values())
+    except Exception:
+        pass
+    done_week = sum(completed_recent)
+
+    opening = (
+        f"nell'ultima settimana hai <b>completato {done_week} "
+        f"{'task' if done_week == 1 else 'task'}</b>. "
+        if done_week
+        else ""
+    )
+
     blocks = [
         T.paragraph(f"Ciao <b>{T.esc(first_name)}</b>,"),
         T.paragraph(
-            f"ecco il tuo riepilogo per la settimana del "
+            f"{opening}Ecco il riepilogo per la settimana del "
             f"<b>{T._fmt(monday.isoformat())} – {T._fmt(friday.isoformat())}</b>.",
         ),
         T.stat_tiles([
+            ("completati", done_week, "normal"),
             ("scaduti", len(overdue_sorted), "overdue"),
             (f"entro {threshold}g", len(upcoming_sorted), "due_soon"),
             ("da sbloccare", len(supervised_sorted), "blocked"),

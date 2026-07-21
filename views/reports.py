@@ -1757,6 +1757,164 @@ def _render_trend_report():
             )
 
 
+# ─── Slides (meeting delta / project review) ──────────────────────────────────
+
+def _render_slides_tab():
+    """Two decks on the MAIC template: the weekly delta and the SAL review."""
+    from db import get_meeting_delta, get_project_review
+    from utils.pptx_export import build_meeting_deck, build_review_deck
+
+    st.caption(
+        "Due deck diversi di proposito: la **riunione** mostra solo cosa è cambiato "
+        "(chi è in sala conosce il contesto), la **review** mostra lo stato cumulativo "
+        "per deliverable (il finanziatore non sa cosa è successo la settimana scorsa)."
+    )
+
+    mode = st.radio(
+        "Tipo di deck", ["meeting", "review"],
+        format_func=lambda m: "🗣️ Riunione di lab (delta)" if m == "meeting"
+                              else "🏛️ Review di progetto (cumulativo)",
+        horizontal=True, key="sl_mode",
+    )
+    today = datetime.date.today()
+
+    if mode == "meeting":
+        c1, c2 = st.columns(2)
+        with c1:
+            since = st.date_input("Dall'ultima riunione",
+                                  value=today - datetime.timedelta(days=7),
+                                  format="DD/MM/YYYY", key="sl_since")
+        with c2:
+            until = st.date_input("Fino a", value=today, format="DD/MM/YYYY", key="sl_until")
+        if since > until:
+            st.error("La data iniziale è successiva a quella finale.")
+            return
+
+        delta = get_meeting_delta(since, until)
+        t = delta["totals"]
+        m = st.columns(4)
+        m[0].metric("Completati", t["completed"])
+        m[1].metric("Avanzati", t["moved"])
+        m[2].metric("Bloccati", t["blocked"])
+        m[3].metric("Fermi", t["stale"])
+
+        if not delta["by_person"]:
+            st.info("Nessun movimento nel periodo: niente da presentare.")
+            return
+        st.caption(f"{len(delta['by_person'])} persone con qualcosa da discutere "
+                   "(ordinate da chi ha più blocchi).")
+        try:
+            buf = build_meeting_deck(delta, since, until)
+            st.download_button(
+                "⬇️ Scarica il deck della riunione (.pptx)", data=buf,
+                file_name=f"MAIC_riunione_{until.strftime('%Y%m%d')}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                type="primary",
+            )
+        except Exception as e:
+            st.error(f"Errore nella generazione: {e}")
+
+    else:
+        try:
+            projects = supabase.table("projects").select("*").eq(
+                "is_archived", False).order("name").execute().data or []
+        except Exception as e:
+            st.error(f"Errore: {e}")
+            return
+        if not projects:
+            st.info("Nessun progetto attivo.")
+            return
+        labels = {f"{p.get('acronym') or p.get('identifier') or ''} — {p.get('name')}".strip(" —"): p
+                  for p in projects}
+        proj = labels[st.selectbox("Progetto", list(labels.keys()), key="sl_proj")]
+        period = st.text_input("Etichetta del periodo", value="SAL — stato al "
+                               + today.strftime("%d/%m/%Y"), key="sl_period",
+                               help="Compare in copertina e nella slide di sintesi.")
+
+        review = get_project_review(proj["id"], period)
+        t = review["totals"]
+        pct = round(100 * t["completed"] / t["total"]) if t["total"] else 0
+        m = st.columns(4)
+        m[0].metric("Completamento", f"{pct}%")
+        m[1].metric("Task totali", t["total"])
+        m[2].metric("In ritardo", t["overdue"])
+        m[3].metric("A rischio", t["at_risk"])
+
+        if not proj.get("cup"):
+            st.warning("Il progetto non ha il CUP (Contracts → Project metadata): "
+                       "comparirà vuoto in copertina.")
+        try:
+            buf = build_review_deck(review)
+            acr = (proj.get("acronym") or proj.get("identifier") or "progetto").replace(" ", "")
+            st.download_button(
+                "⬇️ Scarica il deck di review (.pptx)", data=buf,
+                file_name=f"MAIC_review_{acr}_{today.strftime('%Y%m%d')}.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                type="primary",
+            )
+        except Exception as e:
+            st.error(f"Errore nella generazione: {e}")
+
+
+# ─── Engagement (is any of this working?) ─────────────────────────────────────
+
+def _render_engagement_tab():
+    """Updates per person: the only honest measure of whether the tool is used."""
+    from db import get_engagement_by_person, get_activity_stats
+    import pandas as pd
+
+    st.caption(
+        "Quante volte ciascuno aggiorna lo stato dei propri task. Non è una classifica "
+        "di produttività — è la misura di **se lo strumento viene usato**, ed è l'unico "
+        "modo per sapere se le azioni sul coinvolgimento stanno funzionando."
+    )
+    weeks = st.slider("Periodo (settimane)", 1, 12, 4, key="eng_weeks")
+
+    rows = get_engagement_by_person(weeks=weeks)
+    if not rows:
+        st.info("Nessun dato: serve la migration 'Status history & trend', e i dati "
+                "si accumulano dai cambi di stato effettuati da qui in avanti.")
+        return
+
+    active = [r for r in rows if r["updates"] > 0]
+    silent = [r for r in rows if r["updates"] == 0]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Persone attive", f"{len(active)}/{len(rows)}")
+    m2.metric("Aggiornamenti totali", sum(r["updates"] for r in rows))
+    m3.metric("Task completati", sum(r["completed"] for r in rows))
+
+    today = datetime.date.today()
+    table = []
+    for r in rows:
+        last = r["last"].date() if r["last"] else None
+        table.append({
+            "Persona": r["name"],
+            "Aggiornamenti": r["updates"],
+            "Completati": r["completed"],
+            "Ultimo aggiornamento": last.strftime("%d/%m/%Y") if last else "—",
+            "Giorni fa": (today - last).days if last else None,
+        })
+    st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
+
+    if silent:
+        st.warning(
+            f"**{len(silent)} persone non hanno aggiornato nulla** in {weeks} settimane: "
+            + ", ".join(r["name"] for r in silent[:8])
+            + ("…" if len(silent) > 8 else "")
+            + ".  \nPrima di sollecitare: hanno task assegnati? Le scadenze sono realistiche? "
+            "Un silenzio spesso significa che lo strumento non serve a chi lo dovrebbe usare."
+        )
+
+    stats = get_activity_stats(weeks=max(weeks, 8))
+    if stats.get("available") and stats["by_week"]:
+        wk = sorted(set(stats["by_week"]) | set(stats["completed_by_week"]))
+        st.markdown("**Andamento complessivo**")
+        st.bar_chart(pd.DataFrame({
+            "Aggiornamenti": [stats["by_week"].get(w, 0) for w in wk],
+            "Completati": [stats["completed_by_week"].get(w, 0) for w in wk],
+        }, index=wk), height=220)
+
+
 # ─── Main entry point ──────────────────────────────────────────────────────────
 
 def show_reports():
@@ -1765,12 +1923,14 @@ def show_reports():
     user_role = st.session_state.get("user_role")
 
     if user_role == "admin":
-        tab_main, tab_wl, tab_sp, tab_det, tab_tr = st.tabs([
+        tab_main, tab_wl, tab_sp, tab_det, tab_tr, tab_slides, tab_eng = st.tabs([
             "📋 Project Report",
             "👤 Workload by Person",
             "🏗️ Staff by Project",
             "📄 Detailed Report",
             "📈 Trend",
+            "📊 Slides",
+            "🔥 Engagement",
         ])
         with tab_main:
             _render_main_report()
@@ -1782,5 +1942,9 @@ def show_reports():
             _render_detailed_report()
         with tab_tr:
             _render_trend_report()
+        with tab_slides:
+            _render_slides_tab()
+        with tab_eng:
+            _render_engagement_tab()
     else:
         _render_main_report()

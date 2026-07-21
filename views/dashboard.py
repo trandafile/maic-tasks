@@ -19,7 +19,7 @@ import streamlit as st
 from core.supabase_client import supabase
 from db import (
     get_settings, compute_delay_stats, get_conference_paper_tasks, get_comment_counts,
-    get_pending_timesheets,
+    get_pending_timesheets, days_since_update, stale_threshold,
 )
 from utils.helpers import (
     PRIORITY_ORDER, strip_markdown, sort_tasks_by_deadline, comment_badge_html,
@@ -125,6 +125,18 @@ def _deadline_html(deadline, threshold: int) -> str:
     return f"<span style='font-size:11px;color:#666;'>📅 {label}</span>"
 
 
+def _stale_badge(item: dict, threshold: int) -> str:
+    """'Fermo da N giorni' — the signal that actually works on long tasks,
+    where a far-off deadline says nothing for months. Silent when the
+    freshness migration has not been run yet."""
+    d = days_since_update(item)
+    if d is None or d < threshold:
+        return ""
+    fg, bg = ("#B80D48", "#FBE7EE") if d >= threshold * 2 else ("#B26A00", "#FFF4E5")
+    return (f"<span style='background:{bg};color:{fg};border-radius:4px;padding:1px 7px;"
+            f"font-size:11px;font-weight:700;white-space:nowrap'>⏳ fermo {d}g</span>")
+
+
 def _people_pills(owner_email, sup_email, user_map: dict) -> str:
     pills = ""
     if owner_email:
@@ -222,6 +234,7 @@ def _render_row(item: dict, *, kind: str, ctx: dict, key_prefix: str,
             f"    <span style='{name_style}'>{prefix}{_esc(item.get('name'))}</span>"
             f"    {_status_badge_html(item.get('status'))}"
             f"    {_priority_badge_html(item.get('priority')) if kind == 'task' else ''}"
+            f"    {_stale_badge(item, ctx['stale_threshold'])}"
             f"    {comment_badge_html(cc)}"
             f"    <span style='margin-left:auto;white-space:nowrap'>"
             f"      {_deadline_html(item.get('deadline'), threshold)}</span>"
@@ -298,6 +311,7 @@ def _fetch(email: str):
 
     return {
         "threshold": threshold,
+        "stale_threshold": stale_threshold(),
         "projects": projects,
         "tasks": tasks,
         "subtasks": subtasks,
@@ -456,6 +470,19 @@ def _render_supervision(ctx: dict) -> None:
     m2.metric("🚫 Blocked", len(buckets["blocked"]))
     m3.metric(f"🟠 Due ≤{threshold}d", len(buckets["due_soon"]))
     m4.metric("People", len(by_person))
+
+    # ── Weekly digest: what moved and what went quiet ────────────────────────
+    from db import get_supervisor_digest
+    dig = get_supervisor_digest(email, days=7)
+    d1, d2, d3 = st.columns(3)
+    d1.metric("✅ Chiusi (7g)", len(dig["completed"]))
+    d2.metric("📈 Mossi (7g)", len(dig["moved"]))
+    d3.metric(f"⏳ Fermi ≥{stale_threshold()}g", len(dig["stuck"]))
+    if dig["stuck"]:
+        st.caption(
+            "I 'fermi' non sono necessariamente in ritardo: semplicemente nessuno "
+            "li aggiorna. Su un task lungo è il segnale più affidabile che hai."
+        )
 
     # ── What needs the supervisor, across everyone ───────────────────────────
     attention = buckets["overdue"] + buckets["blocked"]
