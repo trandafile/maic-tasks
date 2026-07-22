@@ -11,3 +11,4 @@ markdown
 python-docx
 openpyxl
 python-pptx
+Authlib
