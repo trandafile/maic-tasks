@@ -529,9 +529,10 @@ def _publication_timeline(prs, pack):
 
     _rect(s, x0, y, x1 - x0, Emu(19050), RULE)
     tx = fx(today)
-    _rect(s, tx, y - Inches(0.45), Emu(19050), Inches(1.05), INK)
-    _text(s, tx - Inches(0.4), y - Inches(0.75), Inches(0.8), Inches(0.25),
-          "today", size=9, bold=True, color=INK, align=PP_ALIGN.CENTER)
+    # the bar stops short of both label lanes; the caption rides beside it
+    _rect(s, tx, y - Inches(0.36), Emu(19050), Inches(0.72), INK)
+    _text(s, tx + Inches(0.05), y - Inches(0.35), Inches(0.6), Inches(0.2),
+          "today", size=8, bold=True, color=INK)
 
     for yr in years_back:
         n = by_year[yr]
@@ -543,7 +544,17 @@ def _publication_timeline(prs, pack):
         _text(s, cx - Inches(0.4), y - h - Inches(0.32), Inches(0.8), Inches(0.22),
               str(n), size=10, bold=True, color=GREEN, align=PP_ALIGN.CENTER)
 
-    shown = targets[:8]
+    # same submission date (several drafts for one venue) → one marker, "+N"
+    grouped = []
+    for sub, label, tentative in targets:
+        if grouped and grouped[-1][0] == sub:
+            grouped[-1][1].append(label)
+            grouped[-1][2] = grouped[-1][2] and tentative
+        else:
+            grouped.append([sub, [label], tentative])
+    shown = [(sub, names[0] if len(names) == 1
+              else f"{names[0][:18]} +{len(names) - 1}", tent)
+             for sub, names, tent in grouped[:8]]
     txs = [int(fx(sub)) for sub, _, _ in shown]
     lanes = _assign_lanes(txs, Inches(2.1))
     lane_y = {0: y - Inches(0.95), 1: y + Inches(0.42),
