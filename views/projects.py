@@ -734,38 +734,48 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
 
 # ─── Main view ──────────────────────────────────────────────────────────────────
 
-def _render_archive_completed(tasks: list, subtasks: list) -> None:
-    """Admin-only: archive every Completed item currently in view.
+def _render_archive_completed(tasks: list, subtasks: list, user_email: str) -> None:
+    """Archive the Completed items in view that are *mine* — owned or supervised.
 
-    Scoped to what the filters show, so it can be used per project rather than
-    only globally. Archiving hides, never deletes — the data stays for the
-    punctuality and trend reports, which read archived rows on purpose.
+    Deliberately never global: clearing someone else's board is a decision for
+    the Admin Panel (Archive tab → *Archive ALL completed tasks*), not a side
+    effect of whatever filter happens to be open here. Archiving hides, never
+    deletes — the data stays for the punctuality and trend reports, which read
+    archived rows on purpose.
     """
-    done_t = [t for t in tasks if (t.get("status") or "") == "Completed" and not t.get("is_archived")]
-    done_s = [s for s in subtasks if (s.get("status") or "") == "Completed" and not s.get("is_archived")]
+    def _mine(item: dict) -> bool:
+        return (item.get("owner_email") == user_email
+                or item.get("supervisor_email") == user_email)
+
+    done_t = [t for t in tasks
+              if (t.get("status") or "") == "Completed" and not t.get("is_archived") and _mine(t)]
+    done_s = [s for s in subtasks
+              if (s.get("status") or "") == "Completed" and not s.get("is_archived") and _mine(s)]
     total = len(done_t) + len(done_s)
 
     key = "_confirm_archive_completed"
     c_info, c_btn = st.columns([6, 2])
     with c_info:
         if total:
+            plural = lambda n, w: f"{n} {w}" + ("" if n == 1 else "s")
             st.caption(
-                f"🗄️ **{total} completed items in view** "
-                f"({len(done_t)} tasks, {len(done_s)} subtasks) — archiving clears the "
-                "board without losing history."
+                f"🗄️ **{total} completed item{'' if total == 1 else 's'} of yours in view** "
+                f"({plural(len(done_t), 'task')}, {plural(len(done_s), 'subtask')}) — "
+                "archiving clears your board without losing history."
             )
         else:
             # Always render the control, otherwise it is impossible to find when
             # the current scope happens to contain nothing completed.
             st.caption(
-                "🗄️ No completed items in the current view. Tick **All tasks and "
-                "projects** (or clear the filters) to reach everyone's."
+                "🗄️ Nothing completed of yours in the current view. This button only "
+                "touches items you own or supervise — the lab-wide sweep lives in "
+                "**Admin Panel → Archive**."
             )
     with c_btn:
         if not total:
-            st.button("🗄️ Archive completed", key="arch_done_none",
+            st.button("🗄️ Archive my completed", key="arch_done_none",
                       use_container_width=True, disabled=True,
-                      help="Nothing completed in the current view.")
+                      help="Nothing completed of yours in the current view.")
         elif st.session_state.get(key):
             if st.button(f"✅ Confirm ({total})", key="arch_done_ok",
                          type="primary", use_container_width=True):
@@ -786,15 +796,17 @@ def _render_archive_completed(tasks: list, subtasks: list) -> None:
                     st.session_state.pop(key, None)
                     st.error(f"Archiving failed: {e}")
         else:
-            if st.button("🗄️ Archive completed", key="arch_done",
+            if st.button("🗄️ Archive my completed", key="arch_done",
                          use_container_width=True,
-                         help="Archive every Completed task/subtask currently shown."):
+                         help="Archive the Completed tasks/subtasks shown here that "
+                              "you own or supervise."):
                 st.session_state[key] = True
                 st.rerun()
     if st.session_state.get(key):
         st.warning(
-            f"Archive **{total}** completed items now in view? They disappear from the "
-            "board but stay in the database (and in the reports). Use *Show Archived* to see them."
+            f"Archive **{total}** completed items you own or supervise? They disappear "
+            "from the board but stay in the database (and in the reports). Use "
+            "*Show Archived* to see them."
         )
 
 
@@ -989,9 +1001,9 @@ def show_projects():
     if filters_active:
         st.caption("🔎 Filters are active — some projects may be hidden.")
 
-    # ── Admin housekeeping: clear the backlog of finished work ───────────────
+    # ── Housekeeping: clear my own backlog of finished work ──────────────────
     if is_admin:
-        _render_archive_completed(filtered_tasks, filtered_subtasks)
+        _render_archive_completed(filtered_tasks, filtered_subtasks, user_email)
 
     projects = filtered_projects
     deliverables = filtered_deliverables

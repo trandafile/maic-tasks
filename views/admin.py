@@ -681,8 +681,14 @@ def _tab_archive():
         if st.button("🗑 Delete ALL archived tasks", key="bulk_del_arch_tasks", use_container_width=True):
             st.session_state["_confirm_bulk_del_arch_tasks"] = True
     with c2:
+        # The lab-wide sweep lives here on purpose: the button in Projects only
+        # archives what the signed-in admin owns or supervises.
         if st.button("📦 Archive ALL completed tasks", key="bulk_arch_completed_tasks", use_container_width=True):
             st.session_state["_confirm_bulk_arch_completed_tasks"] = True
+    st.caption(
+        "Lab-wide: archives every completed task and subtask, whoever owns it. "
+        "The **Projects** page archives only your own."
+    )
 
     # Confirm delete all archived tasks
     if st.session_state.get("_confirm_bulk_del_arch_tasks"):
@@ -710,9 +716,19 @@ def _tab_archive():
 
     # Confirm archive all completed tasks
     if st.session_state.get("_confirm_bulk_arch_completed_tasks"):
+        try:
+            n_t = len(supabase.table("tasks").select("id")
+                      .eq("status", "Completed").eq("is_archived", False)
+                      .execute().data or [])
+            n_s = len(supabase.table("subtasks").select("id")
+                      .eq("status", "Completed").eq("is_archived", False)
+                      .execute().data or [])
+            scope = f"**{n_t} tasks** and **{n_s} subtasks**"
+        except Exception:
+            scope = "**all tasks with status 'Completed'** and their completed subtasks"
         st.warning(
-            "Archive **all tasks with status 'Completed'** and related completed subtasks "
-            "(they will move to the Archived sections). "
+            f"Archive {scope} across the whole lab — everyone's, not just yours. "
+            "They move to the Archived sections below. "
             "This does not delete data; it only sets is_archived = true."
         )
         ac1, ac2 = st.columns(2)
