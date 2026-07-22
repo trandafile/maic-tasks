@@ -404,6 +404,32 @@ def _rect(slide, x, y, w, h, fill):
     return sp
 
 
+def _assign_lanes(xs, label_width, gap=None, max_lanes=4):
+    """Proximity-aware label lanes for timeline markers.
+
+    ``xs`` are marker centre x positions (EMU). Lanes are 0=above, 1=below,
+    2=above-outer, 3=below-outer. Each marker prefers the alternating
+    above/below rhythm, but a lane is only granted if the previous label on
+    that lane leaves horizontal room — near-coincident dates escalate to the
+    outer lanes instead of overlapping."""
+    if gap is None:
+        gap = Inches(0.08)
+    half = label_width / 2
+    right_edge = [None] * max_lanes
+    lanes = [0] * len(xs)
+    for k, i in enumerate(sorted(range(len(xs)), key=lambda j: xs[j])):
+        prefs = [0, 1, 2, 3] if k % 2 == 0 else [1, 0, 3, 2]
+        prefs = [p for p in prefs if p < max_lanes]
+        for lane in prefs:
+            if right_edge[lane] is None or xs[i] - half >= right_edge[lane] + gap:
+                break
+        else:  # every lane crowded: take the one that frees up first
+            lane = min(prefs, key=lambda p: right_edge[p])
+        right_edge[lane] = xs[i] + half
+        lanes[i] = lane
+    return lanes
+
+
 def _timeline_slide(prs, confs, months):
     """Conference submissions on a horizontal axis (Solo titolo + drawing)."""
     s = _add(prs, "Solo titolo")
@@ -425,20 +451,24 @@ def _timeline_slide(prs, confs, months):
             _text(s, fx - Inches(0.35), y + Inches(0.16), Inches(0.7), Inches(0.2),
                   d.strftime("%b %y"), size=8, color=MUTED, align=PP_ALIGN.CENTER)
 
-    above = True
-    for c in confs:
-        days = max(c["_days"], 0)
-        fx = x0 + (x1 - x0) * min(days / span, 1.0)
+    xs = [int(x0 + (x1 - x0) * min(max(c["_days"], 0) / span, 1.0)) for c in confs]
+    lanes = _assign_lanes(xs, Inches(2.0))
+    lane_y = {0: y - Inches(0.95), 1: y + Inches(0.5),
+              2: y - Inches(1.55), 3: y + Inches(1.1)}
+    for c, fx, lane in zip(confs, xs, lanes):
         colour = ROSE if c["_days"] <= 30 else (AMBER if c["_days"] <= 90 else BLUE)
         _rect(s, fx - Emu(28575), y - Inches(0.12), Emu(57150), Inches(0.28), colour)
-        ly = y - Inches(0.95) if above else y + Inches(0.5)
+        if lane == 2:   # leader tick up to the outer lane
+            _rect(s, fx - Emu(4763), y - Inches(1.06), Emu(9525), Inches(0.94), RULE)
+        elif lane == 3:
+            _rect(s, fx - Emu(4763), y + Inches(0.16), Emu(9525), Inches(0.94), RULE)
+        ly = lane_y[lane]
         _text(s, fx - Inches(0.95), ly, Inches(1.9), Inches(0.24),
               c["_label"], size=10, bold=True, color=colour, align=PP_ALIGN.CENTER)
         _text(s, fx - Inches(0.95), ly + Inches(0.22), Inches(1.9), Inches(0.2),
               f"{_fmt(c.get('submission_deadline'))} · {len(c['_papers'])} draft"
               f"{'' if len(c['_papers']) == 1 else 's'}",
               size=8, color=MUTED, align=PP_ALIGN.CENTER)
-        above = not above
     _tidy(s)
     return s
 
@@ -483,8 +513,19 @@ def _publication_timeline(prs, pack):
     span_start = (datetime.date(years_back[0], 1, 1) if years_back
                   else today - datetime.timedelta(days=365))
     span_end = max([t[0] for t in targets], default=today) + datetime.timedelta(days=90)
-    span = max((span_end - span_start).days, 1)
-    fx = lambda d: x0 + (x1 - x0) * min(max((d - span_start).days / span, 0.0), 1.0)
+    past_days = max((today - span_start).days, 0)
+    future_days = max((span_end - today).days, 1)
+    # years of history would crush every future target into the right edge:
+    # give the future (the actionable part) at least half of the axis
+    past_frac = min(past_days / max(past_days + future_days, 1), 0.5)
+    xm = x0 + (x1 - x0) * past_frac
+
+    def fx(d):
+        if d <= today:
+            if past_days == 0:
+                return x0
+            return x0 + (xm - x0) * min(max((d - span_start).days / past_days, 0.0), 1.0)
+        return xm + (x1 - xm) * min((d - today).days / future_days, 1.0)
 
     _rect(s, x0, y, x1 - x0, Emu(19050), RULE)
     tx = fx(today)
@@ -502,18 +543,24 @@ def _publication_timeline(prs, pack):
         _text(s, cx - Inches(0.4), y - h - Inches(0.32), Inches(0.8), Inches(0.22),
               str(n), size=10, bold=True, color=GREEN, align=PP_ALIGN.CENTER)
 
-    above = True
-    for sub, label, tentative in targets[:8]:
-        cx = fx(sub)
+    shown = targets[:8]
+    txs = [int(fx(sub)) for sub, _, _ in shown]
+    lanes = _assign_lanes(txs, Inches(2.1))
+    lane_y = {0: y - Inches(0.95), 1: y + Inches(0.42),
+              2: y - Inches(1.5), 3: y + Inches(1.0)}
+    for (sub, label, tentative), cx, lane in zip(shown, txs, lanes):
         colour = AMBER if tentative else BLUE
         _rect(s, cx - Emu(28575), y - Inches(0.12), Emu(57150), Inches(0.28), colour)
-        ly = y - Inches(0.95) if above else y + Inches(0.42)
+        if lane == 2:   # leader tick up to the outer lane
+            _rect(s, cx - Emu(4763), y - Inches(1.03), Emu(9525), Inches(0.91), RULE)
+        elif lane == 3:
+            _rect(s, cx - Emu(4763), y + Inches(0.16), Emu(9525), Inches(0.84), RULE)
+        ly = lane_y[lane]
         _text(s, cx - Inches(1.0), ly, Inches(2.0), Inches(0.22),
               label[:26], size=9, bold=True, color=colour, align=PP_ALIGN.CENTER)
         _text(s, cx - Inches(1.0), ly + Inches(0.2), Inches(2.0), Inches(0.2),
               _fmt(sub.isoformat()) + (" · tentative" if tentative else ""),
               size=8, color=MUTED, align=PP_ALIGN.CENTER)
-        above = not above
 
     if not by_year and not targets:
         _text(s, Inches(1.0), Inches(2.4), W - Inches(2.0), Inches(0.4),
