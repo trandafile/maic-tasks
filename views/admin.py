@@ -16,7 +16,7 @@ from db import (
     get_settings, save_settings, SETTINGS_MIGRATION_SQL, DELIVERABLES_MIGRATION_SQL,
     PROJECTS_MIGRATION_SQL, SCOPUS_MIGRATION_SQL, PAPER_DRAFTS_MIGRATION_SQL,
     STATUS_HISTORY_MIGRATION_SQL, CONFERENCES_MIGRATION_SQL, CONTRACTS_MIGRATION_SQL,
-    ENGAGEMENT_MIGRATION_SQL,
+    ENGAGEMENT_MIGRATION_SQL, LOGIN_EVENTS_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
 from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
@@ -958,6 +958,14 @@ def _tab_settings():
             "simply not shown."
         )
         st.code(ENGAGEMENT_MIGRATION_SQL, language="sql")
+    with st.expander("Sign-in tracking (login_events table)", expanded=False):
+        st.caption(
+            "Records one row per sign-in, so the engagement slide can tell "
+            "'never opens the app' from 'opens it but writes nothing'. Without it "
+            "everything still works: the slide just drops the attendance columns. "
+            "Data accumulates from the next sign-in onwards — it cannot be backfilled."
+        )
+        st.code(LOGIN_EVENTS_MIGRATION_SQL, language="sql")
     with st.expander("Contracts & time sheets", expanded=False):
         st.caption(
             "Creates contracts, project_activities and timesheets, adds CUP/soggetto "

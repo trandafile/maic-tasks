@@ -306,6 +306,99 @@ def _tree_rows(prs, title, subtitle, rows, footer=""):
     return slides
 
 
+_ENGAGE_COLS = [("PERSON", 3.2), ("ACTIVITY", 4.0), ("UPDATES", 1.2),
+                ("COMMENTS", 1.3), ("DAYS SEEN", 1.2), ("LAST SEEN", 1.4)]
+_ENGAGE_COLS_NO_LOGIN = [("PERSON", 3.6), ("ACTIVITY", 5.2), ("UPDATES", 1.6),
+                         ("COMMENTS", 1.9)]
+_ENGAGE_STATE = {"active": BLUE, "quiet": AMBER, "absent": MUTED, "silent": MUTED}
+
+
+def _engagement_slide(prs, engagement, period):
+    """Who is using the board — one bar per person, over the deck's period.
+
+    Deliberately NOT a leaderboard: no rank numbers, no red. The bar is the
+    whole message — active people carry a visible one, the quiet rows simply
+    fade to a lowercase note. Enough to be read across a room in two seconds,
+    not enough to pillory anyone whose task this month is a three-week
+    simulation run.
+    """
+    people = engagement.get("people") or []
+    if not people:
+        return None
+    tot = engagement.get("totals", {})
+    has_logins = engagement.get("logins_available", False)
+    cols = _ENGAGE_COLS if has_logins else _ENGAGE_COLS_NO_LOGIN
+    top = max(tot.get("top", 0), 1)
+
+    caption = (f"{period} · {tot.get('active', 0)} of {tot.get('people', 0)} people "
+               f"contributed · {tot.get('updates', 0)} updates, "
+               f"{tot.get('comments', 0)} comments")
+    footer = ("Activity = status changes + comments — the acts that leave a trace "
+              "others can read. Signing in is not scored."
+              if has_logins else
+              "Activity = status changes + comments. Sign-in tracking is not "
+              "enabled yet, so attendance is not shown.")
+
+    slides = []
+    pages = [people[i:i + _ROWS_PER_SLIDE]
+             for i in range(0, len(people), _ROWS_PER_SLIDE)] or [[]]
+    for pi, page in enumerate(pages):
+        s = _add(prs, "Tabella risultati")
+        _set_ph(s, 0, "Who is using the board" if pi == 0
+                else "Who is using the board (cont.)")
+        _set_ph(s, 13, f"{caption}   ·   {footer}", size=10, color=MUTED)
+
+        gf = _ph(s, 12).insert_table(rows=len(page) + 1, cols=len(cols))
+        table = gf.table
+        table.first_row = True
+        for i, (label, w) in enumerate(cols):
+            table.columns[i].width = Inches(w)
+            _cell(table.cell(0, i), label, size=9, bold=True,
+                  align=PP_ALIGN.CENTER if i >= 2 else PP_ALIGN.LEFT)
+        table.rows[0].height = Inches(0.28)
+
+        for ri, p in enumerate(page, start=1):
+            table.rows[ri].height = Inches(0.28)
+            state = p.get("state", "absent")
+            colour = _ENGAGE_STATE.get(state, MUTED)
+            n = p.get("contributions", 0)
+
+            _cell(table.cell(ri, 0), p.get("name", "—"), size=10,
+                  bold=state == "active", color=INK if state == "active" else MUTED)
+
+            if n:
+                # 12 blocks at the top of the lab; at least one when non-zero,
+                # so a single update still shows as a mark rather than nothing.
+                bar = "■" * max(1, round(12 * n / top))
+                _cell(table.cell(ri, 1), f"{bar}  {n}", size=10, bold=True, color=colour)
+            else:
+                # Never claim someone "signs in" when sign-ins are not tracked:
+                # without login_events the only defensible statement is silence.
+                if not has_logins:
+                    label = "no updates"
+                elif state == "quiet":
+                    label = "signs in, no updates"
+                else:
+                    label = "not seen"
+                _cell(table.cell(ri, 1), label, size=9, color=colour)
+
+            _cell(table.cell(ri, 2), p.get("updates", 0) or "—", size=9,
+                  color=INK if p.get("updates") else MUTED, align=PP_ALIGN.CENTER)
+            _cell(table.cell(ri, 3), p.get("comments", 0) or "—", size=9,
+                  color=INK if p.get("comments") else MUTED, align=PP_ALIGN.CENTER)
+            if has_logins:
+                days_in = p.get("days_in") or 0
+                _cell(table.cell(ri, 4), days_in or "—", size=9,
+                      color=INK if days_in else MUTED, align=PP_ALIGN.CENTER)
+                last = p.get("last_seen")
+                _cell(table.cell(ri, 5),
+                      last.strftime("%d/%m/%Y") if last else "—",
+                      size=9, color=MUTED, align=PP_ALIGN.CENTER)
+        _tidy(s)
+        slides.append(s)
+    return slides
+
+
 def _stats_slide(prs, title, subtitle, tiles, footer=""):
     """The at-a-glance numbers as a small native table: value row + label row.
     Replaces the old hand-drawn coloured tiles."""
@@ -638,6 +731,11 @@ def build_meeting_deck(pack: dict) -> BytesIO:
                   ("blocked", tot.get("blocked", 0), ROSE),
                   ("idle", tot.get("stale", 0), AMBER)],
                  footer="Idle = no update within the staleness threshold.")
+
+    engagement = pack.get("engagement")
+    if engagement:
+        _engagement_slide(prs, engagement, pack.get("engagement_period") or period)
+
     for person in people:
         _person_slide(prs, person, period)
 

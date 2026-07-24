@@ -275,6 +275,25 @@ CREATE INDEX IF NOT EXISTS idx_subtasks_updated_at ON subtasks (updated_at);
 """
 
 
+LOGIN_EVENTS_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor → records one row per sign-in, so the
+-- engagement slide can separate "never opens it" from "opens it but writes
+-- nothing". Those are different problems: the first is access/onboarding, the
+-- second is ownership. Without this table the app works unchanged and the
+-- slide simply drops the attendance column.
+CREATE TABLE IF NOT EXISTS login_events (
+    id SERIAL PRIMARY KEY,
+    email TEXT NOT NULL,
+    at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_login_events_email_at ON login_events (email, at);
+
+-- Same pattern as the rest of the schema: the app authenticates with the
+-- publishable key and RLS is disabled on application tables.
+ALTER TABLE login_events DISABLE ROW LEVEL SECURITY;
+"""
+
+
 CONTRACTS_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → contract management + monthly timesheets.
 -- Until this runs, the Contracts and Time Sheets pages show this snippet and the
@@ -511,6 +530,22 @@ def log_status_change(
         }).execute()
     except Exception as exc:
         print(f"[db.log_status_change] {exc}")
+
+
+def log_login(email: str | None) -> None:
+    """Best-effort sign-in record. Never raises: login must not depend on it
+    (the table may not exist yet — run LOGIN_EVENTS_MIGRATION_SQL).
+
+    One row per session established. Browser refreshes create new sessions, so
+    the raw count overstates attendance; every report aggregates to DISTINCT
+    DAYS instead, which is what "does this person open the tool" really means.
+    """
+    if not email:
+        return
+    try:
+        supabase.table("login_events").insert({"email": email}).execute()
+    except Exception as exc:
+        print(f"[db.log_login] {exc}")
 
 
 # ── Delay / punctuality metrics ───────────────────────────────────────────────
@@ -1544,6 +1579,146 @@ def get_engagement_by_person(weeks: int = 4) -> list[dict]:
     out = list(per.values())
     out.sort(key=lambda x: (-x["updates"], x["name"]))
     return out
+
+
+def get_user_engagement(since: _dt_date, until: _dt_date | None = None) -> dict:
+    """Who is actually using the platform, over an arbitrary window.
+
+    ONE headline number per person — ``contributions`` = status changes +
+    comments — because those are the acts that leave a trace other people can
+    read. Sign-ins are deliberately NOT part of the score: a number that goes
+    up by opening a page rewards attendance over work, and anything shown in a
+    meeting gets optimised for. They earn their place only as a diagnostic,
+    telling two silences apart:
+
+      * ``absent``  — no sign-in at all → access/onboarding problem
+      * ``quiet``   — signs in, writes nothing → reads the board, does not own it
+      * ``active``  — contributed
+
+    Sign-ins aggregate to DISTINCT DAYS (``days_in``): a browser refresh opens a
+    new session, so raw counts would flatter whoever reloads most.
+
+    Degrades cleanly: without login_events the attendance fields are None and
+    ``logins_available`` is False; without status_history the updates are 0.
+    """
+    until = until or _dt_date.today()
+    since_iso = _dt_mod.datetime.combine(since, _dt_mod.time.min).isoformat()
+    until_iso = _dt_mod.datetime.combine(until, _dt_mod.time.max).isoformat()
+
+    try:
+        users = supabase.table("users").select("email, name").eq(
+            "is_approved", True).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_user_engagement] users: {exc}")
+        return {"people": [], "logins_available": False, "history_available": False,
+                "since": since, "until": until}
+
+    per: dict[str, dict] = {
+        u["email"]: {"email": u["email"], "name": u.get("name") or u["email"],
+                     "updates": 0, "completed": 0, "comments": 0,
+                     "contributions": 0, "days_in": 0, "sessions": 0,
+                     "last_seen": None, "last_contribution": None, "state": "absent"}
+        for u in users if u.get("email")
+    }
+
+    history_available = True
+    try:
+        rows = supabase.table("status_history").select(
+            "changed_by_email, new_status, changed_at"
+        ).gte("changed_at", since_iso).lte("changed_at", until_iso).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_user_engagement] status_history: {exc}")
+        rows, history_available = [], False
+    for r in rows:
+        p = per.get(r.get("changed_by_email"))
+        if not p:
+            continue
+        p["updates"] += 1
+        if r.get("new_status") == "Completed":
+            p["completed"] += 1
+        ts = parse_ts(r.get("changed_at"))
+        if ts and (p["last_contribution"] is None or ts > p["last_contribution"]):
+            p["last_contribution"] = ts
+
+    try:
+        crows = supabase.table("comments").select(
+            "author_email, created_at"
+        ).eq("is_system_event", False).gte("created_at", since_iso).lte(
+            "created_at", until_iso).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_user_engagement] comments: {exc}")
+        crows = []
+    for r in crows:
+        p = per.get(r.get("author_email"))
+        if not p:
+            continue
+        p["comments"] += 1
+        ts = parse_ts(r.get("created_at"))
+        if ts and (p["last_contribution"] is None or ts > p["last_contribution"]):
+            p["last_contribution"] = ts
+
+    logins_available = True
+    try:
+        lrows = supabase.table("login_events").select("email, at").gte(
+            "at", since_iso).lte("at", until_iso).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_user_engagement] login_events: {exc}")
+        lrows, logins_available = [], False
+    seen_days: dict[str, set] = {}
+    for r in lrows:
+        p = per.get(r.get("email"))
+        if not p:
+            continue
+        p["sessions"] += 1
+        ts = parse_ts(r.get("at"))
+        if ts:
+            seen_days.setdefault(r["email"], set()).add(ts.date())
+            if p["last_seen"] is None or ts > p["last_seen"]:
+                p["last_seen"] = ts
+    for email, days in seen_days.items():
+        per[email]["days_in"] = len(days)
+
+    people = list(per.values())
+    for p in people:
+        p["contributions"] = p["updates"] + p["comments"]
+        if p["contributions"]:
+            p["state"] = "active"
+        elif p["days_in"]:
+            p["state"] = "quiet"
+        else:
+            p["state"] = "absent"
+        if not logins_available:
+            p["days_in"] = p["sessions"] = None
+            p["last_seen"] = None
+            # Neither "absent" nor "quiet" is knowable without attendance data —
+            # both would put words in the data's mouth. Say only what is true:
+            # this person contributed nothing.
+            if p["state"] != "active":
+                p["state"] = "silent"
+
+    # Most active first; among the silent, alphabetical — no implied ranking.
+    people.sort(key=lambda p: (-p["contributions"], -(p["days_in"] or 0), p["name"].lower()))
+
+    contributions = [p["contributions"] for p in people]
+    active = [p for p in people if p["state"] == "active"]
+    window_days = max((until - since).days + 1, 1)
+    return {
+        "people": people,
+        "since": since, "until": until, "window_days": window_days,
+        "totals": {
+            "people": len(people),
+            "active": len(active),
+            "quiet": len([p for p in people if p["state"] == "quiet"]),
+            "absent": len([p for p in people if p["state"] == "absent"]),
+            "silent": len([p for p in people if p["state"] == "silent"]),
+            "contributions": sum(contributions),
+            "updates": sum(p["updates"] for p in people),
+            "comments": sum(p["comments"] for p in people),
+            "top": max(contributions) if contributions else 0,
+        },
+        "logins_available": logins_available,
+        "history_available": history_available,
+    }
 
 
 def get_supervisor_digest(user_email: str, days: int = 7) -> dict:

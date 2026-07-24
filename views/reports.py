@@ -1762,7 +1762,8 @@ def _render_trend_report():
 def _render_slides_tab():
     """Two decks on the MAIC template: the weekly delta and the SAL review."""
     from db import (get_meeting_delta, get_project_review,
-                    get_upcoming_deliverables, get_project_trees, get_conference_pack)
+                    get_upcoming_deliverables, get_project_trees, get_conference_pack,
+                    get_user_engagement)
     from utils.pptx_export import build_meeting_deck, build_review_deck
 
     st.caption(
@@ -1799,10 +1800,32 @@ def _render_slides_tab():
             conf_h = st.slider("Conference horizon (months)", 3, 24, 12, key="sl_confh",
                                help="Section 4: conferences with a submission deadline ahead.")
 
+        e1, e2 = st.columns([1, 2])
+        with e1:
+            want_engagement = st.checkbox(
+                "Slide «chi usa la piattaforma»", value=True, key="sl_engage",
+                help="Sezione 3: una riga per persona, con accessi e contributi "
+                     "(cambi di stato + commenti) nel periodo scelto qui accanto.",
+            )
+        with e2:
+            eng_days = st.slider(
+                "Finestra attività (giorni)", 7, 90,
+                max(7, min((until - since).days or 7, 90)), key="sl_engdays",
+                help="Di default coincide con il periodo della riunione. Una "
+                     "finestra più lunga è meno rumorosa: chi ha una sola task "
+                     "lunga non sembra inattivo.",
+                disabled=not want_engagement,
+            )
+
         delta = get_meeting_delta(since, until)
         upcoming = get_upcoming_deliverables(months=horizon)
         trees = get_project_trees()
         confs = get_conference_pack(months=conf_h)
+
+        engagement = eng_from = None
+        if want_engagement:
+            eng_from = until - datetime.timedelta(days=eng_days - 1)
+            engagement = get_user_engagement(eng_from, until)
 
         t = delta["totals"]
         m = st.columns(4)
@@ -1816,12 +1839,35 @@ def _render_slides_tab():
             f"({t['completed']} completed, {t['blocked']} blocked, {t['stale']} idle) — "
             f"4 · {len(confs)} conferences and their paper drafts."
         )
+        if engagement:
+            et = engagement["totals"]
+            bits = [f"**{et['active']}/{et['people']}** hanno contribuito",
+                    f"{et['updates']} aggiornamenti", f"{et['comments']} commenti"]
+            if engagement["logins_available"]:
+                if et["absent"]:
+                    bits.append(f"**{et['absent']} non hanno mai aperto l'app**")
+                if et["quiet"]:
+                    bits.append(f"{et['quiet']} entrano senza scrivere nulla")
+            st.caption(f"👥 Attività ultimi {eng_days} giorni — " + " · ".join(bits) + ".")
+            if not engagement["logins_available"]:
+                st.info(
+                    "Gli **accessi** non sono ancora tracciati: la slide mostra solo i "
+                    "contributi. Per distinguere «non entra mai» da «entra e non scrive», "
+                    "esegui la migration *Sign-in tracking* in **Admin Panel → Settings → "
+                    "SQL Migrations**. I dati si accumulano dai login successivi."
+                )
+            elif not engagement["history_available"]:
+                st.warning("Manca la migration *Status history*: i cambi di stato non vengono contati.")
+
         if not (upcoming or trees or delta["by_person"] or confs):
             st.info("Nothing to present for this period.")
             return
         pack = {"since": since, "until": until, "delta": delta,
                 "upcoming": upcoming, "trees": trees, "conferences": confs,
-                "horizon_months": horizon, "conf_horizon_months": conf_h}
+                "horizon_months": horizon, "conf_horizon_months": conf_h,
+                "engagement": engagement,
+                "engagement_period": (f"{eng_from.strftime('%d/%m/%Y')} — "
+                                      f"{until.strftime('%d/%m/%Y')}") if engagement else None}
         try:
             buf = build_meeting_deck(pack)
             st.download_button(
@@ -1879,50 +1925,79 @@ def _render_slides_tab():
 
 def _render_engagement_tab():
     """Updates per person: the only honest measure of whether the tool is used."""
-    from db import get_engagement_by_person, get_activity_stats
+    from db import get_user_engagement, get_activity_stats
     import pandas as pd
 
     st.caption(
-        "Quante volte ciascuno aggiorna lo stato dei propri task. Non è una classifica "
-        "di produttività — è la misura di **se lo strumento viene usato**, ed è l'unico "
-        "modo per sapere se le azioni sul coinvolgimento stanno funzionando."
+        "Chi usa davvero la piattaforma. L'indicatore è uno solo — **contributi** = "
+        "cambi di stato + commenti — perché sono gli atti che lasciano una traccia "
+        "leggibile dagli altri. Gli accessi non entrano nel punteggio: servono solo a "
+        "distinguere *chi non entra mai* da *chi entra e non scrive*. "
+        "Non è una classifica di produttività."
     )
     weeks = st.slider("Periodo (settimane)", 1, 12, 4, key="eng_weeks")
 
-    rows = get_engagement_by_person(weeks=weeks)
-    if not rows:
-        st.info("Nessun dato: serve la migration 'Status history & trend', e i dati "
-                "si accumulano dai cambi di stato effettuati da qui in avanti.")
-        return
-
-    active = [r for r in rows if r["updates"] > 0]
-    silent = [r for r in rows if r["updates"] == 0]
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Persone attive", f"{len(active)}/{len(rows)}")
-    m2.metric("Aggiornamenti totali", sum(r["updates"] for r in rows))
-    m3.metric("Task completati", sum(r["completed"] for r in rows))
-
     today = datetime.date.today()
+    eng = get_user_engagement(today - datetime.timedelta(weeks=weeks), today)
+    rows = eng["people"]
+    if not rows:
+        st.info("Nessun utente approvato, oppure il database non è raggiungibile.")
+        return
+    if not eng["history_available"]:
+        st.info("Serve la migration *Status history & trend*: i cambi di stato non "
+                "vengono registrati, restano solo i commenti.")
+
+    t = eng["totals"]
+    m = st.columns(4)
+    m[0].metric("Persone che contribuiscono", f"{t['active']}/{t['people']}")
+    m[1].metric("Contributi totali", t["contributions"])
+    m[2].metric("Cambi di stato", t["updates"])
+    m[3].metric("Commenti", t["comments"])
+
+    _STATE_IT = {"active": "attivo", "quiet": "entra, non scrive",
+                 "absent": "mai entrato", "silent": "nessun contributo"}
     table = []
     for r in rows:
-        last = r["last"].date() if r["last"] else None
-        table.append({
+        last = r["last_contribution"].date() if r["last_contribution"] else None
+        row = {
             "Persona": r["name"],
-            "Aggiornamenti": r["updates"],
-            "Completati": r["completed"],
-            "Ultimo aggiornamento": last.strftime("%d/%m/%Y") if last else "—",
-            "Giorni fa": (today - last).days if last else None,
-        })
+            "Contributi": r["contributions"],
+            "Cambi di stato": r["updates"],
+            "Commenti": r["comments"],
+            "Stato": _STATE_IT.get(r["state"], r["state"]),
+            "Ultimo contributo": last.strftime("%d/%m/%Y") if last else "—",
+        }
+        if eng["logins_available"]:
+            row["Giorni di accesso"] = r["days_in"]
+            row["Ultimo accesso"] = (r["last_seen"].strftime("%d/%m/%Y")
+                                     if r["last_seen"] else "—")
+        table.append(row)
     st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
 
-    if silent:
-        st.warning(
-            f"**{len(silent)} persone non hanno aggiornato nulla** in {weeks} settimane: "
-            + ", ".join(r["name"] for r in silent[:8])
-            + ("…" if len(silent) > 8 else "")
-            + ".  \nPrima di sollecitare: hanno task assegnati? Le scadenze sono realistiche? "
-            "Un silenzio spesso significa che lo strumento non serve a chi lo dovrebbe usare."
+    if not eng["logins_available"]:
+        st.info(
+            "Gli **accessi** non sono tracciati: esegui la migration *Sign-in tracking* "
+            "in **Admin Panel → Settings → SQL Migrations** per distinguere chi non apre "
+            "mai l'app da chi la apre senza aggiornare nulla. I dati partono dai login "
+            "successivi: non sono ricostruibili a posteriori."
         )
+    else:
+        quiet = [r for r in rows if r["state"] == "quiet"]
+        absent = [r for r in rows if r["state"] == "absent"]
+        if absent:
+            st.warning(
+                f"**{len(absent)} persone non hanno mai aperto l'app** in {weeks} settimane: "
+                + ", ".join(r["name"] for r in absent[:8]) + ("…" if len(absent) > 8 else "")
+                + ".  \nQui il problema di solito non è la motivazione ma l'accesso: "
+                "hanno ricevuto il link? Il login funziona per loro?"
+            )
+        if quiet:
+            st.info(
+                f"**{len(quiet)} persone entrano ma non scrivono nulla**: "
+                + ", ".join(r["name"] for r in quiet[:8]) + ("…" if len(quiet) > 8 else "")
+                + ".  \nLeggono la board senza sentirla propria. Prima di sollecitare: "
+                "hanno task assegnati a loro? Le scadenze sono realistiche?"
+            )
 
     stats = get_activity_stats(weeks=max(weeks, 8))
     if stats.get("available") and stats["by_week"]:

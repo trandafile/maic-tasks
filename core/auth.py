@@ -239,6 +239,16 @@ def process_login(email: str, name: str):
                 st.session_state.user_name = name or user.get("name")
                 st.session_state.user_role = user.get("role")
                 st.session_state.waiting_approval = False
+                # Attendance signal for the engagement report. Guarded because
+                # process_login can run more than once before `logged_in`
+                # short-circuits check_login().
+                if not st.session_state.get("_login_recorded"):
+                    st.session_state["_login_recorded"] = True
+                    try:
+                        from db import log_login
+                        log_login(email)
+                    except Exception:
+                        pass    # never let telemetry block a sign-in
                 st.rerun()
             else:
                 st.session_state.waiting_approval = True
@@ -276,7 +286,7 @@ def show_waiting_approval():
 
 def logout():
     """Effettua il logout pulendo lo stato (e la sessione nativa, se attiva)."""
-    keys_to_clear = ['logged_in', 'user_email', 'user_name', 'user_role', 'waiting_approval', 'user_given_name', 'unauthorized']
+    keys_to_clear = ['logged_in', 'user_email', 'user_name', 'user_role', 'waiting_approval', 'user_given_name', 'unauthorized', '_login_recorded']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
