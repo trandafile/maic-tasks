@@ -928,51 +928,89 @@ def _tab_settings():
             st.error(msg)
 
     st.divider()
-    st.subheader("SQL Migrations")
-    st.caption("Run these SQL snippets in Supabase to keep the schema aligned with the app.")
-    with st.expander("Settings & notification schema", expanded=False):
-        st.code(SETTINGS_MIGRATION_SQL, language="sql")
-    with st.expander("Scopus & PhD tracking (users table)", expanded=False):
-        st.caption("Adds scopus_id, is_phd_student, phd_start_date, phd_end_date to users.")
-        st.code(SCOPUS_MIGRATION_SQL, language="sql")
-    with st.expander("Paper drafts (deliverable_drafts table)", expanded=False):
-        st.caption("Creates deliverable_drafts to store the markdown working copy used by My Paper Drafts.")
-        st.code(PAPER_DRAFTS_MIGRATION_SQL, language="sql")
-    with st.expander("Status history & trend (status_history table)", expanded=False):
-        st.caption(
-            "Creates status_history (status-change log used by Reports → Trend) and adds "
-            "created_at to tasks/subtasks for progress charts. Without it the app still works: "
-            "logging is skipped silently and the Trend tab falls back to completion dates only."
+    _render_schema_check()
+
+# ─── Schema check (replaces the old wall of SQL snippets) ────────────────────
+
+# (label, migration SQL, [(table, column) probes]). A probe passes when the
+# column can be selected: a missing TABLE and a missing COLUMN both raise.
+_SCHEMA_CHECKS = [
+    ("Settings & notifications", SETTINGS_MIGRATION_SQL,
+     [("settings", "notifications_enabled"), ("users", "last_reminder_sent")]),
+    ("Deliverable owner / supervisor", DELIVERABLES_MIGRATION_SQL,
+     [("deliverables", "owner_email"), ("deliverables", "supervisor_email")]),
+    ("Project description", PROJECTS_MIGRATION_SQL,
+     [("projects", "description")]),
+    ("Scopus & PhD tracking", SCOPUS_MIGRATION_SQL,
+     [("users", "scopus_id"), ("users", "is_phd_student")]),
+    ("Paper drafts", PAPER_DRAFTS_MIGRATION_SQL,
+     [("deliverable_drafts", "content")]),
+    ("Status history & trend", STATUS_HISTORY_MIGRATION_SQL,
+     [("status_history", "new_status"), ("tasks", "created_at")]),
+    ("Conference calendar", CONFERENCES_MIGRATION_SQL,
+     [("conferences", "submission_deadline")]),
+    ("Freshness tracking", ENGAGEMENT_MIGRATION_SQL,
+     [("tasks", "updated_at"), ("subtasks", "updated_at")]),
+    ("Sign-in tracking", LOGIN_EVENTS_MIGRATION_SQL,
+     [("login_events", "at")]),
+    ("Contracts & time sheets", CONTRACTS_MIGRATION_SQL,
+     [("contracts", "annual_hours"), ("project_activities", "default_share_pct"),
+      ("timesheets", "grid"), ("projects", "cup"), ("users", "fiscal_code")]),
+]
+
+
+def _probe(table: str, column: str) -> str | None:
+    """None when the column is readable, else a short reason."""
+    try:
+        supabase.table(table).select(column).limit(1).execute()
+        return None
+    except Exception as exc:
+        msg = str(exc)
+        if "does not exist" in msg or "PGRST" in msg or "42703" in msg or "42P01" in msg:
+            return f"{table}.{column} missing"
+        return f"{table}.{column}: {msg[:120]}"
+
+
+def _render_schema_check():
+    """Verify the schema instead of listing SQL nobody reads twice.
+
+    The snippets used to sit here permanently, which made an already-migrated
+    database look like a to-do list. Now the section answers the only question
+    worth asking — is anything actually missing — and produces the SQL only
+    for what is.
+    """
+    st.subheader("Database schema")
+    st.caption(
+        "Checks that every column and table the app expects is really there. "
+        "The SQL is generated only for what is missing."
+    )
+    if st.button("🔍 Check the schema", key="schema_check_run"):
+        with st.spinner("Querying the database…"):
+            st.session_state["_schema_report"] = [
+                (label, sql, [r for r in (_probe(t, c) for t, c in probes) if r])
+                for label, sql, probes in _SCHEMA_CHECKS
+            ]
+
+    report = st.session_state.get("_schema_report")
+    if report is None:
+        return
+
+    missing = [(label, sql, probs) for label, sql, probs in report if probs]
+    if not missing:
+        st.success(
+            f"✅ All {len(report)} migrations are applied — every table and column "
+            "the app uses is present."
         )
-        st.code(STATUS_HISTORY_MIGRATION_SQL, language="sql")
-    with st.expander("Conference calendar (conferences table)", expanded=False):
-        st.caption(
-            "Creates the conferences table used by the Conference Calendar view "
-            "(manual entry + JSON import). Until it is run, that view shows this snippet."
-        )
-        st.code(CONFERENCES_MIGRATION_SQL, language="sql")
-    with st.expander("Freshness tracking (updated_at)", expanded=False):
-        st.caption(
-            "Adds updated_at to tasks/subtasks, powering the 'fermo da N giorni' "
-            "badge and My Week. Without it the app still works: the badge is "
-            "simply not shown."
-        )
-        st.code(ENGAGEMENT_MIGRATION_SQL, language="sql")
-    with st.expander("Sign-in tracking (login_events table)", expanded=False):
-        st.caption(
-            "Records one row per sign-in, so the engagement slide can tell "
-            "'never opens the app' from 'opens it but writes nothing'. Without it "
-            "everything still works: the slide just drops the attendance columns. "
-            "Data accumulates from the next sign-in onwards — it cannot be backfilled."
-        )
-        st.code(LOGIN_EVENTS_MIGRATION_SQL, language="sql")
-    with st.expander("Contracts & time sheets", expanded=False):
-        st.caption(
-            "Creates contracts, project_activities and timesheets, adds CUP/soggetto "
-            "attuatore/tipo to projects and fiscal_code to users. Required by the "
-            "Contracts and Time Sheets pages."
-        )
-        st.code(CONTRACTS_MIGRATION_SQL, language="sql")
+        return
+
+    st.warning(f"⚠️ {len(missing)} of {len(report)} migrations are not applied.")
+    for label, sql, probs in missing:
+        with st.expander(f"❌ {label} — {', '.join(probs)}", expanded=True):
+            st.caption("Run this in the Supabase SQL Editor, then check again.")
+            st.code(sql, language="sql")
+    with st.expander("Migrations already applied", expanded=False):
+        st.write("\n".join(f"- ✅ {label}" for label, _, probs in report if not probs))
+
 
 def _tab_deliverable_tags():
     cfg = get_settings()
