@@ -6,9 +6,16 @@ from core.supabase_client import supabase
 from db import (
     get_settings, log_status_change, now_iso, update_row,
     get_comments, add_comment, update_comment, delete_comment,
+    can_sign_off, signoff_approvers, request_deliverable_completion,
+    approve_deliverable_completion, reject_deliverable_completion,
+    reopen_deliverable, MigrationMissing, SIGNOFF_PENDING,
 )
 from utils.md_editor import markdown_editor
-from utils.notifications import send_task_assigned, send_task_comment
+from utils.notifications import (
+    send_task_assigned, send_task_comment,
+    send_deliverable_signoff_request, send_deliverable_signoff_approved,
+    send_deliverable_signoff_rejected,
+)
 from utils.helpers import parse_deliverable_tag_styles
 
 
@@ -810,6 +817,197 @@ def subtask_details_modal(subtask, can_edit):
 
 # ── Deliverable Details Modal ─────────────────────────────────────────────────
 
+# ── Deliverable completion sign-off ──────────────────────────────────────────
+#
+# The gate lives here, in the one dialog where a deliverable can be edited, so
+# there is a single place where "Completed" can be written. Tasks and subtasks
+# are untouched: they stay self-served.
+
+_SIGNOFF_MIGRATION_HINT = (
+    "The sign-off columns are missing from the database. Run the "
+    "**Deliverable sign-off** migration (Admin Panel → Settings → Database "
+    "schema) and try again."
+)
+
+
+def _display_name(email: str | None, users_map: dict) -> str:
+    if not email:
+        return "—"
+    return users_map.get(email) or email.split("@")[0]
+
+
+def _fmt_ts(value) -> str:
+    if not value:
+        return "—"
+    try:
+        return datetime.datetime.fromisoformat(
+            str(value).replace("Z", "+00:00")).strftime("%d/%m/%Y")
+    except Exception:
+        return str(value)[:10]
+
+
+def _notify(fn, *args, **kwargs) -> bool:
+    """E-mail must never roll back a decision that is already in the database."""
+    try:
+        return bool(fn(*args, **kwargs))
+    except Exception as exc:
+        print(f"[modals.signoff] notification failed: {exc}")
+        return False
+
+
+def _signoff_panel(deliverable: dict, can_edit: bool, users_map: dict) -> None:
+    """Request / approve / send back. Rendered above the edit form."""
+    d_id = deliverable.get("id")
+    state = deliverable.get("completion_state")
+    status = deliverable.get("status") or "Not started"
+    user_email = st.session_state.get("user_email")
+    is_admin = st.session_state.get("user_role") == "admin"
+    may_sign = can_sign_off(deliverable, user_email, is_admin)
+    approvers = signoff_approvers(deliverable)
+    sup = deliverable.get("supervisor_email")
+    me = st.session_state.get("user_name") or _display_name(user_email, users_map)
+
+    # ── waiting for a countersignature ───────────────────────────────────────
+    if state == SIGNOFF_PENDING:
+        req_by = _display_name(deliverable.get("completion_requested_by"), users_map)
+        st.warning(
+            f"⏳ **Awaiting sign-off** — {req_by} declared this finished on "
+            f"{_fmt_ts(deliverable.get('completion_requested_at'))}. "
+            "It stays open until the supervisor confirms."
+        )
+        if deliverable.get("completion_note"):
+            st.caption("Note from the requester")
+            st.info(deliverable["completion_note"])
+
+        if may_sign:
+            note = st.text_area(
+                "Sign-off note (optional)", key=f"signoff_note_{d_id}",
+                placeholder="What you checked, or what still needs work.",
+                height=80,
+            )
+            c_ok, c_back = st.columns(2)
+            with c_ok:
+                if st.button("✅ Approve and close", key=f"signoff_ok_{d_id}",
+                             type="primary", use_container_width=True):
+                    try:
+                        ok, err = approve_deliverable_completion(d_id, user_email, note)
+                    except MigrationMissing:
+                        st.error(_SIGNOFF_MIGRATION_HINT)
+                        return
+                    if not ok:
+                        st.error(f"Could not approve: {err}")
+                        return
+                    for who in {deliverable.get("completion_requested_by"),
+                                deliverable.get("owner_email")} - {None, user_email}:
+                        _notify(send_deliverable_signoff_approved,
+                                deliverable, who, me, note)
+                    st.success("Approved — the deliverable is now closed.")
+                    st.rerun()
+            with c_back:
+                if st.button("↩ Send back", key=f"signoff_no_{d_id}",
+                             use_container_width=True):
+                    if not (note or "").strip():
+                        st.error("Say what needs work: the reason is sent to the owner.")
+                        return
+                    try:
+                        ok, err = reject_deliverable_completion(d_id, user_email, note)
+                    except MigrationMissing:
+                        st.error(_SIGNOFF_MIGRATION_HINT)
+                        return
+                    if not ok:
+                        st.error(f"Could not send it back: {err}")
+                        return
+                    for who in {deliverable.get("completion_requested_by"),
+                                deliverable.get("owner_email")} - {None, user_email}:
+                        _notify(send_deliverable_signoff_rejected,
+                                deliverable, who, me, note)
+                    st.success("Sent back to the owner with your reason.")
+                    st.rerun()
+        else:
+            waiting = ", ".join(_display_name(a, users_map) for a in approvers) or "an admin"
+            st.caption(f"Waiting on: {waiting}.")
+            if can_edit and st.button("Withdraw the request", key=f"signoff_wd_{d_id}"):
+                try:
+                    ok, err = reject_deliverable_completion(d_id, user_email, "")
+                except MigrationMissing:
+                    st.error(_SIGNOFF_MIGRATION_HINT)
+                    return
+                st.success("Request withdrawn.") if ok else st.error(err)
+                st.rerun()
+        st.divider()
+        return
+
+    # ── already signed off ───────────────────────────────────────────────────
+    if status == "Completed":
+        by = deliverable.get("completion_decided_by")
+        if by:
+            st.success(
+                f"✅ Signed off by {_display_name(by, users_map)} on "
+                f"{_fmt_ts(deliverable.get('completion_decided_at'))}."
+            )
+            if deliverable.get("completion_decision_note"):
+                st.caption(deliverable["completion_decision_note"])
+        else:
+            st.success("✅ Completed.")
+        if may_sign and st.button("↩ Reopen", key=f"signoff_reopen_{d_id}",
+                                  help="Back to 'Working on'."):
+            try:
+                ok, err = reopen_deliverable(d_id, user_email)
+            except MigrationMissing:
+                st.error(_SIGNOFF_MIGRATION_HINT)
+                return
+            st.success("Reopened.") if ok else st.error(err)
+            st.rerun()
+        st.divider()
+        return
+
+    # ── open, and the current user cannot close it alone ──────────────────────
+    if can_edit and not may_sign:
+        if deliverable.get("completion_decision_note"):
+            st.info(
+                f"↩ Sent back by "
+                f"{_display_name(deliverable.get('completion_decided_by'), users_map)}: "
+                f"{deliverable['completion_decision_note']}"
+            )
+        to = ", ".join(_display_name(a, users_map) for a in approvers)
+        with st.expander("✅ Declare this deliverable finished", expanded=False):
+            st.caption(
+                f"You cannot close a deliverable on your own. This asks "
+                f"**{to or 'an admin'}** to confirm"
+                + ("" if sup else " (no supervisor is set, so it goes to the admins)")
+                + "."
+            )
+            note = st.text_area(
+                "What is finished? (optional)", key=f"signoff_req_note_{d_id}",
+                placeholder="Where the output is, what was verified…", height=80,
+            )
+            if st.button("📤 Request sign-off", key=f"signoff_req_{d_id}",
+                         type="primary"):
+                if not approvers:
+                    st.error("No supervisor and no admin to send this to. "
+                             "Set a supervisor first.")
+                    return
+                try:
+                    ok, err = request_deliverable_completion(d_id, user_email, note)
+                except MigrationMissing:
+                    st.error(_SIGNOFF_MIGRATION_HINT)
+                    return
+                if not ok:
+                    st.error(f"Could not send the request: {err}")
+                    return
+                sent = sum(_notify(send_deliverable_signoff_request,
+                                   deliverable, a, me, note) for a in approvers)
+                if sent:
+                    st.success(f"Request sent to {to}.")
+                else:
+                    st.warning(
+                        f"Request recorded for {to}, but the e-mail could not be "
+                        "sent (check the SMTP settings). They will still see it in the app."
+                    )
+                st.rerun()
+        st.divider()
+
+
 @st.dialog("Deliverable Details", width="large")
 def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcrumb: str | None = None):
     """Show deliverable details with an optional edit form for admins."""
@@ -827,7 +1025,15 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
     users_rows = supabase.table("users").select("email, name").eq("is_approved", True).order("name").execute().data
     users_map = {u["email"]: u.get("name", u["email"]) for u in (users_rows or [])}
 
-    STATUS_OPTS = ["Not started", "Working on", "Blocked", "Completed", "Cancelled"]
+    _user_email = st.session_state.get("user_email")
+    _is_admin = st.session_state.get("user_role") == "admin"
+    may_sign = can_sign_off(deliverable, _user_email, _is_admin)
+    # Only the supervisor (or an admin) may write "Completed". It stays in the
+    # list when it is already the value, so an unrelated edit cannot silently
+    # reopen a closed deliverable.
+    STATUS_OPTS = ["Not started", "Working on", "Blocked", "Cancelled"]
+    if may_sign or d_status == "Completed":
+        STATUS_OPTS.insert(3, "Completed")
     cfg = get_settings()
     TYPE_OPTS = [
         s["name"].strip()
@@ -911,11 +1117,13 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
     elif not d_desc and not can_edit:
         st.caption("No description provided.")
 
+    st.divider()
+    _signoff_panel(deliverable, can_edit, users_map)
+
     if not can_edit:
         return
 
     # ── Edit form ─────────────────────────────────────────────────────────────
-    st.divider()
     with st.form("edit_deliv_form"):
         ef1, ef2 = st.columns(2)
         with ef1:
@@ -961,17 +1169,47 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
             if not e_name:
                 st.error("Name is required.")
                 return
+            closing = e_status == "Completed" and d_status != "Completed"
+            if closing and not may_sign:
+                # Belt and braces: the option is not offered, but never trust
+                # the widget for an authorisation decision.
+                st.error("Only the supervisor can close a deliverable. "
+                         "Use 'Declare this deliverable finished' instead.")
+                return
+            payload = {
+                "name":        e_name,
+                "type":        e_type,
+                "status":      e_status,
+                "deadline":    e_dead.isoformat() if e_dead else None,
+                "owner_email": owner_opts[e_owner_label],
+                "supervisor_email": sup_opts[e_sup_label],
+                "description": e_desc or None,
+            }
+            if closing:
+                # A supervisor picking "Completed" IS the confirmation: record
+                # it as a sign-off so the audit trail has no blind spot.
+                payload.update({
+                    "completion_state":      "approved",
+                    "completion_decided_by": _user_email,
+                    "completion_decided_at": now_iso(),
+                })
+            elif e_status != "Completed" and d_status == "Completed":
+                payload["completion_state"] = None
             try:
-                supabase.table("deliverables").update({
-                    "name":        e_name,
-                    "type":        e_type,
-                    "status":      e_status,
-                    "deadline":    e_dead.isoformat() if e_dead else None,
-                    "owner_email": owner_opts[e_owner_label],
-                    "supervisor_email": sup_opts[e_sup_label],
-                    "description": e_desc or None,
-                }).eq("id", d_id).execute()
-                st.success("Saved!")
-                st.rerun()
+                # update_row REPORTS failure, it does not raise: check it, or a
+                # rejected write would still say "Saved!".
+                ok, err, _ = update_row("deliverables", d_id, payload)
             except Exception as ex:
-                st.error(f"Error: {ex}")
+                ok, err = False, str(ex)
+            if not ok:
+                st.error(f"Error: {err}")
+                return
+            if closing:
+                owner = owner_opts[e_owner_label]
+                me = st.session_state.get("user_name") or _display_name(
+                    _user_email, users_map)
+                if owner and owner != _user_email:
+                    _notify(send_deliverable_signoff_approved,
+                            {**deliverable, **payload}, owner, me, "")
+            st.success("Saved!")
+            st.rerun()

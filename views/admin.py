@@ -17,6 +17,7 @@ from db import (
     PROJECTS_MIGRATION_SQL, SCOPUS_MIGRATION_SQL, PAPER_DRAFTS_MIGRATION_SQL,
     STATUS_HISTORY_MIGRATION_SQL, CONFERENCES_MIGRATION_SQL, CONTRACTS_MIGRATION_SQL,
     ENGAGEMENT_MIGRATION_SQL, LOGIN_EVENTS_MIGRATION_SQL,
+    DELIVERABLE_SIGNOFF_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
 from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
@@ -953,6 +954,8 @@ _SCHEMA_CHECKS = [
      [("tasks", "updated_at"), ("subtasks", "updated_at")]),
     ("Sign-in tracking", LOGIN_EVENTS_MIGRATION_SQL,
      [("login_events", "at")]),
+    ("Deliverable sign-off", DELIVERABLE_SIGNOFF_MIGRATION_SQL,
+     [("deliverables", "completion_state"), ("deliverables", "completion_decided_by")]),
     ("Contracts & time sheets", CONTRACTS_MIGRATION_SQL,
      [("contracts", "annual_hours"), ("project_activities", "default_share_pct"),
       ("timesheets", "grid"), ("projects", "cup"), ("users", "fiscal_code")]),

@@ -150,6 +150,19 @@ def _deadline_cell(d: dict, tier: str, days: int | None) -> str:
     return f"<span style='color:#444;font-size:13px'>{date_txt}</span>"
 
 
+def _signoff_chip(d: dict) -> str:
+    """A deliverable claimed finished but not yet countersigned. Shown next to
+    the status so the queue is visible without opening every row."""
+    if (d.get("completion_state") or "") != "pending":
+        return ""
+    return (
+        "<span style='background:#FFF4E0;color:#9A6208;padding:2px 7px;"
+        "border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;"
+        "margin-left:5px' title='Waiting for the supervisor to sign it off'>"
+        "⏳ SIGN-OFF</span>"
+    )
+
+
 def _status_chip(status: str) -> str:
     fg, bg = _STATUS_COLOURS.get(status, ("#5F6368", "#F1F3F4"))
     return (
@@ -199,7 +212,8 @@ def _row_html(d: dict, settings: dict, user_map: dict) -> str:
         _cell(f"<span style='{_DELIV_NAME_STYLE}'>{name}</span>", _COLS[0][1])
         + _cell(_project_chip(d["_proj_label"]), _COLS[1][1])
         + _cell(deliverable_chip_html(d.get("type") or "generic", settings), _COLS[2][1])
-        + _cell(_status_chip(d.get("status") or "Not started"), _COLS[3][1])
+        + _cell(_status_chip(d.get("status") or "Not started") + _signoff_chip(d),
+                _COLS[3][1])
         + _cell(_deadline_cell(d, tier, days), _COLS[4][1])
         + _cell(_owner_sup_html(d, user_map), _COLS[5][1])
     )

@@ -193,6 +193,163 @@ def send_task_comment(task: dict, recipient_email: str, author_name: str, body_t
     return _send(subject, body, recipient_email, html_body=html)
 
 
+# -- Deliverable completion sign-off -------------------------------------------
+
+def _deliv_lines(deliverable: dict) -> tuple[str, str]:
+    """(name, 'Progetto: X' line) for the plain-text bodies."""
+    name = deliverable.get("name", "")
+    proj = deliverable.get("project_name") or deliverable.get("_project") or ""
+    return name, (f"Progetto: {proj}\n" if proj else "")
+
+
+def _deliv_card(deliverable: dict, T) -> str:
+    """The deliverable as one branded row, in the style of the task sections."""
+    proj = deliverable.get("_project") or deliverable.get("project_name") or ""
+    chips = (T.project_chip(proj) if proj else "") + T.deadline_chip(deliverable.get("deadline"))
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'border="0" style="margin:12px 0;"><tr>'
+        f'<td bgcolor="#F5F7FA" style="background-color:#F5F7FA;'
+        f'border-left:4px solid {T.BRAND};border-radius:5px;padding:12px 14px;'
+        f'font-family:{T.FONT};">'
+        f'<div style="font-size:15px;font-weight:700;color:{T.TEXT};margin-bottom:6px;">'
+        f'{T.esc(deliverable.get("name", ""))}</div>{chips}</td>'
+        f'</tr></table>'
+    )
+
+
+def _quote_box(text: str, T, colour: str | None = None) -> str:
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'border="0" style="margin:12px 0;"><tr>'
+        f'<td bgcolor="#F5F7FA" style="background-color:#F5F7FA;border-left:4px solid '
+        f'{colour or T.BRAND};border-radius:5px;padding:12px 14px;font-family:{T.FONT};'
+        f'font-size:14px;line-height:1.6;color:{T.TEXT};white-space:pre-wrap;">'
+        f'{T.esc(text)}</td></tr></table>'
+    )
+
+
+def send_deliverable_signoff_request(deliverable: dict, to_email: str,
+                                     requester_name: str, note: str = "") -> bool:
+    """Ask the supervisor to countersign a deliverable declared finished."""
+    if not to_email:
+        return False
+    cfg = _get_settings()
+    app_url = cfg.get("app_url", "http://localhost:8501")
+    who = _get_name_from_email(to_email).split()[0]
+    name, proj_line = _deliv_lines(deliverable)
+    note = (note or "").strip()
+
+    subject = f"[MAIC LAB] Da approvare: {name}"
+    body = (
+        f"Ciao {who},\n\n"
+        f"{requester_name} dichiara concluso un deliverable di cui sei supervisor "
+        f"e chiede la tua conferma.\n\n"
+        f"Deliverable: {name}\n{proj_line}"
+        f"Scadenza: {_fmt_date(deliverable.get('deadline'))}\n"
+        + (f"\nNota di {requester_name}:\n{note}\n" if note else "")
+        + f"\nIl deliverable NON risulta chiuso finché non lo approvi.\n"
+        f"Apri l'app per approvarlo o rimandarlo indietro: {app_url}\n\n"
+        f"— MAIC LAB Task Manager"
+    )
+    from utils import email_templates as T
+    html = T.shell(
+        preheader=f"{requester_name} chiede la tua conferma su {name}",
+        heading="Un deliverable attende la tua conferma",
+        body_html="".join([
+            T.paragraph(f"Ciao <b>{T.esc(who)}</b>,"),
+            T.paragraph(f"<b>{T.esc(requester_name)}</b> dichiara concluso questo "
+                        f"deliverable e chiede la tua conferma."),
+            _deliv_card(deliverable, T),
+            (T.paragraph(f"Nota di <b>{T.esc(requester_name)}</b>:")
+             + _quote_box(note, T)) if note else "",
+            T.paragraph("Finché non lo approvi, il deliverable <b>non risulta chiuso</b>.",
+                        size=13, color=T.MUTED),
+        ]),
+        app_url=app_url,
+        cta_label="Approva o rimanda indietro",
+    )
+    return _send(subject, body, to_email, html_body=html)
+
+
+def send_deliverable_signoff_approved(deliverable: dict, to_email: str,
+                                      approver_name: str, note: str = "") -> bool:
+    """Tell whoever asked that the deliverable is now closed."""
+    if not to_email:
+        return False
+    cfg = _get_settings()
+    app_url = cfg.get("app_url", "http://localhost:8501")
+    who = _get_name_from_email(to_email).split()[0]
+    name, proj_line = _deliv_lines(deliverable)
+    note = (note or "").strip()
+
+    subject = f"[MAIC LAB] Approvato: {name}"
+    body = (
+        f"Ciao {who},\n\n"
+        f"{approver_name} ha confermato la conclusione del deliverable: "
+        f"ora risulta chiuso.\n\n"
+        f"Deliverable: {name}\n{proj_line}"
+        + (f"\nNota di {approver_name}:\n{note}\n" if note else "")
+        + f"\n{app_url}\n\n— MAIC LAB Task Manager"
+    )
+    from utils import email_templates as T
+    html = T.shell(
+        preheader=f"{approver_name} ha approvato {name}",
+        heading="Deliverable approvato e chiuso",
+        body_html="".join([
+            T.paragraph(f"Ciao <b>{T.esc(who)}</b>,"),
+            T.paragraph(f"<b>{T.esc(approver_name)}</b> ha confermato la conclusione: "
+                        f"il deliverable risulta <b>chiuso</b>."),
+            _deliv_card(deliverable, T),
+            (T.paragraph(f"Nota di <b>{T.esc(approver_name)}</b>:")
+             + _quote_box(note, T, "#2E8B6E")) if note else "",
+        ]),
+        app_url=app_url,
+        cta_label="Apri il Task Manager",
+    )
+    return _send(subject, body, to_email, html_body=html)
+
+
+def send_deliverable_signoff_rejected(deliverable: dict, to_email: str,
+                                      approver_name: str, reason: str = "") -> bool:
+    """Send it back to the owner, with the reason."""
+    if not to_email:
+        return False
+    cfg = _get_settings()
+    app_url = cfg.get("app_url", "http://localhost:8501")
+    who = _get_name_from_email(to_email).split()[0]
+    name, proj_line = _deliv_lines(deliverable)
+    reason = (reason or "").strip()
+
+    subject = f"[MAIC LAB] Da rivedere: {name}"
+    body = (
+        f"Ciao {who},\n\n"
+        f"{approver_name} ha riesaminato il deliverable e chiede altro lavoro "
+        f"prima di poterlo chiudere.\n\n"
+        f"Deliverable: {name}\n{proj_line}"
+        + (f"\nMotivo:\n{reason}\n" if reason else "")
+        + f"\nQuando è pronto puoi richiedere di nuovo l'approvazione: {app_url}\n\n"
+        f"— MAIC LAB Task Manager"
+    )
+    from utils import email_templates as T
+    html = T.shell(
+        preheader=f"{approver_name} chiede una revisione su {name}",
+        heading="Deliverable rimandato indietro",
+        body_html="".join([
+            T.paragraph(f"Ciao <b>{T.esc(who)}</b>,"),
+            T.paragraph(f"<b>{T.esc(approver_name)}</b> chiede altro lavoro prima "
+                        f"di poter chiudere questo deliverable."),
+            _deliv_card(deliverable, T),
+            (T.paragraph("Motivo:") + _quote_box(reason, T, "#B4472E")) if reason else "",
+            T.paragraph("Quando è pronto, richiedi di nuovo l'approvazione dall'app.",
+                        size=13, color=T.MUTED),
+        ]),
+        app_url=app_url,
+        cta_label="Apri il deliverable",
+    )
+    return _send(subject, body, to_email, html_body=html)
+
+
 def send_deadline_reminder(task: dict, assignee_email: str, days_left: int) -> bool:
     """Notify assignee that deadline is approaching."""
     if not assignee_email:

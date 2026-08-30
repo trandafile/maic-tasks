@@ -294,6 +294,37 @@ ALTER TABLE login_events DISABLE ROW LEVEL SECURITY;
 """
 
 
+DELIVERABLE_SIGNOFF_MIGRATION_SQL = """-- Run once in Supabase SQL Editor -> a deliverable can no longer be declared
+-- finished by whoever happens to hold edit rights: the supervisor signs it off.
+--
+-- Tasks and subtasks are deliberately untouched. A deliverable is what leaves
+-- the lab, so it is the only level where a second pair of eyes is worth the
+-- friction.
+--
+-- The `status` column is NOT overloaded with a review value: every report,
+-- filter and chart in the app reads it, and a sixth state would change all of
+-- them. Work awaiting sign-off keeps its real status and carries the request
+-- alongside.
+ALTER TABLE deliverables
+    ADD COLUMN IF NOT EXISTS completion_state         TEXT,   -- NULL | pending | approved
+    ADD COLUMN IF NOT EXISTS completion_requested_by  TEXT,
+    ADD COLUMN IF NOT EXISTS completion_requested_at  TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS completion_note          TEXT,
+    ADD COLUMN IF NOT EXISTS completion_decided_by    TEXT,
+    ADD COLUMN IF NOT EXISTS completion_decided_at    TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS completion_decision_note TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_deliverables_completion_state
+    ON deliverables (completion_state);
+
+-- Deliverables already closed keep their history: mark them approved so the
+-- new gate does not reopen finished work retroactively.
+UPDATE deliverables
+   SET completion_state = 'approved'
+ WHERE status = 'Completed' AND completion_state IS NULL;
+"""
+
+
 CONTRACTS_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → contract management + monthly timesheets.
 -- Until this runs, the Contracts and Time Sheets pages show this snippet and the
@@ -1719,6 +1750,164 @@ def get_user_engagement(since: _dt_date, until: _dt_date | None = None) -> dict:
         "logins_available": logins_available,
         "history_available": history_available,
     }
+
+
+# -- Deliverable completion sign-off -------------------------------------------
+#
+# A deliverable is what actually leaves the lab, so it is the one level where
+# "done" is a claim someone else has to countersign. Tasks and subtasks stay
+# self-served on purpose: putting a gate on every checkbox would turn the board
+# into paperwork and people would stop updating it, which costs more quality
+# than it buys.
+
+SIGNOFF_PENDING  = "pending"
+SIGNOFF_APPROVED = "approved"
+
+
+class MigrationMissing(RuntimeError):
+    """The sign-off columns are absent. Raised instead of silently dropping the
+    request: an owner who thinks they have submitted, and has not, is worse
+    than an explicit error."""
+
+
+def _is_missing_column(exc: Exception) -> bool:
+    m = str(exc)
+    return ("completion_state" in m or "PGRST204" in m
+            or "42703" in m or "does not exist" in m)
+
+
+def admin_emails() -> list[str]:
+    try:
+        rows = supabase.table("users").select("email").eq(
+            "is_approved", True).eq("role", "admin").execute().data or []
+    except Exception as exc:
+        print(f"[db.admin_emails] {exc}")
+        return []
+    return [r["email"] for r in rows if r.get("email")]
+
+
+def signoff_approvers(deliverable: dict) -> list[str]:
+    """Who may countersign: the supervisor, or the admins when none is set.
+
+    A deliverable with no supervisor must not become un-closable — that would
+    just push people to work around the gate."""
+    sup = deliverable.get("supervisor_email")
+    return [sup] if sup else admin_emails()
+
+
+def can_sign_off(deliverable: dict, email: str | None, is_admin: bool = False) -> bool:
+    if not email:
+        return False
+    return bool(is_admin) or email == deliverable.get("supervisor_email")
+
+
+def signoff_state(deliverable: dict) -> str | None:
+    return deliverable.get("completion_state")
+
+
+def request_deliverable_completion(deliverable_id: int, requester_email: str,
+                                   note: str = "") -> tuple[bool, str]:
+    """Owner side: claim the deliverable is finished and hand it to the
+    supervisor. Does NOT touch `status` — nothing is closed until signed off."""
+    try:
+        supabase.table("deliverables").update({
+            "completion_state":        SIGNOFF_PENDING,
+            "completion_requested_by": requester_email,
+            "completion_requested_at": now_iso(),
+            "completion_note":         (note or "").strip() or None,
+            "completion_decided_by":   None,
+            "completion_decided_at":   None,
+            "completion_decision_note": None,
+        }).eq("id", deliverable_id).execute()
+        return True, ""
+    except Exception as exc:
+        if _is_missing_column(exc):
+            raise MigrationMissing(str(exc))
+        return False, str(exc)
+
+
+def approve_deliverable_completion(deliverable_id: int, approver_email: str,
+                                   note: str = "") -> tuple[bool, str]:
+    """Supervisor side: countersign. This is the ONLY path that sets a
+    deliverable to Completed."""
+    try:
+        supabase.table("deliverables").update({
+            "status":                  "Completed",
+            "completion_state":        SIGNOFF_APPROVED,
+            "completion_decided_by":   approver_email,
+            "completion_decided_at":   now_iso(),
+            "completion_decision_note": (note or "").strip() or None,
+        }).eq("id", deliverable_id).execute()
+        return True, ""
+    except Exception as exc:
+        if _is_missing_column(exc):
+            raise MigrationMissing(str(exc))
+        return False, str(exc)
+
+
+def reject_deliverable_completion(deliverable_id: int, approver_email: str,
+                                  reason: str = "") -> tuple[bool, str]:
+    """Send it back. Clears the request so the owner can resubmit; the reason
+    travels back to them by e-mail and stays on the record."""
+    try:
+        supabase.table("deliverables").update({
+            "completion_state":        None,
+            "completion_decided_by":   approver_email,
+            "completion_decided_at":   now_iso(),
+            "completion_decision_note": (reason or "").strip() or None,
+        }).eq("id", deliverable_id).execute()
+        return True, ""
+    except Exception as exc:
+        if _is_missing_column(exc):
+            raise MigrationMissing(str(exc))
+        return False, str(exc)
+
+
+def reopen_deliverable(deliverable_id: int, actor_email: str) -> tuple[bool, str]:
+    """Undo a closure: back to 'Working on', sign-off cleared."""
+    try:
+        supabase.table("deliverables").update({
+            "status":                "Working on",
+            "completion_state":      None,
+            "completion_decided_by": actor_email,
+            "completion_decided_at": now_iso(),
+        }).eq("id", deliverable_id).execute()
+        return True, ""
+    except Exception as exc:
+        if _is_missing_column(exc):
+            raise MigrationMissing(str(exc))
+        return False, str(exc)
+
+
+def get_pending_signoffs(email: str | None = None, is_admin: bool = False) -> list[dict]:
+    """Deliverables waiting for a countersignature.
+
+    With no email: everything pending. With one: what THAT person must decide —
+    their supervised deliverables, plus (for admins) the ones with no
+    supervisor, which would otherwise wait for nobody.
+    """
+    try:
+        rows = supabase.table("deliverables").select("*").eq(
+            "completion_state", SIGNOFF_PENDING).eq(
+            "is_archived", False).execute().data or []
+    except Exception as exc:
+        print(f"[db.get_pending_signoffs] {exc}")
+        return []
+    if email:
+        rows = [d for d in rows
+                if d.get("supervisor_email") == email
+                or (is_admin and not d.get("supervisor_email"))]
+    try:
+        projects = {p["id"]: p for p in (supabase.table("projects").select(
+            "id, name, acronym").execute().data or [])}
+    except Exception:
+        projects = {}
+    for d in rows:
+        proj = projects.get(d.get("project_id"), {})
+        d["_project"] = proj.get("acronym") or proj.get("name") or ""
+        d["project_name"] = proj.get("name") or ""
+    rows.sort(key=lambda d: d.get("completion_requested_at") or "")
+    return rows
 
 
 def get_supervisor_digest(user_email: str, days: int = 7) -> dict:
