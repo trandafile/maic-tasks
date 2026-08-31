@@ -984,20 +984,22 @@ def _render_schema_check():
     """
     st.subheader("Database schema")
     st.caption(
-        "Checks that every column and table the app expects is really there. "
-        "The SQL is generated only for what is missing."
+        "Every column and table the app expects, checked against the live "
+        "database. The SQL appears only for what is missing."
     )
-    if st.button("🔍 Check the schema", key="schema_check_run"):
+
+    # Run on first open rather than on a click: hiding a pending migration
+    # behind a button means nobody finds it when they need it. Cached for the
+    # session, so opening Settings again costs nothing.
+    if "_schema_report" not in st.session_state or st.button(
+            "🔄 Re-check", key="schema_check_run"):
         with st.spinner("Querying the database…"):
             st.session_state["_schema_report"] = [
                 (label, sql, [r for r in (_probe(t, c) for t, c in probes) if r])
                 for label, sql, probes in _SCHEMA_CHECKS
             ]
 
-    report = st.session_state.get("_schema_report")
-    if report is None:
-        return
-
+    report = st.session_state.get("_schema_report") or []
     missing = [(label, sql, probs) for label, sql, probs in report if probs]
     if not missing:
         st.success(
