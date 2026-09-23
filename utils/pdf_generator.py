@@ -7,8 +7,31 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    PageBreak, HRFlowable
+    PageBreak, HRFlowable, KeepTogether
 )
+from reportlab.pdfgen import canvas as _rl_canvas
+
+
+class _NumberedCanvas(_rl_canvas.Canvas):
+    """Defers every page until the end so each one can say "Page x of y".
+    ``decorate(canvas, page, total)`` draws the running header and footer."""
+
+    def __init__(self, *args, decorate=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._pages, self._decorate = [], decorate
+
+    def showPage(self):
+        self._pages.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._pages)
+        for state in self._pages:
+            self.__dict__.update(state)
+            if self._decorate:
+                self._decorate(self, self._pageNumber, total)
+            super().showPage()
+        super().save()
 
 # ─── Colour maps (text colours only – avoids filled-cell compatibility issues) ──
 STATUS_TEXT = {
@@ -173,19 +196,21 @@ def generate_projects_pdf(
     project tab, deliverable cards in their type colour, readable codes, rows
     tinted by deadline. The lists arrive already filtered as on screen."""
     users_dict = {u["email"]: (u.get("name") or u["email"]) for u in users if u.get("email")}
-    return generate_report_pdf(projects, deliverables, tasks, subtasks, users_dict)
+    return generate_report_pdf(projects, deliverables, tasks, subtasks, users_dict,
+                               title="Projects")
 
 
 def generate_report_pdf(
     projects, deliverables, tasks, subtasks, users_dict,
     filter_proj=None, filter_user=None, filter_status=None,
-    rbac_email=None,
+    rbac_email=None, title: str = "Project report",
 ):
     buf = BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
         leftMargin=20*mm, rightMargin=20*mm,
-        topMargin=20*mm, bottomMargin=20*mm,
+        topMargin=25*mm, bottomMargin=18*mm,
+        title=f"MAIC LAB — {title}",
     )
     styles = getSampleStyleSheet()
     
@@ -392,26 +417,21 @@ def generate_report_pdf(
         from utils.rows import urgency_sort as _us
         return _us(ts, threshold)
 
-    header = Table([[Paragraph("CODE", head_st), Paragraph("TASK", head_st),
-                     Paragraph("STATUS", head_st), Paragraph("DEADLINE", head_st),
-                     Paragraph("OWNER / SUPERVISOR", head_st)]], colWidths=COLS)
-    header.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 5),
-                                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                                ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
-
+    # Continuous flow: projects follow one another; a deliverable card is never
+    # split across pages, and a project's tab travels with its first card.
     for proj_idx, proj in enumerate(proj_list):
-        if proj_idx > 0:
-            elements.append(PageBreak())
         pid = proj["id"]
         letter = proj.get("code_letter") or ""
+        head: list = [Spacer(1, 14)] if proj_idx > 0 else []
+        cards: list = []
 
         # ── project tab sitting on a rule ──────────────────────────────────────
         badge = (f"<font face='Courier-Bold' color='#4527A0' size='12'>{_esc(letter)}</font>  "
                  if letter else "")
         acr = proj.get("acronym") or ""
-        title = (f"<b>{_esc(acr)}</b> · {_esc(proj.get('name'))}" if acr and acr != proj.get("name")
-                 else f"<b>{_esc(proj.get('name'))}</b>")
-        tab = Table([[Paragraph(badge + title, tab_st)]])
+        ptitle = (f"<b>{_esc(acr)}</b> · {_esc(proj.get('name'))}" if acr and acr != proj.get("name")
+                  else f"<b>{_esc(proj.get('name'))}</b>")
+        tab = Table([[Paragraph(badge + ptitle, tab_st)]])
         tab.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FAFBFC")),
             ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#C9CED4")),
@@ -420,17 +440,16 @@ def generate_report_pdf(
             ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
         tab.hAlign = "LEFT"
-        elements.append(tab)
-        elements.append(HRFlowable(width="100%", thickness=0.7, color=colors.HexColor("#C9CED4"),
-                                   spaceBefore=0, spaceAfter=3))
+        head.append(tab)
+        head.append(HRFlowable(width="100%", thickness=0.7, color=colors.HexColor("#C9CED4"),
+                               spaceBefore=0, spaceAfter=3))
         capt_parts = []
         if proj.get("funding_agency"):
             capt_parts.append(f"Funding: {proj['funding_agency']}")
         if proj.get("start_date"):
             capt_parts.append(f"{_fmt_date(proj.get('start_date'))} – {_fmt_date(proj.get('end_date'))}")
         if capt_parts:
-            elements.append(Paragraph(_esc("  ·  ".join(capt_parts)), caption))
-        elements.append(header)
+            head.append(Paragraph(_esc("  ·  ".join(capt_parts)), caption))
 
         proj_deliverables = sorted([d for d in deliverables
                                     if d.get("project_id") == pid and d.get("id") in visible_deliv_ids],
@@ -463,8 +482,7 @@ def generate_report_pdf(
                 entries = [([Paragraph("", code_st),
                              Paragraph(f"<i><font color='{MUTED}'>No tasks matching the "
                                        f"filters.</font></i>", cell_st), "", "", ""], "normal", "note")]
-            elements.append(Spacer(1, 6))
-            elements.append(_card(band, colour, entries))
+            cards.append([Spacer(1, 6), _card(band, colour, entries)])
 
         unassigned = _sort([t for t in tasks if t.get("project_id") == pid
                             and not t.get("deliverable_id") and t.get("id") in visible_task_ids])
@@ -473,10 +491,44 @@ def generate_report_pdf(
             band = ((f"<font face='Courier-Bold' color='#5F6368'>{lcode}</font>  " if lcode else "")
                     + f"<b><font color='#3C4043'>Tasks without deliverable</font></b>  "
                     f"<font size='8' color='{SOFT}'>{len(unassigned)}</font>")
-            elements.append(Spacer(1, 6))
-            elements.append(_card(band, "#9AA0A6", _entries(unassigned)))
+            cards.append([Spacer(1, 6), _card(band, "#9AA0A6", _entries(unassigned))])
 
-    doc.build(elements)
+        if cards:
+            elements.append(KeepTogether(head + cards[0]))
+            for c in cards[1:]:
+                elements.append(KeepTogether(c))
+        else:
+            elements.append(KeepTogether(head))
+
+    # Running header (column titles) and footer (title, date, page x of y)
+    generated = datetime.date.today().strftime("%d/%m/%Y")
+    page_w, page_h = A4
+    col_x, x = [], doc.leftMargin
+    for w in COLS:
+        col_x.append(x + 5)
+        x += w
+    labels = ("CODE", "TASK", "STATUS", "DEADLINE", "OWNER / SUPERVISOR")
+
+    def _decorate(canv, page, total):
+        canv.saveState()
+        grey = colors.HexColor("#80868B")
+        rule = colors.HexColor("#DADCE0")
+        y = page_h - doc.topMargin + 5 * mm
+        canv.setFont("Helvetica", 6.8)
+        canv.setFillColor(grey)
+        for lx, lab in zip(col_x, labels):
+            canv.drawString(lx, y, lab)
+        canv.setStrokeColor(rule)
+        canv.setLineWidth(0.5)
+        canv.line(doc.leftMargin, y - 1.6 * mm, page_w - doc.rightMargin, y - 1.6 * mm)
+        fy = doc.bottomMargin - 9 * mm
+        canv.line(doc.leftMargin, fy + 4 * mm, page_w - doc.rightMargin, fy + 4 * mm)
+        canv.setFont("Helvetica", 7.5)
+        canv.drawString(doc.leftMargin, fy, f"MAIC LAB · {title} · {generated}")
+        canv.drawRightString(page_w - doc.rightMargin, fy, f"Page {page} of {total}")
+        canv.restoreState()
+
+    doc.build(elements, canvasmaker=lambda *a, **k: _NumberedCanvas(*a, decorate=_decorate, **k))
     buf.seek(0)
     return buf
 
