@@ -9,6 +9,7 @@ from db import (
     can_sign_off, signoff_approvers, request_deliverable_completion,
     approve_deliverable_completion, reject_deliverable_completion,
     reopen_deliverable, MigrationMissing, SIGNOFF_PENDING,
+    deliverable_open_work, open_work_message, archive_deliverable_closed_work,
 )
 from utils.md_editor import markdown_editor
 from utils.notifications import (
@@ -866,6 +867,10 @@ def _signoff_panel(deliverable: dict, can_edit: bool, users_map: dict) -> None:
     approvers = signoff_approvers(deliverable)
     sup = deliverable.get("supervisor_email")
     me = st.session_state.get("user_name") or _display_name(user_email, users_map)
+    # A deliverable is the sum of its tasks: while any is open it can be
+    # neither declared finished nor signed off.
+    blocking = open_work_message(deliverable_open_work(d_id)) \
+        if status != "Completed" else ""
 
     # ── waiting for a countersignature ───────────────────────────────────────
     if state == SIGNOFF_PENDING:
@@ -885,9 +890,12 @@ def _signoff_panel(deliverable: dict, can_edit: bool, users_map: dict) -> None:
                 placeholder="What you checked, or what still needs work.",
                 height=80,
             )
+            if blocking:
+                st.error(f"🔒 Cannot be closed yet — {blocking} "
+                         "Send it back, or reopen and finish the work first.")
             c_ok, c_back = st.columns(2)
             with c_ok:
-                if st.button("✅ Approve and close", key=f"signoff_ok_{d_id}",
+                if not blocking and st.button("✅ Approve and close", key=f"signoff_ok_{d_id}",
                              type="primary", use_container_width=True):
                     try:
                         ok, err = approve_deliverable_completion(d_id, user_email, note)
@@ -970,6 +978,11 @@ def _signoff_panel(deliverable: dict, can_edit: bool, users_map: dict) -> None:
                 f"{deliverable['completion_decision_note']}"
             )
         to = ", ".join(_display_name(a, users_map) for a in approvers)
+        if blocking:
+            st.caption(f"🔒 You can declare this deliverable finished once all its "
+                       f"work is closed — {blocking}")
+            st.divider()
+            return
         with st.expander("✅ Declare this deliverable finished", expanded=False):
             st.caption(
                 f"You cannot close a deliverable on your own. This asks "
@@ -1180,6 +1193,11 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
                 st.error("Only the supervisor can close a deliverable. "
                          "Use 'Declare this deliverable finished' instead.")
                 return
+            if closing:
+                blocking_now = open_work_message(deliverable_open_work(d_id))
+                if blocking_now:
+                    st.error(f"🔒 This deliverable cannot be closed yet — {blocking_now}")
+                    return
             payload = {
                 "name":        e_name,
                 "type":        e_type,
@@ -1209,6 +1227,8 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
                 st.error(f"Error: {err}")
                 return
             if closing:
+                # the countersignature covers the deliverable's closed work
+                archive_deliverable_closed_work(d_id)
                 owner = owner_opts[e_owner_label]
                 me = st.session_state.get("user_name") or _display_name(
                     _user_email, users_map)

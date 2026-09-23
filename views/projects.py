@@ -11,7 +11,7 @@ from utils.md_editor import markdown_editor
 from db import get_settings
 from utils.rows import (
     ROW_COLS, INACTIVE, row_html, header_html, urgency_sort, fmt, esc, project_chip,
-    deliverable_head_html,
+    deliverable_head_html, chip, status_chip,
 )
 
 # ─── Data fetching ──────────────────────────────────────────────────────────────
@@ -561,13 +561,52 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
 
 # ─── Review queue ("To review") ─────────────────────────────────────────────────
 
+_REVIEW_CSS = """
+<style>
+/* the "[" that groups a deliverable's closed work */
+div[class*="st-key-rvgrp_"] {
+    position: relative; border-left: 2px solid #AEB4BB;
+    padding-left: 10px; margin: 2px 0 12px 4px;
+}
+div[class*="st-key-rvgrp_"]::before, div[class*="st-key-rvgrp_"]::after {
+    content: ""; position: absolute; left: -2px; width: 9px;
+    border-top: 2px solid #AEB4BB;
+}
+div[class*="st-key-rvgrp_"]::before { top: 0; }
+div[class*="st-key-rvgrp_"]::after  { bottom: 0; }
+/* compact rows: the checkbox must not add height */
+div[class*="st-key-rvgrp_"] div[data-testid='stCheckbox'] { min-height: 0; margin: 0; }
+div[class*="st-key-rvgrp_"] div[data-testid='stHorizontalBlock']:has(.maic-row) {
+    padding-top: 0 !important; padding-bottom: 0 !important;
+}
+/* reopen: a bigger, unmistakable icon */
+div[class*="st-key-rv_reopen_"] button, div[class*="st-key-rv_reopen_"] button * {
+    font-size: 1.45rem !important; line-height: 1 !important;
+}
+</style>
+"""
+
+
+def _rv_key(it: dict) -> str:
+    return f"{it['_kind']}_{it['id']}"
+
+
+def _rv_set_all(keys: list[str]) -> None:
+    """Select-all callback: runs before the rerun, so the row boxes follow."""
+    value = bool(st.session_state.get("rv_sel_all"))
+    for k in keys:
+        st.session_state[f"rv_sel_{k}"] = value
+
+
 def _render_review(queue: dict, user_email: str, is_admin: bool, users: list) -> None:
     """What the supervisor has to look at before it disappears into the archive:
-    deliverables awaiting sign-off, and work others have declared closed."""
+    deliverables awaiting sign-off, and work others have declared closed,
+    grouped project → deliverable."""
     from db import archive_items, reopen_item
     from utils.modals import render_signoff_panel
     from utils.notifications import send_item_reopened
 
+    st.markdown(_REVIEW_CSS, unsafe_allow_html=True)
     names = {u["email"]: u.get("name") or u["email"] for u in users if u.get("email")}
     me = st.session_state.get("user_name") or names.get(user_email, user_email)
     pending, items = queue.get("deliverables", []), queue.get("items", [])
@@ -581,6 +620,9 @@ def _render_review(queue: dict, user_email: str, is_admin: bool, users: list) ->
     st.markdown(f"#### ⏳ Deliverables awaiting your sign-off · {len(pending)}")
     if not pending:
         st.caption("None right now.")
+    else:
+        st.caption("Approving a deliverable also archives its closed tasks and subtasks. "
+                   "It cannot be approved while any of its work is still open.")
     for d in pending:
         with st.container(border=True):
             req = names.get(d.get("completion_requested_by"), d.get("completion_requested_by") or "?")
@@ -593,94 +635,127 @@ def _render_review(queue: dict, user_email: str, is_admin: bool, users: list) ->
             )
             render_signoff_panel(d, True, names)
 
-    # ── 2 · completed work to verify ─────────────────────────────────────────
+    # ── 2 · closed work, grouped project → deliverable ───────────────────────
     st.write("")
-    h1, h2 = st.columns([6, 2], vertical_alignment="bottom")
-    with h1:
-        n_t = len([i for i in items if i["_kind"] == "task"])
-        st.markdown(f"#### ✅ Closed work to review · {len(items)}")
-        st.caption(
-            f"{n_t} tasks, {len(items) - n_t} subtasks closed under your supervision "
-            "and not archived yet, oldest first. **Archive** means you have checked it; "
-            "**Reopen** sends it back to the owner."
-        )
-    with h2:
-        if items and st.button(f"🗄️ Archive all ({len(items)})", key="rv_arch_all",
-                               use_container_width=True):
-            st.session_state["_rv_confirm_all"] = True
-            st.rerun()
-    if st.session_state.get("_rv_confirm_all"):
-        st.warning(f"Archive all **{len(items)}** items as checked? They leave the board "
-                   "but stay in the database and in the reports.")
-        c1, c2, _ = st.columns([1.6, 1.2, 7])
-        with c1:
-            if st.button("Yes, archive all", key="rv_arch_all_yes", type="primary"):
-                archive_items(items)
-                st.session_state.pop("_rv_confirm_all", None)
-                st.rerun()
-        with c2:
-            if st.button("Cancel", key="rv_arch_all_no"):
-                st.session_state.pop("_rv_confirm_all", None)
-                st.rerun()
-
+    n_t = len([i for i in items if i["_kind"] == "task"])
+    st.markdown(f"#### ✅ Closed work to review · {len(items)}")
+    st.caption(
+        f"{n_t} tasks, {len(items) - n_t} subtasks closed under your supervision and not "
+        "archived yet. Tick what you have checked and archive it; ↩️ sends one item back "
+        "to its owner; ✏️ opens its details."
+    )
     if not items:
         st.caption("None right now.")
         return
 
-    limit = len(items) if st.session_state.get("_rv_show_all") else 15
-    hc, _ = st.columns(ROW_COLS)
-    with hc:
-        st.html(header_html(date_label="Closed on", first_label="Item"))
-    for it in items[:limit]:
-        key = f"{it['_kind']}_{it['id']}"
-        c_row, c_act = st.columns(ROW_COLS, vertical_alignment="center")
-        with c_row:
-            st.html(row_html(
-                it, kind=it["_kind"], user_map=names, project_label=it.get("_project"),
-                path=it.get("_path"), strike_done=False,
-                date_html=f"<span style='font-size:12px;color:#5F6368'>{fmt(it.get('_closed'))}</span>",
-            ))
-        with c_act:
-            a_ok, a_back = st.columns(2, gap="small")
-            with a_ok:
-                if st.button("🗄️", key=f"rv_arch_{key}", type="tertiary",
-                             help="Checked: archive it"):
-                    archive_items([it])
-                    st.rerun()
-            with a_back:
-                if st.button("↩️", key=f"rv_reopen_{key}", type="tertiary",
-                             help="Reopen: back to 'Working on', owner notified"):
-                    st.session_state[f"_rv_reopen_{key}"] = True
-                    st.rerun()
-        if st.session_state.get(f"_rv_reopen_{key}"):
-            owner = it.get("owner_email")
-            reason = st.text_input(
-                "What still needs work? (optional, sent to the owner)",
-                key=f"rv_reason_{key}",
-            )
-            c1, c2, _ = st.columns([1.8, 1.2, 7])
-            with c1:
-                if st.button("↩️ Reopen and notify" if owner and owner != user_email
-                             else "↩️ Reopen", key=f"rv_reopen_yes_{key}", type="primary"):
-                    ok, err = reopen_item(it, user_email)
-                    if not ok:
-                        st.error(f"Could not reopen: {err}")
-                    else:
-                        if owner and owner != user_email:
-                            try:
-                                send_item_reopened(it, owner, me, reason)
-                            except Exception as exc:
-                                print(f"[projects.review] reopen mail failed: {exc}")
-                        st.session_state.pop(f"_rv_reopen_{key}", None)
-                        st.rerun()
-            with c2:
-                if st.button("Cancel", key=f"rv_reopen_no_{key}"):
-                    st.session_state.pop(f"_rv_reopen_{key}", None)
-                    st.rerun()
-    if len(items) > limit:
-        if st.button(f"Show all {len(items)}", key="rv_show_all", type="tertiary"):
-            st.session_state["_rv_show_all"] = True
+    keys = [_rv_key(it) for it in items]
+    selected = [it for it in items if st.session_state.get(f"rv_sel_{_rv_key(it)}")]
+    b1, b2, _ = st.columns([1.6, 2.2, 6], vertical_alignment="center")
+    with b1:
+        st.checkbox(f"Select all ({len(items)})", key="rv_sel_all",
+                    on_change=_rv_set_all, args=(keys,))
+    with b2:
+        if st.button(f"🗄️ Archive selected ({len(selected)})", key="rv_arch_sel",
+                     type="primary", disabled=not selected, use_container_width=True):
+            n_tasks, n_subs = archive_items(selected)
+            for it in selected:
+                st.session_state.pop(f"rv_sel_{_rv_key(it)}", None)
+            st.session_state.pop("rv_sel_all", None)
+            st.toast(f"Archived {n_tasks} tasks and {n_subs} subtasks.")
             st.rerun()
+
+    # project → deliverable, projects by name, deliverables by name, loose tasks last
+    groups: dict = {}
+    for it in items:
+        pkey = (it.get("_project_name") or "~", it.get("_project_id"))
+        dkey = (it.get("_deliv_id") is None, it.get("_deliv_name") or "", it.get("_deliv_id"))
+        groups.setdefault(pkey, {}).setdefault(dkey, []).append(it)
+
+    for (pname, pid), dgroups in sorted(groups.items(), key=lambda kv: kv[0][0].lower()):
+        first = next(iter(dgroups.values()))[0]
+        st.html(
+            "<div style='display:flex;align-items:center;gap:8px;margin:14px 0 4px 0'>"
+            f"{project_chip(first.get('_project'))}"
+            f"<span style='font-size:15px;font-weight:700;color:#202124'>{esc(pname.strip('~'))}</span>"
+            "</div>"
+        )
+        for (loose, dname, did), group in sorted(dgroups.items(), key=lambda kv: kv[0][:2]):
+            with st.container(key=f"rvgrp_{pid}_{did or 'none'}", gap=None):
+                if loose:
+                    title = ("<span style='font-size:11px;font-weight:700;letter-spacing:0.05em;"
+                             "color:#5F6368'>TASKS WITHOUT DELIVERABLE</span>")
+                else:
+                    g0 = group[0]
+                    extra = ""
+                    if g0.get("_deliv_pending"):
+                        extra = chip("⏳ awaiting sign-off", "#8A5300", "#FFF1D6")
+                    elif g0.get("_deliv_status"):
+                        extra = status_chip(g0["_deliv_status"])
+                    title = ("<span style='font-size:10px;color:#2E8B6E;font-weight:700;"
+                             "letter-spacing:0.05em'>DELIVERABLE</span> "
+                             f"<span style='font-size:13.5px;font-weight:700;color:#0F4D3B'>"
+                             f"{esc(dname)}</span> {extra}")
+                st.html(f"<div style='display:flex;align-items:center;gap:6px;"
+                        f"flex-wrap:wrap;padding:2px 0 4px 0'>{title}</div>")
+
+                for it in sorted(group, key=lambda i: i.get("_closed") or "9999"):
+                    key = _rv_key(it)
+                    c_sel, c_row, c_edit, c_back = st.columns(
+                        [0.45, 12, 0.7, 0.8], vertical_alignment="center", gap="small")
+                    with c_sel:
+                        st.checkbox("Select", key=f"rv_sel_{key}",
+                                    label_visibility="collapsed")
+                    with c_row:
+                        st.html(row_html(
+                            it, kind=it["_kind"], user_map=names, path=it.get("_path") or None,
+                            strike_done=False,
+                            date_html=(f"<span style='font-size:12px;color:#5F6368'>"
+                                       f"{fmt(it.get('_closed'))}</span>"),
+                        ))
+                    with c_edit:
+                        if st.button("✏️", key=f"rv_edit_{key}", type="tertiary",
+                                     help="Details and edit"):
+                            if it["_kind"] == "task":
+                                task_details_modal(it, True)
+                            else:
+                                subtask_details_modal(it, True)
+                    with c_back:
+                        if st.button("↩️", key=f"rv_reopen_{key}", type="tertiary",
+                                     help="Reopen: back to 'Working on', owner notified"):
+                            st.session_state[f"_rv_reopen_{key}"] = True
+                            st.rerun()
+
+                    if st.session_state.get(f"_rv_reopen_{key}"):
+                        owner = it.get("owner_email")
+                        notify = bool(owner and owner != user_email)
+                        r1, r2, r3 = st.columns([6, 1.9, 1.1], vertical_alignment="bottom")
+                        with r1:
+                            reason = st.text_input(
+                                "What still needs work? (optional, sent to the owner)"
+                                if notify else "What still needs work? (optional)",
+                                key=f"rv_reason_{key}",
+                            )
+                        with r2:
+                            if st.button("↩️ Reopen and notify" if notify else "↩️ Reopen",
+                                         key=f"rv_reopen_yes_{key}", type="primary",
+                                         use_container_width=True):
+                                ok, err = reopen_item(it, user_email)
+                                if not ok:
+                                    st.error(f"Could not reopen: {err}")
+                                else:
+                                    if notify:
+                                        try:
+                                            send_item_reopened(it, owner, me, reason)
+                                        except Exception as exc:
+                                            print(f"[projects.review] reopen mail failed: {exc}")
+                                    st.session_state.pop(f"_rv_reopen_{key}", None)
+                                    st.session_state.pop(f"rv_sel_{key}", None)
+                                    st.rerun()
+                        with r3:
+                            if st.button("Cancel", key=f"rv_reopen_no_{key}",
+                                         use_container_width=True):
+                                st.session_state.pop(f"_rv_reopen_{key}", None)
+                                st.rerun()
 
 
 # ─── Main view ──────────────────────────────────────────────────────────────────

@@ -1805,10 +1805,80 @@ def signoff_state(deliverable: dict) -> str | None:
     return deliverable.get("completion_state")
 
 
+_CLOSED = ("Completed", "Cancelled")
+
+
+def deliverable_open_work(deliverable_id: int) -> dict:
+    """Tasks and subtasks of a deliverable that are still open.
+
+    A deliverable is the sum of its tasks: it cannot be declared finished, nor
+    signed off, while any of them is still open. Subtasks count too — a task
+    marked Completed with an open subtask is not finished work either.
+    """
+    out = {"tasks": [], "subtasks": []}
+    try:
+        tasks = supabase.table("tasks").select("id, name, status, sequence_id").eq(
+            "deliverable_id", deliverable_id).eq("is_archived", False).execute().data or []
+        ids = [t["id"] for t in tasks]
+        subs = []
+        if ids:
+            subs = supabase.table("subtasks").select("id, name, status, task_id").in_(
+                "task_id", ids).eq("is_archived", False).execute().data or []
+    except Exception as exc:
+        print(f"[db.deliverable_open_work] {exc}")
+        return out
+    out["tasks"] = [t for t in tasks if (t.get("status") or "Not started") not in _CLOSED]
+    out["subtasks"] = [s for s in subs if (s.get("status") or "Not started") not in _CLOSED]
+    return out
+
+
+def open_work_message(open_work: dict, limit: int = 4) -> str:
+    """'2 tasks and 1 subtask are still open: A, B, C.' — or '' when none."""
+    t, s = open_work.get("tasks", []), open_work.get("subtasks", [])
+    if not t and not s:
+        return ""
+    parts = []
+    if t:
+        parts.append(f"{len(t)} task{'s' if len(t) != 1 else ''}")
+    if s:
+        parts.append(f"{len(s)} subtask{'s' if len(s) != 1 else ''}")
+    names = [i.get("name", "?") for i in (t + s)]
+    shown = ", ".join(names[:limit]) + ("…" if len(names) > limit else "")
+    verb = "is" if len(t) + len(s) == 1 else "are"
+    return f"{' and '.join(parts)} {verb} still open: {shown}."
+
+
+def archive_deliverable_closed_work(deliverable_id: int) -> tuple[int, int]:
+    """On sign-off, the deliverable's closed tasks and subtasks leave the board:
+    the countersignature on the deliverable covers them."""
+    try:
+        tasks = supabase.table("tasks").select("id, status").eq(
+            "deliverable_id", deliverable_id).eq("is_archived", False).execute().data or []
+        t_ids = [t["id"] for t in tasks if (t.get("status") or "") in _CLOSED]
+        all_ids = [t["id"] for t in tasks]
+        s_ids = []
+        if all_ids:
+            subs = supabase.table("subtasks").select("id, status").in_(
+                "task_id", all_ids).eq("is_archived", False).execute().data or []
+            s_ids = [s["id"] for s in subs if (s.get("status") or "") in _CLOSED]
+        if s_ids:
+            supabase.table("subtasks").update({"is_archived": True}).in_("id", s_ids).execute()
+        if t_ids:
+            supabase.table("tasks").update({"is_archived": True}).in_("id", t_ids).execute()
+        return len(t_ids), len(s_ids)
+    except Exception as exc:
+        print(f"[db.archive_deliverable_closed_work] {exc}")
+        return 0, 0
+
+
 def request_deliverable_completion(deliverable_id: int, requester_email: str,
                                    note: str = "") -> tuple[bool, str]:
     """Owner side: claim the deliverable is finished and hand it to the
-    supervisor. Does NOT touch `status` — nothing is closed until signed off."""
+    supervisor. Does NOT touch `status` — nothing is closed until signed off.
+    Refused while any of its tasks or subtasks is still open."""
+    blocking = open_work_message(deliverable_open_work(deliverable_id))
+    if blocking:
+        return False, f"It cannot be declared finished yet: {blocking}"
     try:
         supabase.table("deliverables").update({
             "completion_state":        SIGNOFF_PENDING,
@@ -1828,8 +1898,12 @@ def request_deliverable_completion(deliverable_id: int, requester_email: str,
 
 def approve_deliverable_completion(deliverable_id: int, approver_email: str,
                                    note: str = "") -> tuple[bool, str]:
-    """Supervisor side: countersign. This is the ONLY path that sets a
-    deliverable to Completed."""
+    """Supervisor side: countersign, then archive the deliverable's closed
+    tasks and subtasks. Refused while any of them is open (it may have been
+    reopened after the request was sent)."""
+    blocking = open_work_message(deliverable_open_work(deliverable_id))
+    if blocking:
+        return False, f"It cannot be closed yet: {blocking}"
     try:
         supabase.table("deliverables").update({
             "status":                  "Completed",
@@ -1838,6 +1912,7 @@ def approve_deliverable_completion(deliverable_id: int, approver_email: str,
             "completion_decided_at":   now_iso(),
             "completion_decision_note": (note or "").strip() or None,
         }).eq("id", deliverable_id).execute()
+        archive_deliverable_closed_work(deliverable_id)
         return True, ""
     except Exception as exc:
         if _is_missing_column(exc):
@@ -1945,7 +2020,7 @@ def get_review_queue(email: str | None, is_admin: bool = False) -> dict:
         projects = {p["id"]: p for p in (supabase.table("projects").select(
             "id, name, acronym").execute().data or [])}
         delivs = {d["id"]: d for d in (supabase.table("deliverables").select(
-            "id, name").execute().data or [])}
+            "id, name, status, completion_state").execute().data or [])}
         parent_ids = list({s.get("task_id") for s in subs if s.get("task_id")})
         parents = {}
         if parent_ids:
@@ -1960,14 +2035,23 @@ def get_review_queue(email: str | None, is_admin: bool = False) -> dict:
         p = projects.get(pid) or {}
         return p.get("acronym") or p.get("name") or ""
 
+    def group(item, pid, did):
+        d = delivs.get(did) or {}
+        item["_project_id"] = pid
+        item["_project_name"] = (projects.get(pid) or {}).get("name") or ""
+        item["_deliv_id"] = did if d else None
+        item["_deliv_name"] = d.get("name") or ""
+        item["_deliv_status"] = d.get("status") or ""
+        item["_deliv_pending"] = d.get("completion_state") == "pending"
+
     for t in tasks:
         if not _is_my_review(t, email, is_admin):
             continue
-        d = delivs.get(t.get("deliverable_id"))
         t["_kind"] = "task"
         t["_project"] = proj_label(t.get("project_id"))
-        t["_path"] = d["name"] if d else "task without deliverable"
+        t["_path"] = ""
         t["_closed"] = _closed_on(t)
+        group(t, t.get("project_id"), t.get("deliverable_id"))
         out["items"].append(t)
     for s in subs:
         if not _is_my_review(s, email, is_admin):
@@ -1977,6 +2061,7 @@ def get_review_queue(email: str | None, is_admin: bool = False) -> dict:
         s["_project"] = proj_label(parent.get("project_id"))
         s["_path"] = f"in: {parent.get('name', '?')}"
         s["_closed"] = _closed_on(s)
+        group(s, parent.get("project_id"), parent.get("deliverable_id"))
         out["items"].append(s)
 
     out["items"].sort(key=lambda i: i.get("_closed") or "9999")
