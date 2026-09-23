@@ -133,6 +133,36 @@ st.markdown("""
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+
+def _refresh_app_modules() -> None:
+    """After a deploy, drop the app's own modules (utils/, views/, core/, db...)
+    from sys.modules so the imports below load the new code. Streamlit Cloud
+    pulls the new files but can keep serving the old imported modules until the
+    app is rebooted; the build label from upload.bat marks each deploy."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        with open(os.path.join(app_dir, ".upload_version.txt"), encoding="utf-8") as f:
+            build = f.readline().strip()
+    except OSError:
+        return
+    marker = sys.modules.get("_maic_loaded_build")
+    if marker is None:
+        import types
+        marker = sys.modules["_maic_loaded_build"] = types.ModuleType("_maic_loaded_build")
+        marker.build = build
+        return
+    if marker.build == build:
+        return
+    prefix = os.path.normcase(app_dir + os.sep)
+    for name, mod in list(sys.modules.items()):
+        path = getattr(mod, "__file__", None)
+        if name != "__main__" and path and os.path.normcase(os.path.abspath(path)).startswith(prefix):
+            del sys.modules[name]
+    marker.build = build
+
+
+_refresh_app_modules()
+
 # Shared row style (utils/rows.py): one look for every task/deliverable list.
 from utils.rows import ROW_CSS as _ROW_CSS
 st.markdown(f"<style>{_ROW_CSS}</style>", unsafe_allow_html=True)
