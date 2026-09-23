@@ -6,6 +6,7 @@ from core.supabase_client import supabase
 from db import (
     get_settings, log_status_change, now_iso, update_row,
     get_comments, add_comment, update_comment, delete_comment,
+    get_subtask_comment_summary,
     can_sign_off, signoff_approvers, request_deliverable_completion,
     approve_deliverable_completion, reject_deliverable_completion,
     reopen_deliverable, MigrationMissing, SIGNOFF_PENDING,
@@ -323,8 +324,9 @@ def _save_edit_comment_cb(comment_id: int):
         st.session_state.pop(f"_edit_body_{comment_id}", None)
 
 
-def _notify_comment(task: dict, author_email: str | None, body: str, project_name: str | None):
-    """Email the task owner and supervisor (except the comment's author)."""
+def _notify_comment(task: dict, author_email: str | None, body: str, project_name: str | None,
+                    kind: str = "task"):
+    """Email the owner and supervisor of the task/subtask (except the author)."""
     author_name = st.session_state.get("user_name") or author_email or "Someone"
     enriched = {**task, "project_name": project_name or task.get("project_name", "")}
     recipients = {
@@ -333,7 +335,7 @@ def _notify_comment(task: dict, author_email: str | None, body: str, project_nam
     }
     for e in recipients:
         try:
-            send_task_comment(enriched, e, author_name, body)
+            send_task_comment(enriched, e, author_name, body, kind=kind)
         except Exception as exc:  # never let a mail failure break the post
             print(f"[modals._notify_comment] {exc}")
 
@@ -375,11 +377,25 @@ def _render_one_comment(c: dict, me: str | None):
 
 
 def _render_task_comments(task: dict, can_edit: bool, project_name: str | None = None):
-    """Discussion thread for a task. Posting is restricted to admin / owner /
-    supervisor (``can_edit``); everyone viewing the task can read it."""
-    task_id = task.get("id")
-    if not task_id:
+    """Discussion thread for a task (its own comments, not its subtasks')."""
+    _render_comments(task, can_edit, project_name, task_id=task.get("id"))
+
+
+def _render_comments(item: dict, can_edit: bool, project_name: str | None = None, *,
+                     task_id: int | None, subtask_id: int | None = None,
+                     deliverable_id: int | None = None):
+    """Discussion thread for a task, a subtask (``subtask_id``) or a
+    deliverable (``deliverable_id``) — one level at a time.
+
+    Posting is restricted to admin / owner / supervisor of that item
+    (``can_edit``); everyone who can open it can read it. A subtask comment is
+    stored with its parent's task_id too, so deleting the task removes it.
+    """
+    if not task_id and deliverable_id is None:
         return
+    kind = ("deliverable" if deliverable_id is not None
+            else "subtask" if subtask_id is not None else "task")
+    tag = f"{kind[0]}{deliverable_id if deliverable_id is not None else subtask_id if subtask_id is not None else task_id}"
     me = st.session_state.get("user_email")
 
     st.markdown("---")
@@ -389,9 +405,9 @@ def _render_task_comments(task: dict, can_edit: bool, project_name: str | None =
     thread_box = st.container()
 
     if can_edit:
-        with st.form(f"comment_form_{task_id}", clear_on_submit=True):
+        with st.form(f"comment_form_{tag}", clear_on_submit=True):
             new_body = st.text_area(
-                "Add a comment", key=f"_new_comment_{task_id}", height=80,
+                "Add a comment", key=f"_new_comment_{tag}", height=80,
                 label_visibility="collapsed", placeholder="Write a comment…",
             )
             posted = st.form_submit_button("💬 Post comment", type="primary")
@@ -399,19 +415,26 @@ def _render_task_comments(task: dict, can_edit: bool, project_name: str | None =
             if not (new_body or "").strip():
                 st.warning("Comment is empty.")
             else:
-                ok, err = add_comment(task_id, me, new_body)
+                ok, err = add_comment(task_id, me, new_body, subtask_id=subtask_id,
+                                      deliverable_id=deliverable_id)
                 if ok:
-                    _notify_comment(task, me, new_body, project_name)
+                    _notify_comment(item, me, new_body, project_name, kind=kind)
                     st.toast("Comment posted")
                 else:
                     st.error(f"Could not post: {err}")
     elif me:
-        st.caption("Only the task owner, supervisor or an admin can post comments.")
+        st.caption(f"Only the {kind} owner, supervisor or an admin can post comments.")
 
-    comments = get_comments(task_id, include_system=True)
+    comments = get_comments(task_id, include_system=True, subtask_id=subtask_id,
+                            deliverable_id=deliverable_id)
     user_comments = [c for c in comments if not c.get("is_system_event")]
     with thread_box:
         st.markdown(f"**💬 Comments ({len(user_comments)})**")
+        if kind == "task":
+            on_subs = sum(get_subtask_comment_summary(task_id).values())
+            if on_subs:
+                st.caption(f"Plus {on_subs} comment{'s' if on_subs != 1 else ''} on its "
+                           "subtasks — open a subtask to read its thread.")
         if not comments:
             st.caption("No comments yet.")
         for c in comments:
@@ -815,6 +838,9 @@ def subtask_details_modal(subtask, can_edit):
         st.write("**Notes/Description**:")
         st.markdown(subtask.get("notes") or "*No notes provided.*")
 
+    _render_comments(subtask, can_edit, (proj or {}).get("name"),
+                     task_id=subtask.get("task_id"), subtask_id=subtask.get("id"))
+
 
 # ── Deliverable Details Modal ─────────────────────────────────────────────────
 
@@ -1021,6 +1047,19 @@ def _signoff_panel(deliverable: dict, can_edit: bool, users_map: dict) -> None:
         st.divider()
 
 
+def _render_deliverable_comments(deliverable: dict, can_edit: bool) -> None:
+    """The deliverable's own thread (not its tasks')."""
+    proj_name = ""
+    try:
+        rows = supabase.table("projects").select("name").eq(
+            "id", deliverable.get("project_id")).execute().data or []
+        proj_name = rows[0].get("name", "") if rows else ""
+    except Exception:
+        pass
+    _render_comments(deliverable, can_edit, proj_name, task_id=None,
+                     deliverable_id=deliverable.get("id"))
+
+
 # Public name: the Projects review queue renders the same panel inline.
 render_signoff_panel = _signoff_panel
 
@@ -1138,6 +1177,7 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
     _signoff_panel(deliverable, can_edit, users_map)
 
     if not can_edit:
+        _render_deliverable_comments(deliverable, False)
         return
 
     # ── Edit form ─────────────────────────────────────────────────────────────
@@ -1237,3 +1277,5 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
                             {**deliverable, **payload}, owner, me, "")
             st.success("Saved!")
             st.rerun()
+
+    _render_deliverable_comments(deliverable, True)

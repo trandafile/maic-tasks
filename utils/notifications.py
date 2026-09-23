@@ -140,8 +140,10 @@ def send_task_assigned(task: dict, assignee_email: str, assigner_name: str) -> b
     return _send(subject, body, assignee_email, html_body=html)
 
 
-def send_task_comment(task: dict, recipient_email: str, author_name: str, body_text: str) -> bool:
-    """Notify a task owner/supervisor that a new comment was posted."""
+def send_task_comment(task: dict, recipient_email: str, author_name: str, body_text: str,
+                      kind: str = "task") -> bool:
+    """Notify an owner/supervisor that a new comment was posted on a task or,
+    with ``kind="subtask"``, on a subtask."""
     if not recipient_email:
         return False
 
@@ -149,7 +151,7 @@ def send_task_comment(task: dict, recipient_email: str, author_name: str, body_t
     app_url = cfg.get("app_url", "http://localhost:8501")
     recipient_name = _get_name_from_email(recipient_email).split()[0]
 
-    seq_id    = task.get("sequence_id") or f"T-{task.get('id', '?')}"
+    seq_id    = task.get("sequence_id") or f"{ {'subtask': 'S', 'deliverable': 'D'}.get(kind, 'T') }-{task.get('id', '?')}"
     task_name = task.get("name", "")
     project   = task.get("project_name", "")
 
@@ -161,8 +163,8 @@ def send_task_comment(task: dict, recipient_email: str, author_name: str, body_t
     subject = f"[MAIC LAB] Nuovo commento: {seq_id} — {task_name}"
     body = (
         f"Ciao {recipient_name},\n\n"
-        f"{author_name} ha scritto un commento sul task seguente.\n\n"
-        f"Task: {seq_id} — {task_name}\n"
+        f"{author_name} ha scritto un commento sul {kind} seguente.\n\n"
+        f"{kind.capitalize()}: {seq_id} — {task_name}\n"
         f"{project_line}\n"
         f"Commento:\n{snippet}\n\n"
         f"Rispondi dall'app: {app_url}\n\n"
@@ -180,12 +182,12 @@ def send_task_comment(task: dict, recipient_email: str, author_name: str, body_t
     )
     html = T.shell(
         preheader=f"{author_name}: {snippet[:80]}",
-        heading="Nuovo commento su un tuo task",
+        heading=f"Nuovo commento su un tuo {kind}",
         body_html="".join([
             T.paragraph(f"Ciao <b>{T.esc(recipient_name)}</b>,"),
             T.paragraph(f"<b>{T.esc(author_name)}</b> ha commentato:"),
             quote,
-            T.section("💬 TASK", "normal", [task]),
+            T.section(f"💬 {kind.upper()}", "normal", [task]),
         ]),
         app_url=app_url,
         cta_label="Rispondi",

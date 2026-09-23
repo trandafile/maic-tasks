@@ -18,7 +18,7 @@ import streamlit as st
 from core.supabase_client import supabase
 from db import (
     get_settings, compute_delay_stats, get_conference_paper_tasks, get_comment_counts,
-    get_pending_timesheets, days_since_update, stale_threshold,
+    get_pending_timesheets, days_since_update, stale_threshold, get_subtask_comment_counts,
 )
 from utils.helpers import PRIORITY_ORDER
 from utils.modals import task_details_modal, subtask_details_modal
@@ -95,7 +95,7 @@ def _row_context(item: dict, kind: str, ctx: dict) -> tuple[str, str, str]:
         parent = ctx["task_map"].get(item.get("task_id"), {})
         proj = ctx["projects"].get(parent.get("project_id"), {})
         path = f"in: {parent.get('name')}" if parent.get("name") else ""
-        cc = 0  # comments live on tasks
+        cc = ctx["subtask_comment_counts"].get(item.get("id"), 0)
 
     meta = []
     idle = days_since_update(item)
@@ -204,6 +204,7 @@ def _fetch(email: str):
         "email": email,
         "is_admin": st.session_state.get("user_role") == "admin",
         "comment_counts": get_comment_counts(),
+        "subtask_comment_counts": get_subtask_comment_counts(),
     }
 
 

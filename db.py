@@ -325,6 +325,26 @@ UPDATE deliverables
 """
 
 
+COMMENT_LEVELS_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor -> comments on subtasks and on deliverables,
+-- not only on tasks. Each comment belongs to exactly one level:
+--
+--   task         task_id                     (subtask_id and deliverable_id NULL)
+--   subtask      task_id = parent + subtask_id
+--   deliverable  deliverable_id              (task_id NULL)
+--
+-- A subtask comment keeps its parent's task_id, so deleting a task still
+-- removes every comment underneath it. A deliverable comment has no task,
+-- hence task_id must accept NULL (harmless if it already does).
+ALTER TABLE comments ALTER COLUMN task_id DROP NOT NULL;
+ALTER TABLE comments
+    ADD COLUMN IF NOT EXISTS subtask_id INTEGER REFERENCES subtasks(id) ON DELETE CASCADE,
+    ADD COLUMN IF NOT EXISTS deliverable_id INTEGER REFERENCES deliverables(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_comments_subtask ON comments (subtask_id);
+CREATE INDEX IF NOT EXISTS idx_comments_deliverable ON comments (deliverable_id);
+"""
+
+
 CONTRACTS_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → contract management + monthly timesheets.
 -- Until this runs, the Contracts and Time Sheets pages show this snippet and the
@@ -930,13 +950,36 @@ def _comment_author_name(row: dict) -> str:
     return row.get("author_email") or "?"
 
 
-def get_comments(task_id: int, include_system: bool = True) -> list[dict]:
-    """Return the comment thread of a task, oldest first, with `author_name`."""
-    try:
-        q = supabase.table("comments").select("*, users(name)").eq("task_id", task_id)
+def get_comments(task_id: int | None = None, include_system: bool = True,
+                 subtask_id: int | None = None,
+                 deliverable_id: int | None = None) -> list[dict]:
+    """A comment thread, oldest first, with ``author_name``.
+
+    One level at a time: a deliverable's thread (``deliverable_id``), a
+    subtask's (``subtask_id``) or a task's own (``task_id`` — comments on its
+    subtasks excluded). Before the comment-levels migration every comment is
+    task-level, and the unfiltered task query is the right answer.
+    """
+    def _q():
+        q = supabase.table("comments").select("*, users(name)")
         if not include_system:
             q = q.eq("is_system_event", False)
-        rows = q.order("created_at", desc=False).execute().data or []
+        return q
+
+    try:
+        if deliverable_id is not None:
+            rows = _q().eq("deliverable_id", deliverable_id).order(
+                "created_at", desc=False).execute().data or []
+        elif subtask_id is not None:
+            rows = _q().eq("subtask_id", subtask_id).order(
+                "created_at", desc=False).execute().data or []
+        else:
+            try:
+                rows = _q().eq("task_id", task_id).is_("subtask_id", "null").order(
+                    "created_at", desc=False).execute().data or []
+            except Exception:
+                rows = _q().eq("task_id", task_id).order(
+                    "created_at", desc=False).execute().data or []
     except Exception as exc:
         print(f"[db.get_comments] {exc}")
         return []
@@ -945,23 +988,55 @@ def get_comments(task_id: int, include_system: bool = True) -> list[dict]:
     return rows
 
 
-def add_comment(task_id: int, author_email: str | None, body: str) -> tuple[bool, str]:
-    """Insert a user comment. Returns (success, error)."""
+def add_comment(task_id: int | None, author_email: str | None, body: str,
+                subtask_id: int | None = None,
+                deliverable_id: int | None = None) -> tuple[bool, str]:
+    """Insert a user comment on a task, one of its subtasks, or a deliverable.
+    Returns (success, error)."""
     text = (body or "").strip()
     if not text:
         return False, "Empty comment."
+    row = {
+        "task_id":         task_id,
+        "author_email":    author_email,
+        "body":            text,
+        "is_system_event": False,
+    }
+    if subtask_id is not None:
+        row["subtask_id"] = subtask_id
+    if deliverable_id is not None:
+        row["deliverable_id"] = deliverable_id
     try:
-        res = supabase.table("comments").insert({
-            "task_id":         task_id,
-            "author_email":    author_email,
-            "body":            text,
-            "is_system_event": False,
-        }).execute()
+        res = supabase.table("comments").insert(row).execute()
         if not getattr(res, "data", None):
             return False, "The database did not confirm the insert."
         return True, ""
     except Exception as exc:
-        return False, str(exc)
+        msg = str(exc)
+        new_level = subtask_id is not None or deliverable_id is not None
+        if new_level and any(k in msg for k in ("subtask_id", "deliverable_id",
+                                                 "task_id", "PGRST204", "23502")):
+            # Never fall back to posting it on the task: it would land in the
+            # wrong thread and read as a different conversation.
+            return False, ("Comments on subtasks and deliverables need the "
+                           "'Comment levels' migration (Admin Panel → Settings → "
+                           "Database schema).")
+        return False, msg
+
+
+def get_subtask_comment_summary(task_id: int) -> dict[int, int]:
+    """{subtask_id: n} of human comments on a task's subtasks."""
+    try:
+        rows = supabase.table("comments").select("subtask_id").eq(
+            "task_id", task_id).eq("is_system_event", False).execute().data or []
+    except Exception:
+        return {}
+    out: dict[int, int] = {}
+    for r in rows:
+        sid = r.get("subtask_id")
+        if sid is not None:
+            out[sid] = out.get(sid, 0) + 1
+    return out
 
 
 def update_comment(comment_id: int, body: str) -> tuple[bool, str]:
@@ -985,24 +1060,61 @@ def delete_comment(comment_id: int) -> tuple[bool, str]:
 
 
 def get_comment_counts(task_ids: list[int] | None = None) -> dict[int, int]:
-    """Return {task_id: user-comment count} for a badge on task rows.
+    """{task_id: n} of human comments in each TASK's own thread.
 
-    One query; system events are excluded so the badge reflects human
-    discussion only. Empty/failed → {} (badge simply not shown).
+    Comments on subtasks are excluded (they have their own badge, see
+    get_subtask_comment_counts), so the number matches what the task dialog
+    shows. Empty/failed → {} (badge simply not shown).
     """
-    try:
-        q = supabase.table("comments").select("task_id").eq("is_system_event", False)
+    def _fetch(cols):
+        q = supabase.table("comments").select(cols).eq("is_system_event", False)
         if task_ids:
             q = q.in_("task_id", list(task_ids))
-        rows = q.execute().data or []
+        return q.execute().data or []
+
+    try:
+        try:
+            rows = _fetch("task_id, subtask_id")
+        except Exception:
+            rows = _fetch("task_id")          # before the subtask migration
     except Exception as exc:
         print(f"[db.get_comment_counts] {exc}")
         return {}
     counts: dict[int, int] = {}
     for r in rows:
         tid = r.get("task_id")
-        if tid is not None:
+        if tid is not None and r.get("subtask_id") is None:
             counts[tid] = counts.get(tid, 0) + 1
+    return counts
+
+
+def get_deliverable_comment_counts() -> dict[int, int]:
+    """{deliverable_id: n} of human comments, for the badge on deliverables."""
+    try:
+        rows = supabase.table("comments").select("deliverable_id").eq(
+            "is_system_event", False).execute().data or []
+    except Exception:
+        return {}
+    counts: dict[int, int] = {}
+    for r in rows:
+        did = r.get("deliverable_id")
+        if did is not None:
+            counts[did] = counts.get(did, 0) + 1
+    return counts
+
+
+def get_subtask_comment_counts() -> dict[int, int]:
+    """{subtask_id: n} of human comments, for the badge on subtask rows."""
+    try:
+        rows = supabase.table("comments").select("subtask_id").eq(
+            "is_system_event", False).execute().data or []
+    except Exception:
+        return {}
+    counts: dict[int, int] = {}
+    for r in rows:
+        sid = r.get("subtask_id")
+        if sid is not None:
+            counts[sid] = counts.get(sid, 0) + 1
     return counts
 
 
