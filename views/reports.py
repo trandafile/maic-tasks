@@ -328,8 +328,19 @@ def _fetch(rbac_email: str | None = None):
 def _render_main_report():
     user_role  = st.session_state.get("user_role")
     user_email = st.session_state.get("user_email")
-    rbac_email = None if user_role == "admin" else user_email
     is_admin   = user_role == "admin"
+    # Same default as Projects: an admin starts from their own work (owner or
+    # supervisor) and opts into the whole lab explicitly.
+    show_all = True
+    if is_admin:
+        show_all = st.checkbox(
+            "All tasks and projects", value=False, key="rp_show_all",
+            help="Unchecked (default): only tasks where you are the owner or the "
+                 "supervisor, as in Projects.",
+        )
+        if not show_all:
+            st.caption("Showing only tasks where you are owner or supervisor.")
+    rbac_email = None if (is_admin and show_all) else user_email
 
     projects, deliverables, tasks, subtasks, users = _fetch(rbac_email)
     settings = get_settings()
@@ -345,28 +356,6 @@ def _render_main_report():
     users_meta = {u["email"]: u for u in users}
     # Comment counts for the 💬 badge on task rows (one query per render).
     st.session_state["_comment_counts"] = get_comment_counts([t["id"] for t in tasks if t.get("id")])
-
-    # Scoped CSS to align deliverable containers with Active Tasks view
-    st.markdown(
-        """
-        <style>
-        .deliverable-box [data-testid="stVerticalBlockBorderWrapper"] {
-            border: 1px solid #9FD9C8 !important;
-            border-radius: 0.5rem !important;
-        }
-        .project-report-compact [data-testid="stElementContainer"] {
-            margin-bottom: 0.3rem !important;
-        }
-        .project-report-compact [data-testid="stHorizontalBlock"] {
-            gap: 0.5rem !important;
-        }
-        .project-report-compact [data-testid="stVerticalBlock"] > [data-testid="element-container"]:last-child {
-            margin-bottom: 0.1rem !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
     with st.expander("⚙️ Filters", expanded=False):
         fc1, fc2, fc3 = st.columns(3)
