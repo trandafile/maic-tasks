@@ -61,6 +61,9 @@ PRIORITY_STYLE = {                    # fg, border — outlined, never a filled 
 }
 INACTIVE = ("Completed", "Cancelled")
 
+import re as _re
+CODE_RE = _re.compile(r"^[A-Z](\.\d+)+$")      # E.1.2 — see utils/codes.py
+
 # Column share between the HTML row and its action buttons.
 ROW_COLS = [12, 1.7]
 
@@ -282,7 +285,7 @@ def row_html(item: dict, *, kind: str = "task", user_map: dict | None = None,
              project_label: str | None = None, meta: str | None = None,
              date_html: str | None = None, readonly: bool = False,
              show_people: bool = True, strike_done: bool = True,
-             flat: bool = False) -> str:
+             flat: bool = False, code: str | None = None) -> str:
     """One work item as a one-line grid row.
 
     kind: "task" | "subtask". In a tree (default) a task opens a group and its
@@ -293,6 +296,11 @@ def row_html(item: dict, *, kind: str = "task", user_map: dict | None = None,
     people and deadline, as the rest of the app does.
     """
     user_map = user_map or {}
+    if code is None:
+        # Once numbered, sequence_id holds the readable code (E.1.2): every
+        # list shows it without having to know the numbering.
+        seq = item.get("sequence_id") or ""
+        code = seq if CODE_RE.match(seq) else ""
     status = item.get("status") or "Not started"
     tier, _ = urgency(item, threshold)
     if readonly:
@@ -323,9 +331,13 @@ def row_html(item: dict, *, kind: str = "task", user_map: dict | None = None,
                    f"text-overflow:ellipsis;font-size:11px;color:{TEXT_MUTED}'>"
                    f"{esc(second)}</span>") if second else ""
 
+    code_html = (f"<span style='flex:0 0 58px;font-family:ui-monospace,Consolas,monospace;"
+                 f"font-size:11px;color:{TEXT_SOFT if not is_sub else TEXT_MUTED}'>"
+                 f"{esc(code)}</span>") if code else ""
     name_cell = (
-        f"<div style='min-width:0;padding-left:{indent};display:flex;align-items:center;"
-        f"gap:6px;white-space:nowrap;overflow:hidden'>"
+        f"<div style='min-width:0;display:flex;align-items:center;gap:6px;"
+        f"white-space:nowrap;overflow:hidden'>{code_html}"
+        f"<span style='flex:0 0 {indent}'></span>"
         f"{project_chip(project_label)}{prefix}"
         f"<span{title} style='flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;"
         f"font-size:{size};font-weight:{weight};color:{name_color};{strike}'>"
@@ -364,8 +376,10 @@ def progress_bar(done: int, total: int, width: int = 120) -> str:
 # ── Deliverable band (Projects tree, Project Report) ─────────────────────────
 
 def deliverable_head_html(d: dict, d_tasks: list, user_map: dict, threshold: int = 14,
-                          type_chip: str = "") -> str:
-    """Deliverable band: name, type, status, deadline, progress, people."""
+                          type_chip: str = "", code: str = "", colour: str = "#0F4D3B") -> str:
+    """Deliverable band: code and name, status, deadline, progress, people; the
+    type label sits at the right, next to the action icons. ``colour`` is the
+    deliverable type's colour (the band tint is set by the caller's CSS)."""
     status = d.get("status") or "Not started"
     tier, days = urgency(d, threshold)
     dl = d.get("deadline")
@@ -395,11 +409,13 @@ def deliverable_head_html(d: dict, d_tasks: list, user_map: dict, threshold: int
     return (
         "<div class='maic-deliv-head' style='padding:4px 8px 3px 8px'>"
         "<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
-        "<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.05em'>"
-        "DELIVERABLE</span>"
-        f"<span style='font-size:15px;font-weight:700;color:#0F4D3B'>{esc(d.get('name', ''))}</span>"
-        f"{type_chip}"
-        f"{status_chip(status)}{signoff}{archived}{dl_html}</div>"
+        + (f"<span style='font-family:ui-monospace,Consolas,monospace;font-size:14px;"
+           f"font-weight:700;color:{colour}'>{esc(code)}</span>" if code else
+           f"<span style='font-size:10px;color:{colour};font-weight:700;"
+           f"letter-spacing:0.05em'>DELIVERABLE</span>")
+        + f"<span style='font-size:15px;font-weight:700;color:{colour}'>{esc(d.get('name', ''))}</span>"
+        f"{status_chip(status)}{signoff}{archived}{dl_html}"
+        f"<span style='margin-left:auto'>{type_chip}</span></div>"
         "<div style='display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:2px'>"
         f"{progress_bar(done, len(counted))}"
         f"<span style='font-size:12px;color:#3C4043'>{people}</span></div>"

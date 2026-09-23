@@ -159,6 +159,13 @@ def _add_paper_modal(project_id: int, users: list[dict], conferences: list[dict]
                 t_id = res.data[0]["id"]
                 seq_id = f"CONF-{t_id}"
                 supabase.table("tasks").update({"sequence_id": seq_id}).eq("id", t_id).execute()
+                try:
+                    from utils import codes as K
+                    if K.resync_project(new_task.get("project_id")):
+                        _r = supabase.table("tasks").select("sequence_id").eq("id", t_id).execute().data
+                        seq_id = (_r[0].get("sequence_id") if _r else None) or seq_id
+                except Exception as exc:
+                    print(f"[conference_papers] code resync: {exc}")
                 log_status_change("task", t_id, project_id, None, "Not started", me)
                 if tentative:
                     set_task_label(t_id, TENTATIVE_LABEL, True)

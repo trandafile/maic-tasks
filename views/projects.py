@@ -9,6 +9,7 @@ from utils.notifications import send_task_assigned
 from utils.helpers import parse_deliverable_tag_styles, deliverable_chip_html
 from utils.md_editor import markdown_editor
 from db import get_settings
+from utils import codes as K
 from utils.rows import (
     ROW_COLS, INACTIVE, row_html, header_html, urgency_sort, fmt, esc, project_chip,
     deliverable_head_html, chip, status_chip,
@@ -131,8 +132,19 @@ def add_deliverable_modal(project_id, users):
     if not type_options:
         type_options = ["paper", "layout", "prototype"]
 
+    numbered = K.numbering_available()
+    used = K.used_deliverable_nos(project_id) if numbered else set()
     with st.form("new_deliv_form"):
-        name     = st.text_input("Deliverable Name*")
+        if numbered:
+            c_no, c_name = st.columns([1, 4])
+            with c_no:
+                code_no = st.number_input(
+                    "No.", min_value=1, step=1, value=K.next_free(used),
+                    help="Proposed: the first free number. Any free number is accepted.")
+            with c_name:
+                name = st.text_input("Deliverable Name*")
+        else:
+            code_no, name = None, st.text_input("Deliverable Name*")
         type_val = st.selectbox("Type", type_options)
         deadline = st.date_input("Deadline", value=None, format="DD/MM/YYYY")
         user_opts = {f"{u['name']} ({u['email']})": u['email'] for u in users}
@@ -153,8 +165,14 @@ def add_deliverable_modal(project_id, users):
             if not name:
                 st.error("Name is required.")
                 return
+            if numbered:
+                err = K.check_free(code_no, used)
+                if err:
+                    st.error(err)
+                    return
             try:
                 supabase.table("deliverables").insert({
+                    **({"code_no": int(code_no)} if numbered else {}),
                     "project_id": project_id, "name": name, "type": type_val,
                     "status": "Not started",
                     "deadline": str(deadline) if deadline else None,
@@ -188,11 +206,29 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
                     prefill_name = k
                     break
 
-        sel_deliv = st.selectbox(
-            "Link to Deliverable",
-            list(deliv_options.keys()),
-            index=list(deliv_options.keys()).index(prefill_name)
-        )
+        numbered = K.numbering_available()
+        if numbered:
+            proposed = K.next_free(K.used_task_nos(project_id, prefill_deliverable_id))
+            c_deliv, c_no = st.columns([4, 1])
+            with c_deliv:
+                sel_deliv = st.selectbox(
+                    "Link to Deliverable",
+                    list(deliv_options.keys()),
+                    index=list(deliv_options.keys()).index(prefill_name)
+                )
+            with c_no:
+                code_no = st.number_input(
+                    "No.", min_value=1, step=1, value=proposed,
+                    help="Number within the deliverable (tasks without one are E.0.n). "
+                         "Proposed: the first free. If you change deliverable and keep "
+                         "this proposal, the first free number there is used.")
+        else:
+            proposed = code_no = None
+            sel_deliv = st.selectbox(
+                "Link to Deliverable",
+                list(deliv_options.keys()),
+                index=list(deliv_options.keys()).index(prefill_name)
+            )
 
         user_opts = {f"{u['name']} ({u['email']})": u['email'] for u in users}
         me = st.session_state.get('user_email')
@@ -217,6 +253,17 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
             if not name:
                 st.error("Title is required.")
                 return
+            chosen_no = None
+            if numbered:
+                parent = deliv_options[sel_deliv]
+                used = K.used_task_nos(project_id, parent)
+                chosen_no = int(code_no)
+                if parent != prefill_deliverable_id and chosen_no == proposed:
+                    chosen_no = K.next_free(used)      # the proposal belonged elsewhere
+                err = K.check_free(chosen_no, used)
+                if err:
+                    st.error(err)
+                    return
             new_task = {
                 "project_id":     project_id,
                 "deliverable_id": deliv_options[sel_deliv],
@@ -228,14 +275,20 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
                 "deadline":       str(deadline) if deadline else None,
                 "notes":          notes,
                 "sort_order":     999,
+                **({"code_no": chosen_no} if chosen_no else {}),
             }
             try:
                 res   = supabase.table("tasks").insert(new_task).execute()
                 t_id  = res.data[0]['id']
                 p_res = supabase.table("projects").select("identifier, name").eq("id", project_id).execute()
-                ident = (p_res.data[0]['identifier'] if p_res.data and p_res.data[0]['identifier'] else "TSK")
-                seq_id = f"{ident}-{t_id}"
-                supabase.table("tasks").update({"sequence_id": seq_id}).eq("id", t_id).execute()
+                seq_id = None
+                if numbered and K.resync_project(project_id):
+                    row = supabase.table("tasks").select("sequence_id").eq("id", t_id).execute().data
+                    seq_id = row[0].get("sequence_id") if row else None
+                if not seq_id:   # project without a letter yet: legacy identifier
+                    ident = (p_res.data[0]['identifier'] if p_res.data and p_res.data[0]['identifier'] else "TSK")
+                    seq_id = f"{ident}-{t_id}"
+                    supabase.table("tasks").update({"sequence_id": seq_id}).eq("id", t_id).execute()
 
                 log_status_change(
                     "task", t_id, project_id, None, "Not started",
@@ -262,8 +315,18 @@ def add_task_modal(project_id, deliverables, users, prefill_deliverable_id=None)
 
 @st.dialog("Add Subtask")
 def add_subtask_modal(task_id, users):
+    numbered = K.numbering_available()
+    used = K.used_subtask_nos(task_id) if numbered else set()
     with st.form("new_subtask_form"):
-        name      = st.text_input("Subtask Title*")
+        if numbered:
+            c_no, c_name = st.columns([1, 4])
+            with c_no:
+                code_no = st.number_input("No.", min_value=1, step=1, value=K.next_free(used),
+                                          help="Number within the task. Any free number is accepted.")
+            with c_name:
+                name = st.text_input("Subtask Title*")
+        else:
+            code_no, name = None, st.text_input("Subtask Title*")
         user_opts = {f"{u['name']} ({u['email']})": u['email'] for u in users}
         me        = st.session_state.get('user_email')
 
@@ -286,6 +349,11 @@ def add_subtask_modal(task_id, users):
             if not name:
                 st.error("Title is required.")
                 return
+            if numbered:
+                err = K.check_free(code_no, used)
+                if err:
+                    st.error(err)
+                    return
             try:
                 owner_email = user_opts[owner]
                 sup_email   = user_opts[supervisor] if supervisor != "None" else None
@@ -298,12 +366,18 @@ def add_subtask_modal(task_id, users):
                     "deadline":         str(deadline) if deadline else None,
                     "notes":            notes,
                     "sort_order":       999,
+                    **({"code_no": int(code_no)} if numbered else {}),
                 }).execute()
 
+                sub_seq = None
                 if res.data:
                     parent_rows = supabase.table("tasks").select("project_id").eq(
                         "id", task_id
                     ).execute().data
+                    if numbered and parent_rows and K.resync_project(parent_rows[0].get("project_id")):
+                        r = supabase.table("subtasks").select("sequence_id").eq(
+                            "id", res.data[0]["id"]).execute().data
+                        sub_seq = r[0].get("sequence_id") if r else None
                     log_status_change(
                         "subtask", res.data[0]["id"],
                         parent_rows[0].get("project_id") if parent_rows else None,
@@ -315,7 +389,7 @@ def add_subtask_modal(task_id, users):
                 assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
                 subtask_as_task = {
                     "id": res.data[0]["id"] if res.data else 0,
-                    "sequence_id": f"SUB-{res.data[0]['id']}" if res.data else "",
+                    "sequence_id": sub_seq or (f"SUB-{res.data[0]['id']}" if res.data else ""),
                     "name": name,
                     "deadline": str(deadline) if deadline else None,
                     "priority": "none",
@@ -340,7 +414,17 @@ def add_project_modal():
         c1, c2     = st.columns(2)
         with c1:
             acronym    = st.text_input("Acronym", help="E.g. HIPA2")
-            identifier = st.text_input("Task ID Template*", help="E.g. HIP → HIP-1, HIP-2…")
+            numbered   = K.numbering_available()
+            taken      = K.taken_letters() if numbered else {}
+            if numbered:
+                letter_sel = st.selectbox(
+                    "Project letter", ["Auto (from the acronym)"]
+                    + [ch for ch in K.LETTERS if ch not in taken],
+                    help="Codes become E.1 (deliverable), E.1.2 (task), E.1.2.1 (subtask). "
+                         "One letter per active project; archiving frees it. In use: "
+                         + (", ".join(f"{k} {v}" for k, v in sorted(taken.items())) or "none"))
+            else:
+                letter_sel = None
         with c2:
             start_date = st.date_input("Start Date", value=_dt.date.today(), format="DD/MM/YYYY")
             end_date   = st.date_input("Estimated End Date", value=None, format="DD/MM/YYYY")
@@ -353,14 +437,23 @@ def add_project_modal():
         )
 
         if st.form_submit_button("Create Project", type="primary"):
-            if not name or not identifier:
-                st.error("Name and ID Template are required.")
+            if not name:
+                st.error("Name is required.")
                 return
+            letter = None
+            if numbered:
+                letter = (K.propose_letter({"acronym": acronym, "name": name}, taken)
+                          if letter_sel.startswith("Auto") else letter_sel)
+                if not letter:
+                    st.error("Every letter is in use by an active project: archive one first.")
+                    return
             try:
                 supabase.table("projects").insert({
                     "name":            name,
                     "acronym":         acronym,
-                    "identifier":      identifier.upper(),
+                    # legacy text id, still shown in a few reports
+                    "identifier":      (acronym or name).upper()[:12],
+                    **({"code_letter": letter} if letter else {}),
                     "funding_agency":  funding,
                     "description":     description or None,
                     "start_date":      str(start_date) if start_date else None,
@@ -503,7 +596,7 @@ def _confirm_delete(kind: str, item: dict, key_prefix: str) -> None:
 
 
 def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix,
-                     threshold: int, show_done: bool = True):
+                     threshold: int, show_done: bool = True, codes: dict | None = None):
     """A task and its subtasks, in the shared row style (utils/rows.py)."""
     t_id = t["id"]
     can_edit = is_admin or t.get("owner_email") == user_email \
@@ -513,7 +606,7 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
     c_row, c_act = st.columns(ROW_COLS, vertical_alignment="center")
     with c_row:
         st.html(row_html(t, kind="task", user_map=user_map, threshold=threshold,
-                         readonly=readonly))
+                         readonly=readonly, code=(codes or {}).get(("t", t_id))))
     with c_act:
         if not readonly:
             a_det, a_sub, a_del = _row_actions()
@@ -543,7 +636,7 @@ def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_pre
         sc_row, sc_act = st.columns(ROW_COLS, vertical_alignment="center")
         with sc_row:
             st.html(row_html(s, kind="subtask", user_map=user_map, threshold=threshold,
-                             readonly=s_readonly))
+                             readonly=s_readonly, code=(codes or {}).get(("s", s_id))))
         with sc_act:
             if not s_readonly:
                 a_det, _a_gap, a_del = _row_actions()
@@ -767,8 +860,33 @@ def _toggle_project(pid: int) -> None:
     state[pid] = not state.get(pid, False)
 
 
-# The title row must stay as low as a text line: app.py pads every column
-# block by 10px, and buttons default to ~40px.
+def _tint(hex_colour: str, weight: float = 0.13) -> str:
+    """The colour at ``weight`` opacity over white (a light wash)."""
+    h = (hex_colour or "#5F6368").lstrip("#")
+    if len(h) != 6:
+        h = "5F6368"
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return "#%02X%02X%02X" % tuple(round(255 - (255 - c) * weight) for c in (r, g, b))
+
+
+def _shade(hex_colour: str) -> str:
+    """Readable text colour from a type colour (kept as is: they are dark)."""
+    return hex_colour if hex_colour and hex_colour.startswith("#") else "#3C4043"
+
+
+def _deliverable_card_css(key: str, colour: str) -> str:
+    """A deliverable card: thick edge in the type colour, tinted band."""
+    return (
+        f"div.st-key-{key} {{ background:#FFFFFF; border:1px solid #E3E6EA; "
+        f"border-left:4px solid {colour}; border-radius:0 8px 8px 0; padding-bottom:4px; }}"
+        f"div.st-key-{key} div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) "
+        f"{{ background:{_tint(colour)} !important; border-radius:0 7px 0 0 !important; }}"
+    )
+
+
+# The project title is a tab sitting on the project box (open), or a closed
+# pill. The title row stays as low as a line of text: app.py pads every
+# column block by 10px and buttons default to ~40px.
 _PROJECT_HEAD_CSS = """
 <style>
 div[class*="st-key-projhead_"] div[data-testid='stHorizontalBlock'] {
@@ -779,11 +897,23 @@ div[class*="st-key-projhead_"] button {
     min-height: 0 !important; height: 28px; padding: 0 6px !important;
 }
 div[class*="st-key-projhead_"] button p { font-size: 0.85rem; white-space: nowrap; }
-div[class*="st-key-projtgl_"] button { justify-content: flex-start; }
-div[class*="st-key-projtgl_"] button p {
-    font-size: 0.98rem !important; font-weight: 600; color: #202124;
+div[class*="st-key-projtgl_"] button {
+    height: 32px !important; padding: 0 14px !important; justify-content: flex-start;
+    background: #FFFFFF !important; border: 1px solid #C9CED4 !important;
 }
-div[class*="st-key-projbox_"] { gap: 0.6rem; }
+div[class*="st-key-projtgl_o_"] button {
+    border-bottom: 1px solid #FAFBFC !important; border-radius: 8px 8px 0 0 !important;
+    margin-bottom: -1px; position: relative; z-index: 2; background: #FAFBFC !important;
+}
+div[class*="st-key-projtgl_c_"] button { border-radius: 8px !important; }
+div[class*="st-key-projtgl_"] button p {
+    font-size: 0.98rem !important; color: #202124;
+}
+div[class*="st-key-projbox_"] {
+    border: 1px solid #C9CED4; border-radius: 0 12px 12px 12px;
+    background: #FAFBFC; padding: 12px; gap: 12px;
+}
+div[class*="st-key-projwrap_"] { margin-bottom: 10px; }
 </style>
 """
 
@@ -993,22 +1123,30 @@ def show_projects():
             open_state[proj["id"]] = mode == "all"
 
     st.markdown(_PROJECT_HEAD_CSS, unsafe_allow_html=True)
+    type_colour = {s["name"].strip(): s.get("color") or "#5F6368"
+                   for s in parse_deliverable_tag_styles(settings.get("deliverable_tag_styles"))
+                   if str(s.get("name", "")).strip()}
 
     for proj in projects:
         proj_id   = proj["id"]
         proj_name = proj.get("name", "Project")
         acronym   = proj.get("acronym", "")
-        arch_tag  = "  · archived" if proj.get("is_archived") else ""
+        letter    = proj.get("code_letter") or ""
+        arch_tag  = "  · _archived_" if proj.get("is_archived") else ""
         is_open   = bool(open_state.get(proj_id, False))
+        state     = "o" if is_open else "c"
 
-        with st.container(border=True, key=f"projbox_{proj_id}"):
-            # ── Title row: toggle on the left, actions on the right ──────────
+        with st.container(key=f"projwrap_{proj_id}", gap=None):
+            # ── Title: a tab sitting on the box, actions on the right ────────
             with st.container(key=f"projhead_{proj_id}"):
-                h_title, h_actions = st.columns([6, 4], vertical_alignment="center")
+                h_title, h_actions = st.columns([6, 4], vertical_alignment="bottom")
                 with h_title:
+                    badge = f":violet-background[**{letter}**]  " if letter else ""
+                    title = (f"**{acronym}** · {proj_name}" if acronym and acronym != proj_name
+                             else f"**{proj_name}**")
                     st.button(
-                        f"{'▾' if is_open else '▸'}  📁  {proj_name} ({acronym}){arch_tag}",
-                        key=f"projtgl_{proj_id}", type="tertiary",
+                        f"{'▾' if is_open else '▸'}  {badge}{title}{arch_tag}",
+                        key=f"projtgl_{state}_{proj_id}", type="tertiary",
                         on_click=_toggle_project, args=(proj_id,),
                     )
                 with h_actions:
@@ -1024,83 +1162,110 @@ def show_projects():
                 continue
 
             proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
-            if not proj_deliverables:
-                st.caption("No deliverables defined for this project.")
 
-            # ── One block per deliverable ────────────────────────────────────
+            # Codes for every row of this project (E.1, E.1.2, E.1.2.1)
+            dno = {d["id"]: d.get("code_no") for d in proj_deliverables}
+            codes: dict = {}
+            proj_tasks = [t for t in all_tasks if t.get("project_id") == proj_id]
+            for t in proj_tasks:
+                d_no = dno.get(t.get("deliverable_id")) if t.get("deliverable_id") else 0
+                codes[("t", t["id"])] = K.fmt(letter, d_no, t.get("code_no"))
+                for s in subtasks:
+                    if s.get("task_id") == t["id"]:
+                        codes[("s", s["id"])] = K.fmt(letter, d_no, t.get("code_no"),
+                                                      s.get("code_no"))
+
+            # Card per deliverable, edged and tinted with its type's colour
+            css = []
             for d in proj_deliverables:
-                d_id = d["id"]
-                d_all = [t for t in all_tasks if t.get("deliverable_id") == d_id]
-                deliv_tasks = urgency_sort(
-                    [t for t in tasks if t.get("deliverable_id") == d_id], threshold)
+                c = type_colour.get((d.get("type") or "").strip(), "#5F6368")
+                css.append(_deliverable_card_css(f"dlv_{d['id']}", c))
+            css.append(_deliverable_card_css(f"dlv_loose_{proj_id}", "#9AA0A6"))
+            st.markdown("<style>" + "".join(css) + "</style>", unsafe_allow_html=True)
 
-                with st.container(border=True, gap=None):
-                    h_row, h_act = st.columns(ROW_COLS, vertical_alignment="center")
-                    with h_row:
-                        st.html(deliverable_head_html(d, d_all, user_map, threshold,
-                                                   deliverable_chip_html(d.get('type') or 'generic', settings)))
-                    with h_act:
-                        a_det, _a_gap, a_arch = _row_actions()
-                        with a_det:
-                            if st.button("✏️", key=f"det_del_{d_id}", type="tertiary",
-                                         help="Details, edit and sign-off"):
-                                d_can_edit = (
-                                    is_admin
-                                    or d.get("owner_email") == user_email
-                                    or d.get("supervisor_email") == user_email
-                                ) and not d.get("is_archived")
-                                deliverable_details_modal(d, can_edit=d_can_edit)
-                        with a_arch:
-                            if is_admin and not d.get("is_archived"):
-                                if st.button("🗑️", key=f"arch_del_{d_id}", type="tertiary",
-                                             help="Archive deliverable"):
-                                    supabase.table("deliverables").update(
-                                        {"is_archived": True}).eq("id", d_id).execute()
-                                    st.rerun()
+            with st.container(key=f"projbox_{proj_id}"):
+                # ── One block per deliverable ────────────────────────────────────
+                for d in proj_deliverables:
+                    d_id = d["id"]
+                    d_all = [t for t in all_tasks if t.get("deliverable_id") == d_id]
+                    deliv_tasks = urgency_sort(
+                        [t for t in tasks if t.get("deliverable_id") == d_id], threshold)
 
-                    if deliv_tasks:
+                    d_colour = type_colour.get((d.get("type") or "").strip(), "#5F6368")
+                    with st.container(key=f"dlv_{d_id}", gap=None):
+                        h_row, h_act = st.columns(ROW_COLS, vertical_alignment="center")
+                        with h_row:
+                            st.html(deliverable_head_html(
+                                d, d_all, user_map, threshold,
+                                deliverable_chip_html(d.get('type') or 'generic', settings),
+                                code=K.fmt(letter, d.get("code_no")),
+                                colour=_shade(d_colour)))
+                        with h_act:
+                            a_det, _a_gap, a_arch = _row_actions()
+                            with a_det:
+                                if st.button("✏️", key=f"det_del_{d_id}", type="tertiary",
+                                             help="Details, edit and sign-off"):
+                                    d_can_edit = (
+                                        is_admin
+                                        or d.get("owner_email") == user_email
+                                        or d.get("supervisor_email") == user_email
+                                    ) and not d.get("is_archived")
+                                    deliverable_details_modal(d, can_edit=d_can_edit)
+                            with a_arch:
+                                if is_admin and not d.get("is_archived"):
+                                    if st.button("🗑️", key=f"arch_del_{d_id}", type="tertiary",
+                                                 help="Archive deliverable"):
+                                        supabase.table("deliverables").update(
+                                            {"is_archived": True}).eq("id", d_id).execute()
+                                        st.rerun()
+
+                        if deliv_tasks:
+                            hc, _ = st.columns(ROW_COLS)
+                            with hc:
+                                st.html(header_html(first_label="Task"))
+                            for t in deliv_tasks:
+                                _render_task_row(
+                                    t, subtasks, users, user_map, user_email, is_admin,
+                                    key_prefix=f"d{d_id}", threshold=threshold,
+                                    show_done=show_done, codes=codes,
+                                )
+                        elif d_all:
+                            st.caption("All tasks are completed — tick **Show completed** to see them.")
+                        else:
+                            st.caption("No tasks for this deliverable yet.")
+
+                        if st.button("➕ Add task", key=f"add_dt_{d_id}", type="tertiary"):
+                            add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=d_id)
+
+                # ── Tasks without deliverable ────────────────────────────────────
+                unassigned = urgency_sort([
+                    t for t in tasks
+                    if t.get("project_id") == proj_id and not t.get("deliverable_id")
+                ], threshold)
+
+                if unassigned:
+                    with st.container(key=f"dlv_loose_{proj_id}", gap=None):
+                        loose_code = K.fmt(letter, 0)
+                        st.html(
+                            "<div style='background:#F1F3F4;border-radius:0 7px 0 0;padding:5px 8px;"
+                            "display:flex;align-items:center;gap:8px'>"
+                            + (f"<span style='font-family:ui-monospace,Consolas,monospace;"
+                               f"font-size:14px;font-weight:700;color:#5F6368'>{loose_code}</span>"
+                               if loose_code else
+                               "<span style='font-size:16px;line-height:1'>📋</span>")
+                            + "<span style='font-size:14px;font-weight:700;color:#3C4043'>"
+                            "Tasks without deliverable</span>"
+                            f"<span style='font-size:11px;color:#5F6368;background:#FFFFFF;"
+                            f"border:1px solid #DADCE0;border-radius:10px;padding:0 7px'>"
+                            f"{len(unassigned)}</span></div>"
+                        )
                         hc, _ = st.columns(ROW_COLS)
                         with hc:
                             st.html(header_html(first_label="Task"))
-                        for t in deliv_tasks:
+                        for t in unassigned:
                             _render_task_row(
                                 t, subtasks, users, user_map, user_email, is_admin,
-                                key_prefix=f"d{d_id}", threshold=threshold,
-                                show_done=show_done,
+                                key_prefix=f"p{proj_id}_u", threshold=threshold,
+                                show_done=show_done, codes=codes,
                             )
-                    elif d_all:
-                        st.caption("All tasks are completed — tick **Show completed** to see them.")
-                    else:
-                        st.caption("No tasks for this deliverable yet.")
-
-                    if st.button("➕ Add task", key=f"add_dt_{d_id}", type="tertiary"):
-                        add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=d_id)
-
-            # ── Tasks without deliverable ────────────────────────────────────
-            unassigned = urgency_sort([
-                t for t in tasks
-                if t.get("project_id") == proj_id and not t.get("deliverable_id")
-            ], threshold)
-
-            if unassigned:
-                with st.container(border=True, gap=None):
-                    st.html(
-                        "<div style='background:#F1F3F4;border-radius:6px;padding:5px 8px;"
-                        "display:flex;align-items:center;gap:8px'>"
-                        "<span style='font-size:16px;line-height:1'>📋</span>"
-                        "<span style='font-size:14px;font-weight:700;color:#3C4043'>"
-                        "Tasks without deliverable</span>"
-                        f"<span style='font-size:11px;color:#5F6368;background:#FFFFFF;"
-                        f"border:1px solid #DADCE0;border-radius:10px;padding:0 7px'>"
-                        f"{len(unassigned)}</span></div>"
-                    )
-                    hc, _ = st.columns(ROW_COLS)
-                    with hc:
-                        st.html(header_html(first_label="Task"))
-                    for t in unassigned:
-                        _render_task_row(
-                            t, subtasks, users, user_map, user_email, is_admin,
-                            key_prefix=f"p{proj_id}_u", threshold=threshold,
-                            show_done=show_done,
-                        )
 

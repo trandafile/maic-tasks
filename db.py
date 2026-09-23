@@ -345,6 +345,79 @@ CREATE INDEX IF NOT EXISTS idx_comments_deliverable ON comments (deliverable_id)
 """
 
 
+NUMBERING_MIGRATION_SQL = """\
+-- Run once in Supabase SQL Editor -> readable codes E, E.1, E.1.2, E.1.2.1.
+-- One letter per ACTIVE project; a number per deliverable (within its
+-- project), per task (within its deliverable, 0 = no deliverable) and per
+-- subtask (within its task). The app proposes numbers and lets you change
+-- them; the unique indexes below refuse duplicates on every path.
+ALTER TABLE projects     ADD COLUMN IF NOT EXISTS code_letter TEXT;
+ALTER TABLE deliverables ADD COLUMN IF NOT EXISTS code_no INTEGER;
+ALTER TABLE tasks        ADD COLUMN IF NOT EXISTS code_no INTEGER;
+ALTER TABLE tasks        ADD COLUMN IF NOT EXISTS code_history TEXT;
+ALTER TABLE subtasks     ADD COLUMN IF NOT EXISTS code_no INTEGER;
+ALTER TABLE subtasks     ADD COLUMN IF NOT EXISTS code_history TEXT;
+ALTER TABLE subtasks     ADD COLUMN IF NOT EXISTS sequence_id TEXT;
+
+-- Existing work: numbered in creation order within each parent.
+WITH s AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY id) AS rn
+             FROM deliverables)
+UPDATE deliverables d SET code_no = s.rn FROM s WHERE d.id = s.id AND d.code_no IS NULL;
+
+WITH s AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id, COALESCE(deliverable_id, 0)
+                                         ORDER BY id) AS rn
+             FROM tasks)
+UPDATE tasks t SET code_no = s.rn FROM s WHERE t.id = s.id AND t.code_no IS NULL;
+
+WITH s AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY id) AS rn
+             FROM subtasks)
+UPDATE subtasks x SET code_no = s.rn FROM s WHERE x.id = s.id AND x.code_no IS NULL;
+
+-- The old identifiers (ESACA-40 …) stay findable.
+UPDATE tasks SET code_history = sequence_id
+ WHERE code_history IS NULL AND sequence_id IS NOT NULL AND sequence_id !~ '^[A-Z]([.][0-9]+)+$';
+
+-- No two ACTIVE projects share a letter; archiving frees it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_active_letter
+    ON projects (code_letter) WHERE is_archived = FALSE AND code_letter IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_deliverables_code_no
+    ON deliverables (project_id, code_no) WHERE code_no IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_code_no
+    ON tasks (project_id, (COALESCE(deliverable_id, 0)), code_no) WHERE code_no IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_subtasks_code_no
+    ON subtasks (task_id, code_no) WHERE code_no IS NOT NULL;
+
+-- Rows created without a number (imports, other pages) get the next free one.
+CREATE OR REPLACE FUNCTION maic_fill_code_no() RETURNS trigger AS $$
+BEGIN
+  IF NEW.code_no IS NULL THEN
+    IF TG_TABLE_NAME = 'deliverables' THEN
+      SELECT COALESCE(MAX(code_no), 0) + 1 INTO NEW.code_no
+        FROM deliverables WHERE project_id = NEW.project_id;
+    ELSIF TG_TABLE_NAME = 'tasks' THEN
+      SELECT COALESCE(MAX(code_no), 0) + 1 INTO NEW.code_no
+        FROM tasks WHERE project_id = NEW.project_id
+                     AND COALESCE(deliverable_id, 0) = COALESCE(NEW.deliverable_id, 0);
+    ELSE
+      SELECT COALESCE(MAX(code_no), 0) + 1 INTO NEW.code_no
+        FROM subtasks WHERE task_id = NEW.task_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_fill_code_no ON deliverables;
+CREATE TRIGGER trg_fill_code_no BEFORE INSERT ON deliverables
+    FOR EACH ROW EXECUTE FUNCTION maic_fill_code_no();
+DROP TRIGGER IF EXISTS trg_fill_code_no ON tasks;
+CREATE TRIGGER trg_fill_code_no BEFORE INSERT ON tasks
+    FOR EACH ROW EXECUTE FUNCTION maic_fill_code_no();
+DROP TRIGGER IF EXISTS trg_fill_code_no ON subtasks;
+CREATE TRIGGER trg_fill_code_no BEFORE INSERT ON subtasks
+    FOR EACH ROW EXECUTE FUNCTION maic_fill_code_no();
+"""
+
+
 CONTRACTS_MIGRATION_SQL = """\
 -- Run once in Supabase SQL Editor → contract management + monthly timesheets.
 -- Until this runs, the Contracts and Time Sheets pages show this snippet and the

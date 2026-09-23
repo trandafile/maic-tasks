@@ -13,6 +13,7 @@ from db import (
     deliverable_open_work, open_work_message, archive_deliverable_closed_work,
 )
 from utils.md_editor import markdown_editor
+from utils import codes as K
 from utils.notifications import (
     send_task_assigned, send_task_comment,
     send_deliverable_signoff_request, send_deliverable_signoff_approved,
@@ -510,8 +511,9 @@ def task_details_modal(task, can_edit, deliverables=None):
             st.html(pills_html)
             st.markdown("---")
 
-            # ── Row 1: Status | Priority | Deliverable ────────────────────────
-            c1, c2, c3 = st.columns(3)
+            # ── Row 1: Status | Priority | Deliverable | No. ──────────────────
+            _numbered = K.numbering_available()
+            c1, c2, c3, c_no = st.columns([3, 3, 3, 1.2] if _numbered else [1, 1, 1, 0.001])
             with c1:
                 new_status_display = st.selectbox(
                     "Status", display_options,
@@ -532,6 +534,13 @@ def task_details_modal(task, can_edit, deliverables=None):
                     list(deliv_opts.keys()),
                     index=list(deliv_opts.keys()).index(curr_deliv_name)
                 )
+            with c_no:
+                new_code_no = st.number_input(
+                    "No.", min_value=1, step=1, value=int(task.get("code_no") or 1),
+                    key=f"task_no_{task['id']}",
+                    help="Number within the deliverable. Any free number is accepted. "
+                         "Moving the task keeps it if free there, else takes the first free.",
+                ) if _numbered else None
 
             # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────
             c4, c5, c6 = st.columns([2, 2, 1])
@@ -593,6 +602,24 @@ def task_details_modal(task, can_edit, deliverables=None):
                     "deadline":         new_deadline.isoformat() if new_deadline else None,
                 }
 
+                # Readable code: number within the (possibly new) deliverable
+                if _numbered and new_code_no is not None:
+                    old_no = task.get("code_no")
+                    moved = new_deliv_id != curr_deliv_id
+                    n = int(new_code_no)
+                    if moved or n != old_no:
+                        used = K.used_task_nos(task.get("project_id"), new_deliv_id)
+                        if moved and n == old_no and n in used:
+                            n = K.next_free(used)     # its number is taken over there
+                        err = K.check_free(n, used, own=None if moved else old_no)
+                        if err:
+                            st.error(err)
+                            return
+                        update_data["code_no"] = n
+                        if moved and K.is_code(task.get("sequence_id")):
+                            update_data["code_history"] = K.append_history(
+                                task.get("code_history"), task.get("sequence_id"))
+
                 # Auto-manage completion date
                 if new_status == "Completed" and curr_status != "Completed":
                     update_data["completion_date"] = datetime.datetime.now().date().isoformat()
@@ -620,6 +647,8 @@ def task_details_modal(task, can_edit, deliverables=None):
                         task.get("status"), new_status,
                         st.session_state.get("user_email"),
                     )
+                if "code_no" in changed or "deliverable_id" in changed:
+                    K.resync_project(task.get("project_id"))
 
                 # Notify on assignment changes
                 assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
@@ -718,11 +747,26 @@ def subtask_details_modal(subtask, can_edit):
             st.html(pills_html)
             st.markdown("---")
 
-            # ── Row 1: Status ─────────────────────────────────────────────────
-            new_status_display = st.selectbox(
-                "Status", display_options,
-                index=status_options.index(curr_status)
-            )
+            # ── Row 1: Status | No. ───────────────────────────────────────────
+            _numbered = K.numbering_available()
+            if _numbered:
+                c_st, c_no = st.columns([5, 1.2])
+                with c_st:
+                    new_status_display = st.selectbox(
+                        "Status", display_options,
+                        index=status_options.index(curr_status)
+                    )
+                with c_no:
+                    new_code_no = st.number_input(
+                        "No.", min_value=1, step=1, value=int(subtask.get("code_no") or 1),
+                        key=f"subtask_no_{subtask['id']}",
+                        help="Number within the task. Any free number is accepted.")
+            else:
+                new_code_no = None
+                new_status_display = st.selectbox(
+                    "Status", display_options,
+                    index=status_options.index(curr_status)
+                )
 
             # ── Row 2: Assignee | Supervisor | Deadline ───────────────────────
             c1, c2, c3 = st.columns([2, 2, 1])
@@ -780,6 +824,13 @@ def subtask_details_modal(subtask, can_edit):
                     "supervisor_email": new_sup_email,
                     "deadline":         new_deadline.isoformat() if new_deadline else None,
                 }
+                if _numbered and new_code_no is not None and int(new_code_no) != subtask.get("code_no"):
+                    used = K.used_subtask_nos(subtask.get("task_id"))
+                    err = K.check_free(new_code_no, used, own=subtask.get("code_no"))
+                    if err:
+                        st.error(err)
+                        return
+                    update_data["code_no"] = int(new_code_no)
 
                 # Only write fields that actually changed: avoids clobbering
                 # concurrent edits by another user holding a stale snapshot.
@@ -800,6 +851,8 @@ def subtask_details_modal(subtask, can_edit):
                         subtask.get("status"), new_status,
                         st.session_state.get("user_email"),
                     )
+                if "code_no" in changed and parent:
+                    K.resync_project(parent.get("project_id"))
 
                 # Notify on assignment changes
                 assigner = st.session_state.get("user_name", st.session_state.get("user_email", ""))
@@ -1183,8 +1236,20 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
     # ── Edit form ─────────────────────────────────────────────────────────────
     with st.form("edit_deliv_form"):
         ef1, ef2 = st.columns(2)
+        _numbered = K.numbering_available()
         with ef1:
-            e_name = st.text_input("Name*", value=d_name)
+            if _numbered:
+                cn, cnm = st.columns([1, 3.5])
+                with cn:
+                    e_code_no = st.number_input(
+                        "No.", min_value=1, step=1, value=int(deliverable.get("code_no") or 1),
+                        help="Number within the project. Any free number is accepted; the "
+                             "codes of its tasks follow.")
+                with cnm:
+                    e_name = st.text_input("Name*", value=d_name)
+            else:
+                e_code_no = None
+                e_name = st.text_input("Name*", value=d_name)
             e_type = st.selectbox(
                 "Type", TYPE_OPTS,
                 index=TYPE_OPTS.index(d_type) if d_type in TYPE_OPTS else 0
@@ -1238,7 +1303,15 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
                 if blocking_now:
                     st.error(f"🔒 This deliverable cannot be closed yet — {blocking_now}")
                     return
+            if _numbered and e_code_no is not None and int(e_code_no) != deliverable.get("code_no"):
+                err = K.check_free(e_code_no, K.used_deliverable_nos(deliverable.get("project_id")),
+                                   own=deliverable.get("code_no"))
+                if err:
+                    st.error(err)
+                    return
             payload = {
+                **({"code_no": int(e_code_no)} if _numbered and e_code_no is not None
+                   and int(e_code_no) != deliverable.get("code_no") else {}),
                 "name":        e_name,
                 "type":        e_type,
                 "status":      e_status,
@@ -1266,6 +1339,8 @@ def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcr
             if not ok:
                 st.error(f"Error: {err}")
                 return
+            if "code_no" in payload:
+                K.resync_project(deliverable.get("project_id"))
             if closing:
                 # the countersignature covers the deliverable's closed work
                 archive_deliverable_closed_work(d_id)

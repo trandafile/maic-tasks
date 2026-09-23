@@ -19,6 +19,7 @@ from utils.rows import (
     TEXT_MUTED, esc, chip, status_chip, deadline_cell, people_cell, progress_bar, urgency,
 )
 from utils.pdf_generator import generate_deliverables_pdf
+from utils.codes import fmt as code_fmt
 
 
 _INACTIVE = ("Completed", "Cancelled")
@@ -132,8 +133,12 @@ def _row_html(d: dict, settings: dict, user_map: dict, progress: dict | None,
                   f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0")
     signoff = chip("⏳ sign-off", "#8A5300", "#FFF1D6") \
         if (d.get("completion_state") or "") == "pending" else ""
+    code = d.get("_code") or ""
+    code_html = (f"<span style='flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;"
+                 f"font-size:12.5px;font-weight:700;color:#3C4043'>{esc(code)}</span>") if code else ""
     name_cell = (
         f"<div style='display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden'>"
+        f"{code_html}"
         f"<span style='{name_style}' title='{esc(d.get('name', ''))}'>{esc(d.get('name') or '—')}</span>"
         f"{deliverable_chip_html(d.get('type') or 'generic', settings)}{signoff}</div>"
     )
@@ -199,6 +204,7 @@ def show_deliverables():
         p = proj_by_id.get(d.get("project_id"), {})
         d["_proj_label"] = p.get("acronym") or p.get("identifier") or p.get("name") or "—"
         d["_proj_name"] = p.get("name") or "—"
+        d["_code"] = code_fmt(p.get("code_letter"), d.get("code_no"))
         d["_tier"], _ = urgency(d, threshold)
 
     n_overdue = sum(1 for d in deliverables if d["_tier"] == "overdue")

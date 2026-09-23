@@ -18,8 +18,10 @@ from db import (
     STATUS_HISTORY_MIGRATION_SQL, CONFERENCES_MIGRATION_SQL, CONTRACTS_MIGRATION_SQL,
     ENGAGEMENT_MIGRATION_SQL, LOGIN_EVENTS_MIGRATION_SQL,
     DELIVERABLE_SIGNOFF_MIGRATION_SQL, COMMENT_LEVELS_MIGRATION_SQL,
+    NUMBERING_MIGRATION_SQL,
 )
 from utils.md_editor import markdown_editor
+from utils import codes as K
 from utils.helpers import DELIVERABLE_TAG_PALETTE, parse_deliverable_tag_styles
 
 
@@ -375,6 +377,81 @@ def _tab_users():
 
 # ─── TAB 2: Projects ──────────────────────────────────────────────────────────
 
+def _restore_project(pid: int) -> None:
+    """Un-archive a project. If its letter went to another active project in
+    the meantime, restore it without a letter (the unique index would refuse
+    it otherwise) and say so: the admin picks a new one in Project letters."""
+    try:
+        row = supabase.table("projects").select("code_letter").eq("id", pid).execute().data
+        letter = (row[0] or {}).get("code_letter") if row else None
+    except Exception:
+        letter = None
+    payload = {"is_archived": False}
+    if letter and letter in K.taken_letters(exclude_project_id=pid):
+        payload["code_letter"] = None
+        st.warning(f"Letter {letter} now belongs to another active project: this one was "
+                   "restored without a letter. Pick one under Projects → Project letters.")
+    supabase.table("projects").update(payload).eq("id", pid).execute()
+
+
+def _render_project_letters(projects: list[dict]) -> None:
+    """One letter per active project; the codes of its work start with it."""
+    if not K.numbering_available():
+        return
+    with st.expander("🔤 Project letters — codes E.1, E.1.2, E.1.2.1", expanded=False):
+        missing = [p for p in projects if not p.get("code_letter")]
+        proposal = K.propose_all(projects)
+        st.caption(
+            "One letter per active project (I and O are not used). Archiving a project "
+            "frees its letter. Changing a letter rewrites the codes of all its work."
+        )
+        if missing:
+            st.warning(
+                f"{len(missing)} active project(s) have no letter, so their work has no "
+                "code yet. Proposal: "
+                + ", ".join(f"**{proposal.get(p['id'], '?')}** {p.get('acronym') or p.get('name')}"
+                            for p in missing)
+            )
+            if st.button("Apply the proposed letters", key="letters_apply", type="primary"):
+                errors = []
+                for pid, ch in proposal.items():
+                    try:
+                        supabase.table("projects").update({"code_letter": ch}).eq("id", pid).execute()
+                        K.resync_project(pid)
+                    except Exception as exc:
+                        errors.append(f"{ch}: {exc}")
+                if errors:
+                    st.error("Some letters could not be set: " + "; ".join(errors))
+                else:
+                    st.success("Letters assigned; codes rewritten.")
+                    st.rerun()
+
+        taken = {p["code_letter"]: p for p in projects if p.get("code_letter")}
+        for p in sorted(projects, key=lambda p: (p.get("code_letter") or "~", p.get("name") or "")):
+            cur = p.get("code_letter") or ""
+            free = [ch for ch in K.LETTERS if ch not in taken or ch == cur]
+            options = ([""] if not cur else []) + free
+            c1, c2, c3 = st.columns([4, 1.2, 1.2], vertical_alignment="center")
+            with c1:
+                st.write(f"**{p.get('acronym') or ''}** · {p.get('name')}")
+            with c2:
+                sel = st.selectbox("Letter", options,
+                                   index=options.index(cur) if cur in options else 0,
+                                   key=f"letter_{p['id']}", label_visibility="collapsed",
+                                   format_func=lambda ch: ch or "— none —")
+            with c3:
+                if sel and sel != cur and st.button("Set", key=f"letter_set_{p['id']}"):
+                    try:
+                        supabase.table("projects").update({"code_letter": sel}).eq(
+                            "id", p["id"]).execute()
+                        n = K.resync_project(p["id"])
+                        st.success(f"{p.get('acronym') or p.get('name')} → {sel}; "
+                                   f"{n} codes rewritten.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Could not set {sel}: {exc}")
+
+
 def _tab_projects():
     st.subheader("Project List")
     st.caption("Manage all active projects. Archived projects are in the Archive tab.")
@@ -391,6 +468,8 @@ def _tab_projects():
     except Exception as e:
         st.error(f"Error loading projects: {e}")
         return
+
+    _render_project_letters(projects)
 
     export_md = _project_markdown_export(projects)
     st.download_button(
@@ -570,6 +649,13 @@ def _tab_projects():
             np_name    = st.text_input("Project Name*")
             np_acronym = st.text_input("Acronym")
             np_idf     = st.text_input("Identifier")
+            _numbered = K.numbering_available()
+            _taken = K.taken_letters() if _numbered else {}
+            np_letter = st.selectbox(
+                "Project letter", ["Auto (from the acronym)"]
+                + [ch for ch in K.LETTERS if ch not in _taken],
+                help="Codes E.1, E.1.2, E.1.2.1. One letter per active project.",
+            ) if _numbered else None
         with af2:
             np_funding = st.text_input("Funding Agency")
             np_start   = st.date_input("Start Date", value=None, format="DD/MM/YYYY")
@@ -587,7 +673,12 @@ def _tab_projects():
                 st.error("Project name is required.")
             else:
                 try:
+                    _letter = None
+                    if np_letter:
+                        _letter = (K.propose_letter({"acronym": np_acronym, "name": np_name}, _taken)
+                                   if np_letter.startswith("Auto") else np_letter)
                     supabase.table("projects").insert({
+                        **({"code_letter": _letter} if _letter else {}),
                         "name":           np_name,
                         "acronym":        np_acronym or None,
                         "identifier":     np_idf     or None,
@@ -770,7 +861,7 @@ def _tab_archive():
         label="Archived Projects",
         records=arch_projs,
         record_type="project",
-        restore_fn=lambda rid: supabase.table("projects").update({"is_archived": False}).eq("id", rid).execute(),
+        restore_fn=_restore_project,
         delete_fn=delete_project_cascade,
         name_fn=lambda r: f"{r.get('name', '?')} ({r.get('acronym', '')})",
         parent_fn=lambda r: "",
@@ -954,6 +1045,8 @@ _SCHEMA_CHECKS = [
      [("tasks", "updated_at"), ("subtasks", "updated_at")]),
     ("Sign-in tracking", LOGIN_EVENTS_MIGRATION_SQL,
      [("login_events", "at")]),
+    ("Readable codes (E.1.2)", NUMBERING_MIGRATION_SQL,
+     [("projects", "code_letter"), ("tasks", "code_no"), ("subtasks", "sequence_id")]),
     ("Comments on subtasks and deliverables", COMMENT_LEVELS_MIGRATION_SQL,
      [("comments", "subtask_id"), ("comments", "deliverable_id")]),
     ("Deliverable sign-off", DELIVERABLE_SIGNOFF_MIGRATION_SQL,
