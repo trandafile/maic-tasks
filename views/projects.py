@@ -12,7 +12,8 @@ from db import get_settings
 from utils import codes as K
 from utils.rows import (
     ROW_COLS, INACTIVE, row_html, header_html, urgency_sort, fmt, esc, project_chip,
-    deliverable_head_html, chip, status_chip,
+    deliverable_head_html, chip, status_chip, deliverable_card_css, loose_band_html,
+    type_colours, PROJECT_BOX_CSS,
 )
 
 # ─── Data fetching ──────────────────────────────────────────────────────────────
@@ -854,34 +855,51 @@ def _render_review(queue: dict, user_email: str, is_admin: bool, users: list) ->
 
 # ─── Project header ─────────────────────────────────────────────────────────────
 
+def _render_letters_prompt(projects: list[dict], is_admin: bool) -> None:
+    """Codes need a project letter. Say so where the codes are missing — here —
+    and let an admin assign the proposed letters in one click."""
+    if not K.numbering_available():
+        if is_admin:
+            st.info("Codes like E.1.2 appear once the **Readable codes** migration has "
+                    "run: Admin Panel → Settings → Database schema.")
+        return
+    active = [p for p in projects if not p.get("is_archived")]
+    missing = [p for p in active if not p.get("code_letter")]
+    if not missing or not is_admin:
+        return
+    # propose against ALL active projects, not only the ones on screen
+    try:
+        everyone = supabase.table("projects").select("*").eq("is_archived", False).execute().data or []
+    except Exception:
+        everyone = active
+    proposal = K.propose_all(everyone)
+    names = ", ".join(f"**{proposal.get(p['id'], '?')}** {p.get('acronym') or p.get('name')}"
+                      for p in missing)
+    c1, c2 = st.columns([5, 1.4], vertical_alignment="center")
+    with c1:
+        st.warning(f"{len(missing)} project(s) have no letter, so their work has no code yet. "
+                   f"Proposal: {names}. You can change them later in Admin Panel → Projects.")
+    with c2:
+        if st.button("Assign letters", key="tree_assign_letters", type="primary",
+                     use_container_width=True):
+            for pid, ch in proposal.items():
+                try:
+                    supabase.table("projects").update({"code_letter": ch}).eq("id", pid).execute()
+                    K.resync_project(pid)
+                except Exception as exc:
+                    st.error(f"{ch}: {exc}")
+            st.rerun()
+
+
 def _toggle_project(pid: int) -> None:
     """Runs before the rerun, so the header already shows the new state."""
     state = st.session_state.setdefault("_proj_open", {})
     state[pid] = not state.get(pid, False)
 
 
-def _tint(hex_colour: str, weight: float = 0.13) -> str:
-    """The colour at ``weight`` opacity over white (a light wash)."""
-    h = (hex_colour or "#5F6368").lstrip("#")
-    if len(h) != 6:
-        h = "5F6368"
-    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
-    return "#%02X%02X%02X" % tuple(round(255 - (255 - c) * weight) for c in (r, g, b))
-
-
 def _shade(hex_colour: str) -> str:
     """Readable text colour from a type colour (kept as is: they are dark)."""
     return hex_colour if hex_colour and hex_colour.startswith("#") else "#3C4043"
-
-
-def _deliverable_card_css(key: str, colour: str) -> str:
-    """A deliverable card: thick edge in the type colour, tinted band."""
-    return (
-        f"div.st-key-{key} {{ background:#FFFFFF; border:1px solid #E3E6EA; "
-        f"border-left:4px solid {colour}; border-radius:0 8px 8px 0; padding-bottom:4px; }}"
-        f"div.st-key-{key} div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) "
-        f"{{ background:{_tint(colour)} !important; border-radius:0 7px 0 0 !important; }}"
-    )
 
 
 # The project title is a tab sitting on the project box (open), or a closed
@@ -909,11 +927,6 @@ div[class*="st-key-projtgl_c_"] button { border-radius: 8px !important; }
 div[class*="st-key-projtgl_"] button p {
     font-size: 0.98rem !important; color: #202124;
 }
-div[class*="st-key-projbox_"] {
-    border: 1px solid #C9CED4; border-radius: 0 12px 12px 12px;
-    background: #FAFBFC; padding: 12px; gap: 12px;
-}
-div[class*="st-key-projwrap_"] { margin-bottom: 10px; }
 </style>
 """
 
@@ -1123,9 +1136,13 @@ def show_projects():
             open_state[proj["id"]] = mode == "all"
 
     st.markdown(_PROJECT_HEAD_CSS, unsafe_allow_html=True)
-    type_colour = {s["name"].strip(): s.get("color") or "#5F6368"
-                   for s in parse_deliverable_tag_styles(settings.get("deliverable_tag_styles"))
-                   if str(s.get("name", "")).strip()}
+    st.markdown(PROJECT_BOX_CSS, unsafe_allow_html=True)
+    _render_letters_prompt(projects, is_admin)
+    with st.container(key="treehead"):
+        hc, _ = st.columns(ROW_COLS)
+        with hc:
+            st.html(header_html(first_label="Code · task"))
+    type_colour = type_colours(settings)
 
     for proj in projects:
         proj_id   = proj["id"]
@@ -1161,7 +1178,9 @@ def show_projects():
             if not is_open:
                 continue
 
-            proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
+            proj_deliverables = sorted(
+                [d for d in deliverables if d.get("project_id") == proj_id],
+                key=lambda d: (d.get("code_no") is None, d.get("code_no") or 0, d.get("name") or ""))
 
             # Codes for every row of this project (E.1, E.1.2, E.1.2.1)
             dno = {d["id"]: d.get("code_no") for d in proj_deliverables}
@@ -1179,8 +1198,8 @@ def show_projects():
             css = []
             for d in proj_deliverables:
                 c = type_colour.get((d.get("type") or "").strip(), "#5F6368")
-                css.append(_deliverable_card_css(f"dlv_{d['id']}", c))
-            css.append(_deliverable_card_css(f"dlv_loose_{proj_id}", "#9AA0A6"))
+                css.append(deliverable_card_css(f"dlv_{d['id']}", c))
+            css.append(deliverable_card_css(f"dlv_loose_{proj_id}", "#9AA0A6"))
             st.markdown("<style>" + "".join(css) + "</style>", unsafe_allow_html=True)
 
             with st.container(key=f"projbox_{proj_id}"):
@@ -1220,9 +1239,6 @@ def show_projects():
                                         st.rerun()
 
                         if deliv_tasks:
-                            hc, _ = st.columns(ROW_COLS)
-                            with hc:
-                                st.html(header_html(first_label="Task"))
                             for t in deliv_tasks:
                                 _render_task_row(
                                     t, subtasks, users, user_map, user_email, is_admin,
@@ -1245,23 +1261,7 @@ def show_projects():
 
                 if unassigned:
                     with st.container(key=f"dlv_loose_{proj_id}", gap=None):
-                        loose_code = K.fmt(letter, 0)
-                        st.html(
-                            "<div style='background:#F1F3F4;border-radius:0 7px 0 0;padding:5px 8px;"
-                            "display:flex;align-items:center;gap:8px'>"
-                            + (f"<span style='font-family:ui-monospace,Consolas,monospace;"
-                               f"font-size:14px;font-weight:700;color:#5F6368'>{loose_code}</span>"
-                               if loose_code else
-                               "<span style='font-size:16px;line-height:1'>📋</span>")
-                            + "<span style='font-size:14px;font-weight:700;color:#3C4043'>"
-                            "Tasks without deliverable</span>"
-                            f"<span style='font-size:11px;color:#5F6368;background:#FFFFFF;"
-                            f"border:1px solid #DADCE0;border-radius:10px;padding:0 7px'>"
-                            f"{len(unassigned)}</span></div>"
-                        )
-                        hc, _ = st.columns(ROW_COLS)
-                        with hc:
-                            st.html(header_html(first_label="Task"))
+                        st.html(loose_band_html(K.fmt(letter, 0), len(unassigned)))
                         for t in unassigned:
                             _render_task_row(
                                 t, subtasks, users, user_map, user_email, is_admin,

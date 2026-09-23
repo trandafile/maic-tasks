@@ -5,7 +5,11 @@ from core.supabase_client import supabase
 from db import get_settings, compute_delay_stats, rbac_or_filter, get_comment_counts
 from utils.pdf_generator import generate_report_pdf
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
-from utils.rows import ROW_COLS, row_html, header_html, deliverable_head_html, urgency_sort
+from utils.rows import (
+    ROW_COLS, row_html, header_html, deliverable_head_html, urgency_sort,
+    PROJECT_BOX_CSS, deliverable_card_css, loose_band_html, project_tab_html, type_colours,
+)
+from utils.codes import fmt as code_fmt
 from utils.helpers import (
     fmt_date, sort_tasks_by_deadline, deliverable_chip_html,
     TASK_NAME_STYLE, SUBTASK_NAME_STYLE, stable_colour,
@@ -550,134 +554,94 @@ def _render_main_report():
             key="rp_md",
         )
 
-    st.divider()
+    # Same tree as the Projects page: project tab on its box, one card per
+    # deliverable in its type's colour, readable codes, one column header.
+    st.markdown(PROJECT_BOX_CSS, unsafe_allow_html=True)
+    colours = type_colours(settings)
+    with st.container(key="treehead_rp"):
+        hc, _ = st.columns(ROW_COLS)
+        with hc:
+            st.html(header_html(first_label="Code · task"))
 
-    st.markdown("<div class='project-report-compact'>", unsafe_allow_html=True)
+    def _task_block(t, key_prefix):
+        can_edit_t = is_admin or (
+            t.get("owner_email") == user_email or t.get("supervisor_email") == user_email
+        )
+        _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=key_prefix,
+                         threshold=_rp_threshold)
+        for s in [s for s in subtasks
+                  if s.get("task_id") == t.get("id") and s.get("id") in visible_subtask_ids]:
+            can_edit_s = is_admin or (
+                s.get("owner_email") == user_email or s.get("supervisor_email") == user_email
+            )
+            _render_subtask_row(s, users_meta, can_edit=can_edit_s,
+                                key_prefix=f"{key_prefix}_s{t.get('id')}",
+                                threshold=_rp_threshold)
 
     for proj in proj_list:
         pid = proj["id"]
-        st.html(
-            f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:2px'>"
-            f"<span style='width:18px;height:18px;background:#F59E0B;border-radius:4px;"
-            f"display:inline-block'></span>"
-            f"<span style='font-size:1.5rem;font-weight:700'>{_esc(proj.get('name'))} "
-            f"({_esc(proj.get('acronym',''))})</span></div>"
-        )
-        caption_parts = []
+        letter = proj.get("code_letter") or ""
+        note_parts = []
         if proj.get("funding_agency"):
-            caption_parts.append(f"Funding: {proj['funding_agency']}")
+            note_parts.append(f"Funding: {proj['funding_agency']}")
         if proj.get("start_date"):
-            caption_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
-        if caption_parts:
-            st.html(f"<div style='font-size:0.75rem;color:#888;margin:-8px 0 0 0;'>{chr(160).join(caption_parts)}</div>")
+            note_parts.append(f"{fmt_date(proj.get('start_date'))} → {fmt_date(proj.get('end_date'))}")
 
-        proj_deliverables = [
+        proj_deliverables = sorted([
             d for d in deliverables
-            if d.get("project_id") == pid
-            and d.get("id") in visible_deliv_ids
-        ]
-
-        if proj_deliverables:
-            st.html("<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
-                    "color:#666;display:block;margin-top:-4px;margin-bottom:2px;'>DELIVERABLES</span>")
-            for d in proj_deliverables:
-                did      = d["id"]
-                d_tasks  = [t for t in tasks if t.get("deliverable_id") == did and t.get("id") in visible_task_ids]
-                d_tasks  = urgency_sort(d_tasks, _rp_threshold)
-                d_type_chip = deliverable_chip_html(d.get("type") or "generic", settings)
-
-                with st.container(border=True, gap=None):
-                    h_row, h_act = st.columns(ROW_COLS, vertical_alignment="center")
-                    with h_row:
-                        st.html(deliverable_head_html(
-                            d, d_tasks, users_meta, _rp_threshold, d_type_chip))
-                    with h_act:
-                        if st.button("✏️", key=f"rp_dd_{did}", type="tertiary", help="Details"):
-                            d_can_edit = (
-                                is_admin
-                                or d.get("owner_email") == user_email
-                                or d.get("supervisor_email") == user_email
-                            )
-                            deliverable_details_modal(
-                                d,
-                                can_edit=d_can_edit,
-                                breadcrumb=f"Reports / {proj.get('name', '-') } / Deliverable",
-                            )
-                    if d_tasks:
-                        hc, _ = st.columns(ROW_COLS)
-                        with hc:
-                            st.html(header_html(first_label="Task"))
-
-                    # Tasks and subtasks inside the same bordered box
-                    if d_tasks:
-                        for t in d_tasks:
-                            can_edit_t = is_admin or (
-                                t.get("owner_email") == user_email
-                                or t.get("supervisor_email") == user_email
-                            )
-                            _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_{did}",
-                                             threshold=_rp_threshold)
-                            t_subtasks = [
-                                s for s in subtasks
-                                if s.get("task_id") == t.get("id")
-                                and s.get("id") in visible_subtask_ids
-                            ]
-                            for s in t_subtasks:
-                                can_edit_s = is_admin or (
-                                    s.get("owner_email") == user_email
-                                    or s.get("supervisor_email") == user_email
-                                )
-                                _render_subtask_row(
-                                    s,
-                                    users_meta,
-                                    can_edit=can_edit_s,
-                                    key_prefix=f"rp_s_{did}_{t.get('id')}",
-                                    threshold=_rp_threshold,
-                                )
-                    else:
-                        st.caption("No tasks matching the filters.")
-
-        unassigned = [
+            if d.get("project_id") == pid and d.get("id") in visible_deliv_ids
+        ], key=lambda d: (d.get("code_no") is None, d.get("code_no") or 0, d.get("name") or ""))
+        unassigned = urgency_sort([
             t for t in tasks
-            if t.get("project_id") == pid
-            and not t.get("deliverable_id")
+            if t.get("project_id") == pid and not t.get("deliverable_id")
             and t.get("id") in visible_task_ids
-        ]
-        unassigned = sort_tasks_by_deadline(unassigned)
-        if unassigned:
-            with st.container(border=True, gap=None):
-                st.html(
-                    "<span style='font-size:11px;font-weight:700;letter-spacing:0.06em;"
-                    f"color:#5F6368'>📂 TASKS WITHOUT DELIVERABLE · {len(unassigned)}</span>"
-                )
-                hc, _ = st.columns(ROW_COLS)
-                with hc:
-                    st.html(header_html(first_label="Task"))
-                for t in unassigned:
-                    can_edit_t = is_admin or (
-                        t.get("owner_email") == user_email
-                        or t.get("supervisor_email") == user_email
-                    )
-                    _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_un_{pid}",
-                                     threshold=_rp_threshold)
-                    t_subtasks = [
-                        s for s in subtasks
-                        if s.get("task_id") == t.get("id")
-                        and s.get("id") in visible_subtask_ids
-                    ]
-                    for s in t_subtasks:
-                        can_edit_s = is_admin or (
-                            s.get("owner_email") == user_email
-                            or s.get("supervisor_email") == user_email
-                        )
-                        _render_subtask_row(s, users_meta, can_edit=can_edit_s,
-                                            key_prefix=f"rp_s_un_{pid}_{t.get('id')}",
-                                            threshold=_rp_threshold)
+        ], _rp_threshold)
 
-        st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
-        st.divider()
+        css = [deliverable_card_css(f"dlv_rp_{d['id']}",
+                                    colours.get((d.get("type") or "").strip(), "#5F6368"))
+               for d in proj_deliverables]
+        css.append(deliverable_card_css(f"dlv_rploose_{pid}", "#9AA0A6"))
+        st.markdown("<style>" + "".join(css) + "</style>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(key=f"projwrap_rp_{pid}", gap=None):
+            st.html(project_tab_html(letter, proj.get("acronym"), proj.get("name") or "",
+                                     note="  ·  ".join(note_parts)))
+            with st.container(key=f"projbox_rp_{pid}"):
+                for d in proj_deliverables:
+                    did = d["id"]
+                    d_tasks = urgency_sort(
+                        [t for t in tasks if t.get("deliverable_id") == did
+                         and t.get("id") in visible_task_ids], _rp_threshold)
+                    colour = colours.get((d.get("type") or "").strip(), "#5F6368")
+                    with st.container(key=f"dlv_rp_{did}", gap=None):
+                        h_row, h_act = st.columns(ROW_COLS, vertical_alignment="center")
+                        with h_row:
+                            st.html(deliverable_head_html(
+                                d, d_tasks, users_meta, _rp_threshold,
+                                deliverable_chip_html(d.get("type") or "generic", settings),
+                                code=code_fmt(letter, d.get("code_no")), colour=colour))
+                        with h_act:
+                            if st.button("✏️", key=f"rp_dd_{did}", type="tertiary", help="Details"):
+                                d_can_edit = (
+                                    is_admin
+                                    or d.get("owner_email") == user_email
+                                    or d.get("supervisor_email") == user_email
+                                )
+                                deliverable_details_modal(
+                                    d, can_edit=d_can_edit,
+                                    breadcrumb=f"Reports / {proj.get('name', '-')} / Deliverable",
+                                )
+                        if d_tasks:
+                            for t in d_tasks:
+                                _task_block(t, f"rp_t_{did}")
+                        else:
+                            st.caption("No tasks matching the filters.")
+
+                if unassigned:
+                    with st.container(key=f"dlv_rploose_{pid}", gap=None):
+                        st.html(loose_band_html(code_fmt(letter, 0), len(unassigned)))
+                        for t in unassigned:
+                            _task_block(t, f"rp_t_un_{pid}")
 
 
 # ─── Carico per Persona ────────────────────────────────────────────────────────

@@ -62,6 +62,15 @@ _STATUS_COLOUR = {
 _ROWS_PER_SLIDE = 13     # header + 13 rows fits the 5.2" table placeholder
 
 
+def _named(it: dict) -> str:
+    """'E.1.2  Name' when the item has a readable code, else just the name.
+    Rows built in db.py carry ``code``; raw tasks carry it in sequence_id."""
+    import re as _re
+    name = it.get("name", "") or ""
+    code = str(it.get("code") or it.get("sequence_id") or "")
+    return f"{code}  {name}" if _re.match(r"^[A-Z](\.\d+)+$", code) else name
+
+
 def _d(v):
     if not v:
         return None
@@ -289,7 +298,7 @@ def _tree_rows(prs, title, subtitle, rows, footer=""):
             else:
                 marker, size, bold, colour = "•", 10, False, INK
 
-            _cell(table.cell(ri, 0), f"{marker} {r.get('name', '')}",
+            _cell(table.cell(ri, 0), f"{marker} {_named(r)}",
                   size=size, bold=bold, color=colour, indent=0.22 * lvl)
             status = r.get("status") or ""
             _cell(table.cell(ri, 1), status, size=8, bold=bool(status),
@@ -431,7 +440,7 @@ def _list_block(label, colour, items, sub):
     blocks = [{"text": f"{label} · {len(items)}", "size": 12, "bold": True,
                "color": colour, "space_after": 3}]
     for it in items[:6]:
-        blocks.append({"text": f"• {it.get('name', '')}", "size": 11, "color": INK})
+        blocks.append({"text": f"• {_named(it)}", "size": 11, "color": INK})
         extra = sub(it)
         if extra:
             blocks.append({"text": f"   {extra}", "size": 8.5, "color": MUTED,
@@ -696,7 +705,7 @@ def build_meeting_deck(pack: dict) -> BytesIO:
         when = (f"{abs(days)}d overdue" if days < 0
                 else ("today" if days == 0 else f"in {days}d"))
         rows.append({"level": 0, "kind": "deliverable",
-                     "name": f"[{d['_project']}] {d.get('name', '')}",
+                     "name": f"[{d['_project']}] {_named(d)}",
                      "status": d.get("status") or "Not started",
                      "deadline": d.get("deadline"), "people": d["_people"],
                      "fresh": when, "sev": sev})
@@ -815,10 +824,11 @@ def build_review_deck(review: dict) -> BytesIO:
                          "fresh": "", "sev": "none"})
             for it in items[:7]:
                 rows.append({"level": 1, "kind": "task", "name": it.get("name", ""),
+                             "code": it.get("sequence_id"),
                              "status": it.get("status") or "",
                              "deadline": it.get("deadline"),
                              "people": sub(it), "fresh": "", "sev": "none"})
-        _tree_rows(prs, d.get("name", "Deliverable"),
+        _tree_rows(prs, _named(d) or "Deliverable",
                    f"{d.get('type', '')} · due {_fmt(d.get('deadline'))} · "
                    f"{dt.get('completed', 0)}/{dt.get('total', 0)} tasks · "
                    f"{dt.get('pct', 0)}% complete",
@@ -828,6 +838,7 @@ def build_review_deck(review: dict) -> BytesIO:
     orphans = review.get("no_deliverable", [])
     if orphans:
         rows = [{"level": 0, "kind": "task", "name": it.get("name", ""),
+                 "code": it.get("sequence_id"),
                  "status": it.get("status") or "",
                  "deadline": it.get("deadline"),
                  "people": "", "fresh": "", "sev": "none"} for it in orphans]
@@ -870,7 +881,7 @@ def build_my_status_deck(pack: dict) -> BytesIO:
     rows = []
     for d in pack.get("paper_drafts", []):
         rows.append({"level": 0, "kind": "deliverable",
-                     "name": f"[{d.get('_project', '')}] {d.get('name', '')}",
+                     "name": f"[{d.get('_project', '')}] {_named(d)}",
                      "status": d.get("status") or "Not started",
                      "deadline": d.get("deadline"),
                      "people": "journal / deliverable", "fresh": "", "sev": "none"})

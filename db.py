@@ -2423,6 +2423,7 @@ def get_my_status_pack(email: str, since: _dt_date) -> dict:
     def _row(item, level, kind, pid):
         fresh, sev = _fresh_label(item, threshold)
         return {"level": level, "kind": kind, "name": item.get("name") or "—",
+                "code": _code_of(item, kind),
                 "status": item.get("status") or "Not started",
                 "deadline": item.get("deadline"),
                 "people": _people_label(item, umap), "fresh": fresh, "sev": sev}
@@ -2443,7 +2444,7 @@ def get_my_status_pack(email: str, since: _dt_date) -> dict:
                 pack["task_rows"].append(_row(s, 2, "subtask", pid))
 
     pack["completed"] = [
-        {"level": 1, "kind": "task",
+        {"level": 1, "kind": "task", "code": _code_of(t, "task"),
          "name": f"[{plabel(t.get('project_id'))}] {t.get('name','')}",
          "status": "Completed", "deadline": t.get("completion_date"),
          "people": "", "fresh": "", "sev": "ok"}
@@ -2613,6 +2614,19 @@ def _fresh_label(item: dict, threshold: int) -> tuple[str, str]:
     return f"{d}d", "bad" if d >= threshold * 2 else "warn"
 
 
+def _code_of(item: dict, kind: str, letters: dict | None = None) -> str:
+    """Readable code of an item for exports (E.1 / E.1.2 / E.1.2.1), '' when
+    the project has no letter yet. Tasks and subtasks carry it in
+    sequence_id; a deliverable's is composed from its project's letter."""
+    import re as _re
+    if kind == "deliverable":
+        letter = (letters or {}).get(item.get("project_id"))
+        no = item.get("code_no")
+        return f"{letter}.{int(no)}" if letter and no is not None else ""
+    seq = str(item.get("sequence_id") or "")
+    return seq if _re.match(r"^[A-Z](\.\d+)+$", seq) else ""
+
+
 def get_upcoming_deliverables(months: int = 3) -> list[dict]:
     """Deliverables due within the horizon — section 1 of the meeting deck."""
     today = _dt_date.today()
@@ -2620,7 +2634,7 @@ def get_upcoming_deliverables(months: int = 3) -> list[dict]:
     try:
         delivs = supabase.table("deliverables").select("*").eq(
             "is_archived", False).order("deadline").execute().data or []
-        projects = supabase.table("projects").select("id, name, acronym, identifier").execute().data or []
+        projects = supabase.table("projects").select("*").execute().data or []
         tasks = supabase.table("tasks").select(
             "id, deliverable_id, status").eq("is_archived", False).execute().data or []
         users = supabase.table("users").select("email, name").execute().data or []
@@ -2629,6 +2643,7 @@ def get_upcoming_deliverables(months: int = 3) -> list[dict]:
         return []
     pmap = {p["id"]: p for p in projects}
     umap = {u["email"]: u for u in users}
+    letters = {p["id"]: p.get("code_letter") for p in projects}
 
     out = []
     for d in delivs:
@@ -2644,6 +2659,7 @@ def get_upcoming_deliverables(months: int = 3) -> list[dict]:
         out.append({
             **d,
             "_project": p.get("acronym") or p.get("identifier") or p.get("name") or "",
+            "code": _code_of(d, "deliverable", letters),
             "_people": _people_label(d, umap),
             "_days": (_dt_date.fromisoformat(dl) - today).days,
             "_done": done, "_total": len(dts),
@@ -2672,12 +2688,14 @@ def get_project_trees() -> list[dict]:
         print(f"[db.get_project_trees] {exc}")
         return []
     umap = {u["email"]: u for u in users}
+    letters = {p["id"]: p.get("code_letter") for p in projects}
     live = lambda i: (i.get("status") or "") != "Cancelled"
 
     def row(item, level, kind):
         fresh, sev = _fresh_label(item, threshold)
         return {
             "level": level, "kind": kind, "name": item.get("name") or "—",
+            "code": _code_of(item, kind, letters),
             "status": item.get("status") or "Not started",
             "deadline": item.get("deadline"),
             "people": _people_label(item, umap),
@@ -2688,7 +2706,8 @@ def get_project_trees() -> list[dict]:
     for p in projects:
         rows = []
         p_delivs = sorted([d for d in delivs if d.get("project_id") == p["id"]],
-                          key=lambda d: d.get("deadline") or "9999-12-31")
+                          key=lambda d: (d.get("code_no") is None, d.get("code_no") or 0,
+                                         d.get("deadline") or "9999-12-31"))
         p_tasks = [t for t in tasks if t.get("project_id") == p["id"] and live(t)]
         for d in p_delivs:
             rows.append(row(d, 0, "deliverable"))
@@ -2758,6 +2777,7 @@ def get_conference_pack(months: int = 12) -> list[dict]:
                 fresh, sev = _fresh_label(t, threshold)
                 mine.append({
                     "level": 1, "kind": "task", "name": t.get("name") or "—",
+                    "code": _code_of(t, "task"),
                     "status": t.get("status") or "Not started",
                     "deadline": t.get("deadline"), "people": _people_label(t, umap),
                     "fresh": fresh, "sev": sev,
@@ -2818,10 +2838,11 @@ def get_project_review(project_id: int, period_label: str = "") -> dict:
                        "pct": round(100 * len(done) / total) if total else 0},
         }
 
-    for d in delivs:
+    letters = {project_id: (out.get("project") or {}).get("code_letter")}
+    for d in sorted(delivs, key=lambda d: (d.get("code_no") is None, d.get("code_no") or 0)):
         dts = [t for t in tasks if t.get("deliverable_id") == d["id"]]
         b = bucket(dts)
-        out["deliverables"].append({**d, **b})
+        out["deliverables"].append({**d, **b, "code": _code_of(d, "deliverable", letters)})
 
     orphans = [t for t in tasks if not t.get("deliverable_id")]
     out["no_deliverable"] = orphans

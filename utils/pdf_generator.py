@@ -370,138 +370,212 @@ def generate_report_pdf(
         and p.get("id") in visible_proj_ids
     ]
 
-    TABLE_HEADER = ["ID", "Nome Task", "Stato", "Priorità", "Owner", "Scadenza"]
-    # Usable width ≈ A4 – margins = 170mm
-    COL_WIDTHS = [20*mm, 58*mm, 22*mm, 18*mm, 30*mm, 22*mm]
+    # ── Same look as the Project Report page (utils/rows.py) ───────────────────
+    # project tab on a rule · one card per deliverable edged and tinted with its
+    # type colour · readable codes · rows tinted by deadline · subtasks set
+    # solid under their task, a hairline above each task.
+    from utils.rows import urgency as _urgency, tint as _tint, type_colours as _type_colours
+    try:
+        from db import get_settings as _get_settings
+        _settings = _get_settings() or {}
+    except Exception:
+        _settings = {}
+    try:
+        threshold = int(_settings.get("expiring_threshold_days", 7))
+    except (TypeError, ValueError):
+        threshold = 7
+    type_colour = _type_colours(_settings)
+
+    W = 170 * mm
+    COLS = [15 * mm, 59 * mm, 22 * mm, 30 * mm, 44 * mm]      # code · task · status · deadline · people
+    INK, MUTED, SOFT = "#1F2328", "#80868B", "#5F6368"
+    ST_COL = {"Not started": "#5F6368", "Working on": "#1558B0", "Blocked": "#B3261E",
+              "Completed": "#1E7E34", "Cancelled": "#80868B"}
+    code_st = ParagraphStyle("Code", parent=styles["Normal"], fontName="Courier", fontSize=7.5,
+                             textColor=colors.HexColor(SOFT), leading=9)
+    cell_st = ParagraphStyle("Cell", parent=styles["Normal"], fontSize=8, leading=10)
+    task_st = ParagraphStyle("Task", parent=styles["Normal"], fontSize=8.8, leading=11,
+                             fontName="Helvetica-Bold", textColor=colors.HexColor(INK))
+    sub_st = ParagraphStyle("Sub", parent=styles["Normal"], fontSize=8.2, leading=10,
+                            textColor=colors.HexColor("#3C4043"), leftIndent=10)
+    band_st = ParagraphStyle("Band", parent=styles["Normal"], fontSize=10, leading=12.5)
+    tab_st = ParagraphStyle("Tab", parent=styles["Normal"], fontSize=11.5, leading=14)
+    head_st = ParagraphStyle("Head", parent=styles["Normal"], fontSize=7, leading=9,
+                             textColor=colors.HexColor(MUTED))
+
+    def _esc(v):
+        return (str(v or "")).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    def _code_of(item):
+        seq = str(item.get("sequence_id") or "")
+        import re as _re
+        return seq if _re.match(r"^[A-Z](\.\d+)+$", seq) else ""
+
+    def _people(item):
+        owner = users_dict.get(item.get("owner_email"), item.get("owner_email") or "—")
+        sup_e = item.get("supervisor_email")
+        sup = users_dict.get(sup_e, sup_e) if sup_e and sup_e != item.get("owner_email") else ""
+        return (f"<font size='7.4'>{_esc(owner)}</font>"
+                + (f"<font color='{MUTED}' size='6.6'> · sup {_esc(sup)}</font>" if sup else ""))
+
+    def _deadline(item):
+        tier, days = _urgency(item, threshold)
+        dl = _fmt_date(item.get("deadline")) if item.get("deadline") else "—"
+        if tier == "overdue":
+            return f"<font color='#B3261E'><b>{dl}</b> · {abs(days)}d late</font>", tier
+        if tier == "soon":
+            when = "today" if days == 0 else f"in {days}d"
+            return f"<font color='#A15C00'><b>{dl}</b> · {when}</font>", tier
+        return f"<font color='{MUTED if tier == 'done' else SOFT}'>{dl}</font>", tier
+
+    def _item_row(item, kind):
+        status = item.get("status") or "Not started"
+        dl_html, tier = _deadline(item)
+        name = _esc(item.get("name", ""))
+        if tier == "done":
+            name = f"<strike><font color='{MUTED}'>{name}</font></strike>"
+        prio = (item.get("priority") or "").lower()
+        if kind == "task" and prio in ("medium", "high", "urgent") and tier != "done":
+            pc = {"medium": "#A15C00", "high": "#B3261E", "urgent": "#7B1FA2"}[prio]
+            name += f"  <font color='{pc}' size='6.5'>{prio}</font>"
+        text = (f"› {name}" if kind == "subtask" else name)
+        return [
+            Paragraph(_esc(_code_of(item)), code_st),
+            Paragraph(text, sub_st if kind == "subtask" else task_st),
+            Paragraph(f"<font color='{ST_COL.get(status, SOFT)}'><b>{_esc(status)}</b></font>",
+                      cell_st),
+            Paragraph(dl_html, cell_st),
+            Paragraph(_people(item), cell_st),
+        ], tier, kind
+
+    def _card(band_html, colour, entries):
+        """A deliverable card as one table: band row + item rows."""
+        data = [[Paragraph(band_html, band_st), "", "", "", ""]]
+        meta = []
+        for cells, tier, kind in entries:
+            data.append(cells)
+            meta.append((tier, kind))
+        tbl = Table(data, colWidths=COLS)
+        style = [
+            ("SPAN", (0, 0), (-1, 0)),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(_tint(colour))),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E3E6EA")),
+            ("LINEBEFORE", (0, 0), (0, -1), 3.2, colors.HexColor(colour)),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, 0), 5), ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
+            ("TOPPADDING", (0, 1), (-1, -1), 1.6), ("BOTTOMPADDING", (0, 1), (-1, -1), 1.6),
+        ]
+        for i, (tier, kind) in enumerate(meta, start=1):
+            if kind == "task":
+                style += [("LINEABOVE", (0, i), (-1, i), 0.4, colors.HexColor("#E6E8EB")),
+                          ("TOPPADDING", (0, i), (-1, i), 3.2)]
+            if tier == "overdue":
+                style.append(("BACKGROUND", (1, i), (-1, i), colors.HexColor("#FFF6F6")))
+            elif tier == "soon":
+                style.append(("BACKGROUND", (1, i), (-1, i), colors.HexColor("#FFFCF7")))
+        tbl.setStyle(TableStyle(style))
+        return tbl
+
+    def _entries(task_list):
+        out = []
+        for t in task_list:
+            out.append(_item_row(t, "task"))
+            for s in subtasks:
+                if s.get("task_id") != t.get("id") or s.get("is_archived"):
+                    continue
+                if not _status_match(s.get("status")):
+                    continue
+                out.append(_item_row(s, "subtask"))
+        return out
+
+    def _sort(ts):
+        from utils.rows import urgency_sort as _us
+        return _us(ts, threshold)
+
+    header = Table([[Paragraph("CODE", head_st), Paragraph("TASK", head_st),
+                     Paragraph("STATUS", head_st), Paragraph("DEADLINE", head_st),
+                     Paragraph("OWNER / SUPERVISOR", head_st)]], colWidths=COLS)
+    header.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 5),
+                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
 
     for proj_idx, proj in enumerate(proj_list):
         if proj_idx > 0:
             elements.append(PageBreak())
-
         pid = proj["id"]
+        letter = proj.get("code_letter") or ""
 
-        # ── Project header ─────────────────────────────────────────────────────
-        elements.append(Paragraph(f"{proj.get('name')} ({proj.get('acronym','')})", h1))
+        # ── project tab sitting on a rule ──────────────────────────────────────
+        badge = (f"<font face='Courier-Bold' color='#4527A0' size='12'>{_esc(letter)}</font>  "
+                 if letter else "")
+        acr = proj.get("acronym") or ""
+        title = (f"<b>{_esc(acr)}</b> · {_esc(proj.get('name'))}" if acr and acr != proj.get("name")
+                 else f"<b>{_esc(proj.get('name'))}</b>")
+        tab = Table([[Paragraph(badge + title, tab_st)]])
+        tab.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FAFBFC")),
+            ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#C9CED4")),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.7, colors.HexColor("#FAFBFC")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 9), ("RIGHTPADDING", (0, 0), (-1, -1), 9),
+            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        tab.hAlign = "LEFT"
+        elements.append(tab)
+        elements.append(HRFlowable(width="100%", thickness=0.7, color=colors.HexColor("#C9CED4"),
+                                   spaceBefore=0, spaceAfter=3))
         capt_parts = []
         if proj.get("funding_agency"):
-            capt_parts.append(f"Ente finanziatore: {proj['funding_agency']}")
+            capt_parts.append(f"Funding: {proj['funding_agency']}")
         if proj.get("start_date"):
-            capt_parts.append(f"Periodo: {_fmt_date(proj.get('start_date'))} → {_fmt_date(proj.get('end_date'))}")
-        elements.append(Paragraph("  ·  ".join(capt_parts), caption))
-        elements.append(Spacer(1, 5))
+            capt_parts.append(f"{_fmt_date(proj.get('start_date'))} – {_fmt_date(proj.get('end_date'))}")
+        if capt_parts:
+            elements.append(Paragraph(_esc("  ·  ".join(capt_parts)), caption))
+        elements.append(header)
 
-        proj_deliverables = [
-            d for d in deliverables
-            if d.get("project_id") == pid
-            and d.get("id") in visible_deliv_ids
-        ]
+        proj_deliverables = sorted([d for d in deliverables
+                                    if d.get("project_id") == pid and d.get("id") in visible_deliv_ids],
+                                   key=lambda d: (d.get("code_no") is None, d.get("code_no") or 0, d.get("name") or ""))
+        for d in proj_deliverables:
+            d_tasks = _sort([t for t in tasks if t.get("deliverable_id") == d["id"]
+                             and t.get("id") in visible_task_ids])
+            colour = type_colour.get((d.get("type") or "").strip(), "#5F6368")
+            counted = [t for t in d_tasks if (t.get("status") or "") != "Cancelled"]
+            done = len([t for t in counted if t.get("status") == "Completed"])
+            dcode = (f"{letter}.{int(d['code_no'])}" if letter and d.get("code_no") is not None
+                     else "")
+            status = d.get("status") or "Not started"
+            dl_html, _ = _deadline(d)
+            owner = users_dict.get(d.get("owner_email"), d.get("owner_email") or "—")
+            sup_e = d.get("supervisor_email")
+            sup = users_dict.get(sup_e, sup_e) if sup_e and sup_e != d.get("owner_email") else ""
+            band = (
+                (f"<font face='Courier-Bold' color='{colour}'>{_esc(dcode)}</font>  " if dcode else "")
+                + f"<b><font color='{colour}'>{_esc(d.get('name', ''))}</font></b>  "
+                f"<font size='8' color='{ST_COL.get(status, SOFT)}'>{_esc(status)}</font>  "
+                f"<font size='8' color='{SOFT}'>{done}/{len(counted)} tasks</font>  "
+                f"<font size='8'>{dl_html}</font>  "
+                f"<font size='7.5' color='{SOFT}'>{_esc(owner)}"
+                + (f" · sup {_esc(sup)}" if sup else "") + "</font>  "
+                f"<font size='7.5' color='{colour}'><b>{_esc(d.get('type') or '')}</b></font>"
+            )
+            entries = _entries(d_tasks)
+            if not entries:
+                entries = [([Paragraph("", code_st),
+                             Paragraph(f"<i><font color='{MUTED}'>No tasks matching the "
+                                       f"filters.</font></i>", cell_st), "", "", ""], "normal", "note")]
+            elements.append(Spacer(1, 6))
+            elements.append(_card(band, colour, entries))
 
-        if proj_deliverables:
-            elements.append(Paragraph("DELIVERABLES", label))
-
-            for d in proj_deliverables:
-                did     = d["id"]
-                d_tasks = [t for t in tasks if t.get("deliverable_id") == did and t.get("id") in visible_task_ids]
-                total   = len(d_tasks)
-                done    = len([t for t in d_tasks if t.get("status") == "Completed"])
-                d_status = d.get("status", "Not started")
-                d_stat_colour = STATUS_TEXT.get(d_status, colors.grey)
-
-                elements.append(Spacer(1, 4))
-                elements.append(Paragraph(d.get("name", ""), h2))
-                elements.append(Paragraph(
-                    f"{d.get('type')}  •  scadenza {_fmt_date(d.get('deadline'))}  •  "
-                    f"{done}/{total} task completati  •  Stato: <font color='{d_stat_colour.hexval()}'>{d_status}</font>",
-                    small
-                ))
-                elements.append(Spacer(1, 3))
-
-                if d_tasks:
-                    table_data = [TABLE_HEADER]
-                    for t in d_tasks:
-                        seq    = t.get("sequence_id") or f"T-{t['id']}"
-                        tname  = t.get("name", "")
-                        tstatus = t.get("status", "Not started")
-                        tprio  = (t.get("priority") or "none").lower()
-                        owner  = users_dict.get(t.get("owner_email"), t.get("owner_email") or "—")
-                        dl     = _fmt_date(t.get("deadline"))
-                        
-                        stat_col = STATUS_TEXT.get(tstatus, colors.grey)
-                        prio_col = PRIORITY_TEXT.get(tprio, colors.grey)
-                        
-                        row = [
-                            Paragraph(f"<font color='grey'>{seq}</font>", small),
-                            Paragraph(tname, normal),
-                            Paragraph(f"<font color='{stat_col.hexval()}'>{tstatus}</font>", small),
-                            Paragraph(f"<font color='{prio_col.hexval()}'>{tprio}</font>", small),
-                            Paragraph(f"{_initials(owner)}  {owner}", small),
-                            Paragraph(dl, small),
-                        ]
-                        table_data.append(row)
-
-                    tbl = Table(table_data, colWidths=COL_WIDTHS, repeatRows=1)
-                    tbl.setStyle(TableStyle([
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F5F5F5")),
-                        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("FONTSIZE",   (0, 0), (-1, 0), 8),
-                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
-                        ("GRID",       (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
-                        ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
-                        ("TOPPADDING", (0, 0), (-1, -1), 4),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                    ]))
-                    elements.append(tbl)
-                else:
-                    elements.append(Paragraph("Nessun task corrispondente ai filtri.", italic))
-                elements.append(Spacer(1, 8))
-
-        # ── Unassigned tasks ───────────────────────────────────────────────────
-        unassigned = [
-            t for t in tasks
-            if t.get("project_id") == pid and not t.get("deliverable_id") and t.get("id") in visible_task_ids
-        ]
-
+        unassigned = _sort([t for t in tasks if t.get("project_id") == pid
+                            and not t.get("deliverable_id") and t.get("id") in visible_task_ids])
         if unassigned:
-            elements.append(HRFlowable(width="100%", thickness=0.5, lineCap="butt",
-                                        color=colors.HexColor("#CCCCCC"), dash=(3, 3)))
-            elements.append(Spacer(1, 4))
-            elements.append(Paragraph("TASK SENZA DELIVERABLE", label))
-            elements.append(Paragraph("Task generali — non associati a un deliverable specifico", italic))
-            elements.append(Spacer(1, 4))
-
-            table_data = [TABLE_HEADER]
-            for t in unassigned:
-                seq     = t.get("sequence_id") or f"T-{t['id']}"
-                tname   = t.get("name", "")
-                tstatus = t.get("status", "Not started")
-                tprio   = (t.get("priority") or "none").lower()
-                owner   = users_dict.get(t.get("owner_email"), t.get("owner_email") or "—")
-                dl      = _fmt_date(t.get("deadline"))
-                
-                stat_col = STATUS_TEXT.get(tstatus, colors.grey)
-                prio_col = PRIORITY_TEXT.get(tprio, colors.grey)
-
-                table_data.append([
-                    Paragraph(f"<font color='grey'>{seq}</font>", small),
-                    Paragraph(tname, normal),
-                    Paragraph(f"<font color='{stat_col.hexval()}'>{tstatus}</font>", small),
-                    Paragraph(f"<font color='{prio_col.hexval()}'>{tprio}</font>", small),
-                    Paragraph(f"{_initials(owner)}  {owner}", small),
-                    Paragraph(dl, small),
-                ])
-
-            tbl = Table(table_data, colWidths=COL_WIDTHS, repeatRows=1)
-            tbl.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F5F5F5")),
-                ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE",   (0, 0), (-1, 0), 8),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FAFAFA")]),
-                ("GRID",       (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
-                ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]))
-            elements.append(tbl)
+            lcode = f"{letter}.0" if letter else ""
+            band = ((f"<font face='Courier-Bold' color='#5F6368'>{lcode}</font>  " if lcode else "")
+                    + f"<b><font color='#3C4043'>Tasks without deliverable</font></b>  "
+                    f"<font size='8' color='{SOFT}'>{len(unassigned)}</font>")
+            elements.append(Spacer(1, 6))
+            elements.append(_card(band, "#9AA0A6", _entries(unassigned)))
 
     doc.build(elements)
     buf.seek(0)

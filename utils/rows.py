@@ -404,20 +404,99 @@ def deliverable_head_html(d: dict, d_tasks: list, user_map: dict, threshold: int
     done = len([t for t in counted if t.get("status") == "Completed"])
     owner = person_name(d.get("owner_email"), user_map) or "—"
     sup = person_name(d.get("supervisor_email"), user_map)
-    people = f"owner {esc(owner)}" + (f" · sup {esc(sup)}" if sup else "")
+    people = esc(owner) + (f" · sup {esc(sup)}" if sup else "")
 
+    total = len(counted)
+    progress = (progress_bar(done, total, width=70) if total else
+                f"<span style='font-size:11px;color:{TEXT_MUTED}'>no tasks yet</span>")
+    lead = (f"<span style='font-family:ui-monospace,Consolas,monospace;font-size:14px;"
+            f"font-weight:700;color:{colour}'>{esc(code)}</span>" if code else
+            f"<span style='font-size:10px;color:{colour};font-weight:700;"
+            f"letter-spacing:0.05em'>DELIVERABLE</span>")
+    # One line: code · name · status · progress · deadline … people · type.
+    # It wraps only when the window is too narrow for it.
     return (
-        "<div class='maic-deliv-head' style='padding:4px 8px 3px 8px'>"
-        "<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
-        + (f"<span style='font-family:ui-monospace,Consolas,monospace;font-size:14px;"
-           f"font-weight:700;color:{colour}'>{esc(code)}</span>" if code else
-           f"<span style='font-size:10px;color:{colour};font-weight:700;"
-           f"letter-spacing:0.05em'>DELIVERABLE</span>")
-        + f"<span style='font-size:15px;font-weight:700;color:{colour}'>{esc(d.get('name', ''))}</span>"
-        f"{status_chip(status)}{signoff}{archived}{dl_html}"
-        f"<span style='margin-left:auto'>{type_chip}</span></div>"
-        "<div style='display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:2px'>"
-        f"{progress_bar(done, len(counted))}"
-        f"<span style='font-size:12px;color:#3C4043'>{people}</span></div>"
+        "<div class='maic-deliv-head' style='padding:5px 8px;display:flex;"
+        "align-items:center;gap:10px;flex-wrap:wrap;row-gap:3px'>"
+        f"{lead}"
+        f"<span style='font-size:14.5px;font-weight:700;color:{colour}'>{esc(d.get('name', ''))}</span>"
+        f"{status_chip(status)}{signoff}{archived}{progress}{dl_html}"
+        f"<span style='margin-left:auto;font-size:11.5px;color:#5F6368;white-space:nowrap'>"
+        f"{people}</span>{type_chip}"
         "</div>"
     )
+
+
+# ── Project box and deliverable cards (Projects tree, Project Report) ────────
+
+def tint(hex_colour: str, weight: float = 0.13) -> str:
+    """The colour at ``weight`` opacity over white (a light wash)."""
+    h = (hex_colour or "#5F6368").lstrip("#")
+    if len(h) != 6:
+        h = "5F6368"
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return "#%02X%02X%02X" % tuple(round(255 - (255 - c) * weight) for c in (r, g, b))
+
+
+def type_colours(settings: dict) -> dict:
+    """{deliverable type: colour} from Settings → Deliverable Tags."""
+    from utils.helpers import parse_deliverable_tag_styles
+    return {s["name"].strip(): s.get("color") or "#5F6368"
+            for s in parse_deliverable_tag_styles((settings or {}).get("deliverable_tag_styles"))
+            if str(s.get("name", "")).strip()}
+
+
+def deliverable_card_css(key: str, colour: str) -> str:
+    """A deliverable card: thick edge in the type colour, tinted band."""
+    return (
+        f"div.st-key-{key} {{ background:#FFFFFF; border:1px solid #E3E6EA; "
+        f"border-left:4px solid {colour}; border-radius:0 8px 8px 0; padding-bottom:4px; }}"
+        f"div.st-key-{key} div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) "
+        f"{{ background:{tint(colour)} !important; border-radius:0 7px 0 0 !important; }}"
+    )
+
+
+def loose_band_html(code: str, count: int) -> str:
+    """The grey band of the 'tasks without deliverable' card (E.0)."""
+    lead = (f"<span style='font-family:ui-monospace,Consolas,monospace;font-size:14px;"
+            f"font-weight:700;color:#5F6368'>{esc(code)}</span>" if code else
+            "<span style='font-size:16px;line-height:1'>📋</span>")
+    return ("<div style='background:#F1F3F4;border-radius:0 7px 0 0;padding:5px 8px;"
+            "display:flex;align-items:center;gap:8px'>" + lead +
+            "<span style='font-size:14px;font-weight:700;color:#3C4043'>"
+            "Tasks without deliverable</span>"
+            "<span style='font-size:11px;color:#5F6368;background:#FFFFFF;"
+            "border:1px solid #DADCE0;border-radius:10px;padding:0 7px'>"
+            f"{count}</span></div>")
+
+
+def project_tab_html(letter: str | None, acronym: str | None, name: str,
+                     note: str = "") -> str:
+    """A static project tab (the Report has no toggle): letter badge, acronym,
+    name. It sits on the top edge of the project box below it."""
+    badge = (f"<span style='display:inline-flex;width:22px;height:22px;border-radius:5px;"
+             f"align-items:center;justify-content:center;background:#EDE7F6;color:#4527A0;"
+             f"font-family:ui-monospace,Consolas,monospace;font-weight:700;font-size:13px'>"
+             f"{esc(letter)}</span>" if letter else "")
+    title = (f"<b>{esc(acronym)}</b> · {esc(name)}" if acronym and acronym != name
+             else f"<b>{esc(name)}</b>")
+    extra = f"<span style='font-size:11.5px;color:#80868B'>{esc(note)}</span>" if note else ""
+    return ("<div class='maic-proj-tab' style='display:inline-flex;align-items:center;gap:8px;"
+            "padding:5px 14px;background:#FAFBFC;border:1px solid #C9CED4;"
+            "border-bottom:1px solid #FAFBFC;border-radius:8px 8px 0 0;position:relative;"
+            "z-index:2;margin-bottom:-1px;font-size:15px;color:#202124'>"
+            f"{badge}{title}{extra}</div>")
+
+
+# Box, tab and the single column header. Keyed containers: projbox_*, projwrap_*,
+# treehead. Injected by the pages that draw a project tree.
+PROJECT_BOX_CSS = """
+<style>
+div[class*="st-key-projbox_"] {
+    border: 1px solid #C9CED4; border-radius: 0 12px 12px 12px;
+    background: #FAFBFC; padding: 12px; gap: 12px;
+}
+div[class*="st-key-projwrap_"] { margin-bottom: 12px; }
+div[class*="st-key-treehead"] { padding: 0 14px 0 18px; margin-bottom: -4px; }
+</style>
+"""
