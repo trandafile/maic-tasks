@@ -1,57 +1,27 @@
-"""views/deliverables.py — Deliverables overview.
+"""views/deliverables.py — Deliverables, grouped by project.
 
-A single compact table, sorted by deadline, so the page answers one question at
-a glance: *what has to be delivered next?* Headers are shown once at the top;
-each row is tinted by urgency (overdue / due soon) and the deliverable name is
-the dominant element typographically.
+Each project is a group with its acronym on a vertical band; inside it one
+compact line per deliverable: name and type, status, deadline, task progress
+(with the active tasks on hover), owner and supervisor. Rows use the app-wide
+row style (utils/rows.py), so lateness reads the same as in Projects and on the
+Dashboard. The most pressing project comes first.
 """
 
 import datetime
-import html
 
 import streamlit as st
 
 from core.supabase_client import supabase
 from db import get_settings
-from utils.helpers import fmt_date, deliverable_chip_html, stable_colour
-from utils.modals import person_pill_html, deliverable_details_modal
-from utils.rows import ROW_BG, ROW_ACCENT
+from utils.helpers import deliverable_chip_html, stable_colour
+from utils.modals import deliverable_details_modal
+from utils.rows import (
+    TEXT_MUTED, esc, chip, status_chip, deadline_cell, people_cell, progress_bar, urgency,
+)
 from utils.pdf_generator import generate_deliverables_pdf
 
 
-# The deliverable name outranks a task name (14px/600), so it goes one step up.
-_DELIV_NAME_STYLE = "font-size:15px;font-weight:700;color:#111;line-height:1.35;"
-
-_STATUS_COLOURS = {
-    "Not started": ("#5F6368", "#F1F3F4"),
-    "Working on":  ("#1565C0", "#E3F2FD"),
-    "Blocked":     ("#E65100", "#FFF3E0"),
-    "Completed":   ("#2E7D32", "#E8F5E9"),
-    "Cancelled":   ("#B71C1C", "#FFEBEE"),
-}
 _INACTIVE = ("Completed", "Cancelled")
-
-# Urgency tiers → (row background, left accent border)
-# Same wash as every other list in the app (utils/rows.py).
-_URGENCY_STYLE = {
-    "overdue":  (ROW_BG["overdue"], ROW_ACCENT["overdue"]),
-    "due_soon": (ROW_BG["soon"], ROW_ACCENT["soon"]),
-    "normal":   ("transparent", "transparent"),
-    "done":     ("transparent", "#2E7D32"),
-}
-
-def _proj_colour(label: str) -> str:
-    return stable_colour(label)
-
-
-def _parse_date(value) -> datetime.date | None:
-    if not value:
-        return None
-    try:
-        return datetime.date.fromisoformat(str(value)[:10])
-    except Exception:
-        return None
-
 
 def _fetch_deliverables_overview():
     """Fetch projects + deliverables + users, applying RBAC on deliverables."""
@@ -95,164 +65,129 @@ def _fetch_deliverables_overview():
         return [], [], {}
 
 
-def _owner_sup_html(d: dict, user_map: dict) -> str:
-    owner_e = d.get("owner_email")
-    sup_e = d.get("supervisor_email")
-    pills = ""
-    if owner_e:
-        u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
-        pills += person_pill_html(
-            u.get("name", owner_e),
-            u.get("avatar_color", "#534AB7"),
-            role="owner",
-            compact=True,
+def _fetch_task_progress(deliverable_ids: list[int]) -> dict[int, dict]:
+    """{deliverable_id: {total, done, active, active_names}} from live tasks.
+    Cancelled tasks count as neither done nor to do."""
+    out: dict[int, dict] = {}
+    if not deliverable_ids:
+        return out
+    try:
+        tasks = (
+            supabase.table("tasks")
+            .select("deliverable_id, name, status")
+            .in_("deliverable_id", deliverable_ids)
+            .eq("is_archived", False)
+            .execute()
+            .data
+            or []
         )
-    if sup_e and sup_e != owner_e:
-        u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
-        pills += person_pill_html(
-            u.get("name", sup_e),
-            u.get("avatar_color", "#BA7517"),
-            role="sup",
-            compact=True,
-        )
-    return pills or "<span style='color:#aaa'>—</span>"
+    except Exception as e:
+        print(f"[deliverables] task progress: {e}")
+        return out
+    for t in tasks:
+        p = out.setdefault(t["deliverable_id"], {"total": 0, "done": 0, "active": 0,
+                                                "active_names": []})
+        s = t.get("status") or "Not started"
+        if s == "Cancelled":
+            continue
+        p["total"] += 1
+        if s == "Completed":
+            p["done"] += 1
+        else:
+            p["active"] += 1
+            p["active_names"].append(t.get("name") or "?")
+    return out
 
 
-def _urgency(d: dict, threshold: int, today: datetime.date) -> tuple[str, int | None]:
-    """Return (tier, days_to_deadline). Completed/cancelled never raise alarms."""
-    dl = _parse_date(d.get("deadline"))
-    if (d.get("status") or "Not started") in _INACTIVE:
-        return "done", (dl - today).days if dl else None
-    if not dl:
-        return "normal", None
-    days = (dl - today).days
-    if days < 0:
-        return "overdue", days
-    if days <= threshold:
-        return "due_soon", days
-    return "normal", days
+# ── One deliverable, one line ─────────────────────────────────────────────────
+# Same row system as Projects and the Dashboard (utils/rows.py): tinted light
+# red when late and pale orange when due soon, single-line cells.
+
+_GRID = "grid-template-columns:minmax(0,1fr) 92px 140px 180px 215px;"
 
 
-def _deadline_cell(d: dict, tier: str, days: int | None) -> str:
-    dl = d.get("deadline")
-    if not dl:
-        return "<span style='color:#aaa;font-size:12px'>no deadline</span>"
-    date_txt = fmt_date(dl)
+def _progress_cell(p: dict | None) -> str:
+    p = p or {"total": 0, "done": 0, "active": 0, "active_names": []}
+    if not p["total"]:
+        return f"<span style='font-size:11px;color:{TEXT_MUTED}'>no tasks yet</span>"
+    tip = esc("Active: " + ", ".join(p["active_names"])) if p["active_names"] else "All done"
+    active = (f"<span title='{tip}' style='font-size:11px;color:#1558B0;font-weight:600;"
+              f"white-space:nowrap;cursor:help'>{p['active']} active</span>"
+              if p["active"] else
+              "<span style='font-size:11px;color:#1E7E34;font-weight:600'>all done</span>")
+    return (f"<div style='display:flex;align-items:center;gap:8px;white-space:nowrap'>"
+            f"{progress_bar(p['done'], p['total'], width=70)}{active}</div>")
+
+
+def _row_html(d: dict, settings: dict, user_map: dict, progress: dict | None,
+              threshold: int) -> str:
+    tier, _ = urgency(d, threshold)
+    classes = "maic-row maic-row-flat"
     if tier == "overdue":
-        return (
-            f"<span style='font-weight:700;color:#C62828;font-size:13px'>{date_txt}</span>"
-            f"<div style='font-size:11px;color:#C62828'>overdue {abs(days)}d</div>"
-        )
-    if tier == "due_soon":
-        label = "today" if days == 0 else f"in {days}d"
-        return (
-            f"<span style='font-weight:700;color:#B26A00;font-size:13px'>{date_txt}</span>"
-            f"<div style='font-size:11px;color:#B26A00'>{label}</div>"
-        )
-    return f"<span style='color:#444;font-size:13px'>{date_txt}</span>"
-
-
-def _signoff_chip(d: dict) -> str:
-    """A deliverable claimed finished but not yet countersigned. Shown next to
-    the status so the queue is visible without opening every row."""
-    if (d.get("completion_state") or "") != "pending":
-        return ""
+        classes += " maic-row-overdue"
+    elif tier == "soon":
+        classes += " maic-row-soon"
+    done = tier == "done"
+    name_style = (f"font-size:13.5px;font-weight:700;color:{TEXT_MUTED if done else '#1F2328'};"
+                  f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0")
+    signoff = chip("⏳ sign-off", "#8A5300", "#FFF1D6") \
+        if (d.get("completion_state") or "") == "pending" else ""
+    name_cell = (
+        f"<div style='display:flex;align-items:center;gap:7px;min-width:0;overflow:hidden'>"
+        f"<span style='{name_style}' title='{esc(d.get('name', ''))}'>{esc(d.get('name') or '—')}</span>"
+        f"{deliverable_chip_html(d.get('type') or 'generic', settings)}{signoff}</div>"
+    )
     return (
-        "<span style='background:#FFF4E0;color:#9A6208;padding:2px 7px;"
-        "border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;"
-        "margin-left:5px' title='Waiting for the supervisor to sign it off'>"
-        "⏳ SIGN-OFF</span>"
+        f"<div class='{classes}' style='display:grid;{_GRID}gap:10px;padding:4px 8px;"
+        f"align-items:center;line-height:1.3'>"
+        f"{name_cell}"
+        f"<div>{status_chip(d.get('status') or 'Not started')}</div>"
+        f"<div style='white-space:nowrap'>{deadline_cell(d, threshold)}</div>"
+        f"<div>{_progress_cell(progress)}</div>"
+        f"<div style='min-width:0'>{people_cell(d.get('owner_email'), d.get('supervisor_email'), user_map, muted=done)}</div>"
+        f"</div>"
     )
 
 
-def _status_chip(status: str) -> str:
-    fg, bg = _STATUS_COLOURS.get(status, ("#5F6368", "#F1F3F4"))
-    return (
-        f"<span style='background:{bg};color:{fg};padding:2px 8px;border-radius:4px;"
-        f"font-size:11px;font-weight:600;white-space:nowrap'>{html.escape(status)}</span>"
-    )
+def _header_html() -> str:
+    cell = f"font-size:10.5px;color:{TEXT_MUTED};letter-spacing:0.03em"
+    labels = ("Deliverable", "Status", "Deadline", "Tasks", "Owner / supervisor")
+    return (f"<div class='maic-row-head' style='display:grid;{_GRID}gap:10px;"
+            f"padding:0 8px;align-items:center'>"
+            + "".join(f"<span style='{cell}'>{l}</span>" for l in labels) + "</div>")
 
 
-def _project_chip(label: str) -> str:
-    c = _proj_colour(label)
-    return (
-        f"<span style='background:{c};color:#fff;padding:1px 7px;border-radius:4px;"
-        f"font-size:10px;font-weight:700;white-space:nowrap'>{html.escape(label)}</span>"
-    )
-
-
-# Column geometry, shared by the header and every row so the list still reads
-# as a table even though each row is a Streamlit block (needed for the per-row
-# Edit button: a real <table> cannot host widgets).
-_COLS = [("Deliverable", 34), ("Project", 11), ("Type", 11),
-         ("Status", 13), ("Deadline", 14), ("Owner / Supervisor", 17)]
-
-
-def _cell(content: str, pct: int, extra: str = "") -> str:
-    return (f"<div style='flex:0 0 {pct}%;max-width:{pct}%;padding:0 6px;"
-            f"overflow:hidden;{extra}'>{content}</div>")
-
-
-def _header_row() -> str:
-    cells = "".join(
-        _cell(f"<span style='font-size:11px;font-weight:700;letter-spacing:0.06em;"
-              f"text-transform:uppercase;color:#5F6368'>{html.escape(lbl)}</span>", pct)
-        for lbl, pct in _COLS
-    )
-    return (f"<div style='display:flex;align-items:center;background:#F1F3F5;"
-            f"border-bottom:2px solid #DDE1E5;padding:7px 4px;border-radius:4px 4px 0 0'>"
-            f"{cells}</div>")
-
-
-def _row_html(d: dict, settings: dict, user_map: dict) -> str:
-    tier, days = d["_tier"], d["_days"]
-    bg, accent = _URGENCY_STYLE[tier]
-    muted = "opacity:0.62;" if tier == "done" else ""
-    name = html.escape(d.get("name") or "—")
-
-    cells = (
-        _cell(f"<span style='{_DELIV_NAME_STYLE}'>{name}</span>", _COLS[0][1])
-        + _cell(_project_chip(d["_proj_label"]), _COLS[1][1])
-        + _cell(deliverable_chip_html(d.get("type") or "generic", settings), _COLS[2][1])
-        + _cell(_status_chip(d.get("status") or "Not started") + _signoff_chip(d),
-                _COLS[3][1])
-        + _cell(_deadline_cell(d, tier, days), _COLS[4][1])
-        + _cell(_owner_sup_html(d, user_map), _COLS[5][1])
-    )
-    return (f"<div style='display:flex;align-items:center;background:{bg};{muted}"
-            f"border-left:3px solid {accent};border-bottom:1px solid #ECEFF1;"
-            f"padding:7px 4px;min-height:38px'>{cells}</div>")
-
-
-# Injected once via st.markdown (the proven pattern for CSS in this app).
-_TABLE_CSS = """
+# Project group: a vertical band with the acronym, as tall as the group.
+# The band is absolutely positioned against the keyed container, so it
+# stretches with however many deliverables the project has.
+_GROUP_CSS = """
 <style>
-.maic-deliv-table {width:100%;border-collapse:collapse;font-size:13px;}
-.maic-deliv-table th {
-    position:sticky; top:0; z-index:2; background:#F1F3F5;
-    text-align:left; padding:8px 10px; font-size:11px; font-weight:700;
-    letter-spacing:0.06em; text-transform:uppercase; color:#5F6368;
-    border-bottom:2px solid #DDE1E5;
+div[class*="st-key-dvproj_"], div[class*="st-key-dvhead"] {
+    position: relative; padding-left: 40px; gap: 0 !important;
 }
-.maic-deliv-table td {padding:8px 10px;border-bottom:1px solid #ECEFF1;vertical-align:middle;}
-.maic-deliv-table tr:hover td {background:rgba(0,0,0,0.02);}
-/* This page lays rows out with columns (needed for the per-row Edit button),
-   so neutralise the global row striping that would fight the urgency tints. */
-div[data-testid='stHorizontalBlock'] {background-color: transparent !important;
-    border-bottom: none !important; padding-top: 0 !important; padding-bottom: 0 !important;}
-div[data-testid='stButton'] > button {min-height:1.6rem;padding:0.1rem 0.4rem;}
+div[class*="st-key-dvproj_"] { margin-bottom: 14px; }
+div[class*="st-key-dvproj_"] div[data-testid='stElementContainer']:has(.dv-band) {
+    position: static !important; height: 0; margin: 0;
+}
+.dv-band {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 30px;
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+}
+.dv-band span {
+    writing-mode: vertical-rl; transform: rotate(180deg); color: #FFFFFF;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.08em; white-space: nowrap;
+}
 </style>
 """
 
 
 def show_deliverables():
-    st.title("Deliverables Overview")
+    st.title("Deliverables")
     settings = get_settings()
     try:
         threshold = int(settings.get("expiring_threshold_days", 14))
     except (TypeError, ValueError):
         threshold = 14
-    today = datetime.date.today()
 
     projects, deliverables, user_map = _fetch_deliverables_overview()
     if not projects or not deliverables:
@@ -260,25 +195,21 @@ def show_deliverables():
         return
 
     proj_by_id = {p["id"]: p for p in projects}
-
-    # Annotate each deliverable with project label and urgency.
     for d in deliverables:
         p = proj_by_id.get(d.get("project_id"), {})
         d["_proj_label"] = p.get("acronym") or p.get("identifier") or p.get("name") or "—"
         d["_proj_name"] = p.get("name") or "—"
-        tier, days = _urgency(d, threshold, today)
-        d["_tier"], d["_days"] = tier, days
+        d["_tier"], _ = urgency(d, threshold)
 
     n_overdue = sum(1 for d in deliverables if d["_tier"] == "overdue")
-    n_soon = sum(1 for d in deliverables if d["_tier"] == "due_soon")
-
+    n_soon = sum(1 for d in deliverables if d["_tier"] == "soon")
     m1, m2, m3 = st.columns(3)
     m1.metric("Deliverables", len(deliverables))
-    m2.metric("Overdue", n_overdue, delta=None)
+    m2.metric("Overdue", n_overdue)
     m3.metric(f"Due within {threshold}d", n_soon)
 
     # ── Filters ───────────────────────────────────────────────────────────────
-    f1, f_type, f2, f3 = st.columns([2, 1.6, 2, 2])
+    f1, f_type, f2, f3 = st.columns([2, 1.6, 2, 2], vertical_alignment="bottom")
     with f1:
         proj_opts = {"All projects": None}
         proj_opts.update({
@@ -288,7 +219,6 @@ def show_deliverables():
         })
         sel_proj = proj_opts[st.selectbox("Project", list(proj_opts.keys()), key="dv_proj")]
     with f_type:
-        # Types come from the data, so custom deliverable tags appear here too.
         types = sorted({(d.get("type") or "generic").strip() or "generic" for d in deliverables})
         sel_type = st.selectbox("Type", ["All types"] + types, key="dv_type")
     with f2:
@@ -310,63 +240,74 @@ def show_deliverables():
     elif sel_status != "All":
         rows = [d for d in rows if (d.get("status") or "Not started") == sel_status]
     if only_urgent:
-        rows = [d for d in rows if d["_tier"] in ("overdue", "due_soon")]
-
-    # Sort: overdue first, then by deadline; undated last; completed sink to the bottom.
-    tier_rank = {"overdue": 0, "due_soon": 1, "normal": 2, "done": 3}
-    rows.sort(key=lambda d: (
-        tier_rank[d["_tier"]],
-        d.get("deadline") or "9999-12-31",
-        (d.get("name") or "").lower(),
-    ))
-
+        rows = [d for d in rows if d["_tier"] in ("overdue", "soon")]
     if not rows:
         st.info("No deliverables match the current filters.")
         return
 
-    st.caption(
-        f"{len(rows)} deliverable(s), most urgent first. "
-        "Red = overdue · amber = due soon."
-    )
+    progress = _fetch_task_progress([d["id"] for d in rows])
 
-    st.markdown(_TABLE_CSS, unsafe_allow_html=True)
+    # ── Group by project: the most pressing project first ─────────────────────
+    tier_rank = {"overdue": 0, "soon": 1, "normal": 2, "done": 3}
+    groups: dict[int, list] = {}
+    for d in rows:
+        groups.setdefault(d.get("project_id"), []).append(d)
+
+    def _row_key(d):
+        return (tier_rank[d["_tier"]], d.get("deadline") or "9999-12-31",
+                (d.get("name") or "").lower())
+
+    for lst in groups.values():
+        lst.sort(key=_row_key)
+    ordered = sorted(groups.items(), key=lambda kv: (_row_key(kv[1][0]),
+                                                    kv[1][0]["_proj_name"].lower()))
+
+    st.caption(f"{len(rows)} deliverable(s) in {len(groups)} project(s) — the most "
+               "pressing project first, then by urgency. Hover “active” to see the "
+               "open tasks.")
+    st.markdown(_GROUP_CSS, unsafe_allow_html=True)
 
     is_admin = st.session_state.get("user_role") == "admin"
     email = st.session_state.get("user_email")
 
-    h_row, h_btn = st.columns([9, 1])
-    with h_row:
-        st.html(_header_row())
-    with h_btn:
-        st.html("<div style='height:34px'></div>")
+    with st.container(key="dvhead"):
+        hc, _ = st.columns([12, 0.7])
+        with hc:
+            st.html(_header_html())
 
-    for d in rows:
-        c_row, c_btn = st.columns([9, 1])
-        with c_row:
-            st.html(_row_html(d, settings, user_map))
-        with c_btn:
-            if st.button("✏️", key=f"dv_edit_{d['id']}", use_container_width=True,
-                         help="Open details"):
-                # Editing follows the app-wide rule: admin, owner or supervisor.
-                can_edit = (
-                    is_admin
-                    or d.get("owner_email") == email
-                    or d.get("supervisor_email") == email
-                )
-                deliverable_details_modal(
-                    d, can_edit=can_edit,
-                    breadcrumb=f"Deliverables / {d.get('_proj_name', '')}",
-                )
+    for pid, lst in ordered:
+        label, pname = lst[0]["_proj_label"], lst[0]["_proj_name"]
+        with st.container(key=f"dvproj_{pid}", gap=None):
+            st.html(f"<div class='dv-band' style='background:{stable_colour(label)}'>"
+                    f"<span>{esc(label)}</span></div>")
+            st.html(f"<div style='font-size:12px;color:{TEXT_MUTED};padding:2px 8px 3px 8px'>"
+                    f"{esc(pname)}</div>")
+            for d in lst:
+                c_row, c_btn = st.columns([12, 0.7], vertical_alignment="center")
+                with c_row:
+                    st.html(_row_html(d, settings, user_map, progress.get(d["id"]), threshold))
+                with c_btn:
+                    if st.button("✏️", key=f"dv_edit_{d['id']}", type="tertiary",
+                                 help="Details, edit, sign-off and comments"):
+                        can_edit = (
+                            is_admin
+                            or d.get("owner_email") == email
+                            or d.get("supervisor_email") == email
+                        )
+                        deliverable_details_modal(
+                            d, can_edit=can_edit,
+                            breadcrumb=f"Deliverables / {d.get('_proj_name', '')}",
+                        )
 
     # ── PDF export of exactly what is on screen ──────────────────────────────
     st.write("")
     if st.button("📄 Generate PDF", type="primary", key="deliv_pdf_btn"):
-        visible_projects = [p for p in projects if any(d.get("project_id") == p["id"] for d in rows)]
+        visible_projects = [p for p in projects if p["id"] in groups]
         buf = generate_deliverables_pdf(visible_projects, rows, user_map)
         st.download_button(
             "⬇️ Download PDF",
             data=buf,
-            file_name=f"deliverables_overview_{today.strftime('%Y%m%d')}.pdf",
+            file_name=f"deliverables_overview_{datetime.date.today().strftime('%Y%m%d')}.pdf",
             mime="application/pdf",
             key="deliv_pdf_dl",
         )
