@@ -15,6 +15,7 @@ from core.supabase_client import supabase
 from db import get_settings
 from utils.helpers import fmt_date, deliverable_chip_html, stable_colour
 from utils.modals import person_pill_html, deliverable_details_modal
+from utils.rows import ROW_BG, ROW_ACCENT
 from utils.pdf_generator import generate_deliverables_pdf
 
 
@@ -31,9 +32,10 @@ _STATUS_COLOURS = {
 _INACTIVE = ("Completed", "Cancelled")
 
 # Urgency tiers → (row background, left accent border)
+# Same wash as every other list in the app (utils/rows.py).
 _URGENCY_STYLE = {
-    "overdue":  ("#FDECEC", "#C62828"),
-    "due_soon": ("#FFF8E9", "#E65100"),
+    "overdue":  (ROW_BG["overdue"], ROW_ACCENT["overdue"]),
+    "due_soon": (ROW_BG["soon"], ROW_ACCENT["soon"]),
     "normal":   ("transparent", "transparent"),
     "done":     ("transparent", "#2E7D32"),
 }

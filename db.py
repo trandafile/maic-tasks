@@ -1910,6 +1910,105 @@ def get_pending_signoffs(email: str | None = None, is_admin: bool = False) -> li
     return rows
 
 
+# -- Supervisor review queue (Projects -> "To review") --------------------------
+#
+# Doctoral students close most tasks; the supervisor is the one who should look
+# before the work disappears into the archive. Archiving IS the verification,
+# so this needs no new column: the queue is simply "completed, not archived,
+# and I am the one who should check it".
+
+def _closed_on(item: dict) -> str | None:
+    return item.get("completion_date") or (item.get("updated_at") or "")[:10] or None
+
+
+def _is_my_review(item: dict, email: str, is_admin: bool) -> bool:
+    sup = item.get("supervisor_email")
+    return sup == email or (is_admin and not sup)
+
+
+def get_review_queue(email: str | None, is_admin: bool = False) -> dict:
+    """Everything waiting for this person's check.
+
+    {"deliverables": [...pending sign-offs...],
+     "items": [...completed tasks and subtasks, oldest closure first...]}
+    Each item carries ``_kind`` (task|subtask), ``_path`` and ``_closed``.
+    """
+    out = {"deliverables": [], "items": []}
+    if not email:
+        return out
+    out["deliverables"] = get_pending_signoffs(email, is_admin)
+    try:
+        tasks = supabase.table("tasks").select("*").eq(
+            "status", "Completed").eq("is_archived", False).execute().data or []
+        subs = supabase.table("subtasks").select("*").eq(
+            "status", "Completed").eq("is_archived", False).execute().data or []
+        projects = {p["id"]: p for p in (supabase.table("projects").select(
+            "id, name, acronym").execute().data or [])}
+        delivs = {d["id"]: d for d in (supabase.table("deliverables").select(
+            "id, name").execute().data or [])}
+        parent_ids = list({s.get("task_id") for s in subs if s.get("task_id")})
+        parents = {}
+        if parent_ids:
+            parents = {t["id"]: t for t in (supabase.table("tasks").select(
+                "id, name, project_id, deliverable_id").in_(
+                "id", parent_ids).execute().data or [])}
+    except Exception as exc:
+        print(f"[db.get_review_queue] {exc}")
+        return out
+
+    def proj_label(pid):
+        p = projects.get(pid) or {}
+        return p.get("acronym") or p.get("name") or ""
+
+    for t in tasks:
+        if not _is_my_review(t, email, is_admin):
+            continue
+        d = delivs.get(t.get("deliverable_id"))
+        t["_kind"] = "task"
+        t["_project"] = proj_label(t.get("project_id"))
+        t["_path"] = d["name"] if d else "task without deliverable"
+        t["_closed"] = _closed_on(t)
+        out["items"].append(t)
+    for s in subs:
+        if not _is_my_review(s, email, is_admin):
+            continue
+        parent = parents.get(s.get("task_id")) or {}
+        s["_kind"] = "subtask"
+        s["_project"] = proj_label(parent.get("project_id"))
+        s["_path"] = f"in: {parent.get('name', '?')}"
+        s["_closed"] = _closed_on(s)
+        out["items"].append(s)
+
+    out["items"].sort(key=lambda i: i.get("_closed") or "9999")
+    return out
+
+
+def archive_items(items: list[dict]) -> tuple[int, int]:
+    """Archive a batch of tasks/subtasks (the 'verified' action)."""
+    t_ids = [i["id"] for i in items if i.get("_kind") == "task"]
+    s_ids = [i["id"] for i in items if i.get("_kind") == "subtask"]
+    if t_ids:
+        supabase.table("tasks").update({"is_archived": True}).in_("id", t_ids).execute()
+    if s_ids:
+        supabase.table("subtasks").update({"is_archived": True}).in_("id", s_ids).execute()
+    return len(t_ids), len(s_ids)
+
+
+def reopen_item(item: dict, actor_email: str | None) -> tuple[bool, str]:
+    """Supervisor rejects a closure: back to 'Working on', freshness refreshed."""
+    kind = item.get("_kind") or "task"
+    table = "tasks" if kind == "task" else "subtasks"
+    payload = {"status": "Working on", "updated_at": now_iso()}
+    if table == "tasks":
+        payload["completion_date"] = None
+    ok, err, _ = update_row(table, item["id"], payload)
+    if not ok:
+        return False, err
+    log_status_change(kind, item["id"], item.get("project_id"),
+                      item.get("status"), "Working on", actor_email)
+    return True, ""
+
+
 def get_supervisor_digest(user_email: str, days: int = 7) -> dict:
     """What moved and what did not, among the items this person supervises."""
     since_dt = _dt_mod.datetime.utcnow() - _dt_mod.timedelta(days=days)

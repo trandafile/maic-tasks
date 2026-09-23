@@ -2,50 +2,17 @@ import streamlit as st
 import datetime as _dt
 import json
 from core.supabase_client import supabase
-from utils.modals import get_status_color_map, render_priority_badge, task_details_modal, subtask_details_modal, person_pill_html, deliverable_details_modal
+from utils.modals import task_details_modal, subtask_details_modal, deliverable_details_modal
 from db import delete_task_cascade, log_status_change
 from utils.pdf_generator import generate_projects_pdf
 from utils.notifications import send_task_assigned
-from utils.helpers import (
-    fmt_date, sort_tasks_by_deadline, parse_deliverable_tag_styles, deliverable_chip_html,
-    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX, TASK_ROW_CLASS, SUBTASK_ROW_CLASS,
-)
+from utils.helpers import parse_deliverable_tag_styles, deliverable_chip_html
 from utils.md_editor import markdown_editor
 from db import get_settings
-
-# ─── Status / Priority badge helpers ───────────────────────────────────────────
-STATUS_COLOURS = {
-    "Not started": ("#888888", "#f0f0f0"),
-    "Working on":  ("#1565C0", "#E3F2FD"),
-    "Blocked":     ("#E65100", "#FFF3E0"),
-    "Completed":   ("#2E7D32", "#E8F5E9"),
-    "Cancelled":   ("#B71C1C", "#FFEBEE"),
-}
-
-PRIORITY_COLOURS = {
-    "none":   ("#888888", "#f0f0f0"),
-    "low":    ("#1565C0", "#E3F2FD"),
-    "medium": ("#E65100", "#FFF3E0"),
-    "high":   ("#B71C1C", "#FFEBEE"),
-    "urgent": ("#6A1B9A", "#F3E5F5"),
-}
-
-def _badge(text, fg, bg):
-    return (
-        f"<span style='background:{bg};color:{fg};padding:2px 8px;"
-        f"border-radius:4px;font-size:0.78rem;font-weight:600;"
-        f"white-space:nowrap;display:inline-block'>{text}</span>"
-    )
-
-def _status_badge(status):
-    fg, bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
-    return _badge(status, fg, bg)
-
-def _priority_badge(priority):
-    p = (priority or "none").lower()
-    fg, bg = PRIORITY_COLOURS.get(p, ("#888", "#f0f0f0"))
-    return _badge(p, fg, bg)
-
+from utils.rows import (
+    ROW_COLS, INACTIVE, row_html, header_html, urgency_sort, fmt, esc, project_chip,
+    deliverable_head_html,
+)
 
 # ─── Data fetching ──────────────────────────────────────────────────────────────
 
@@ -410,39 +377,6 @@ def add_project_modal():
 
 # ─── Task row renderer ──────────────────────────────────────────────────────────
 
-def _deadline_html(deadline_str: str | None, status: str, threshold: int = 7) -> str:
-    if not deadline_str:
-        return ""
-    try:
-        dl = _dt.date.fromisoformat(deadline_str)
-        delta = (dl - _dt.date.today()).days
-        label = dl.strftime("%d/%m/%Y")
-    except Exception:
-        return ""
-
-    if status in ("Completed", "Cancelled"):
-        return (
-            f"<span style='font-size:11px;color:#888;'>"
-            f"📅 {label}</span>"
-        )
-    if delta < 0:
-        days = abs(delta)
-        return (
-            f"<span style='font-size:11px;color:#E24B4A;font-weight:500;'>📅 {label}</span>&nbsp;"
-            f"<span style='font-size:10px;background:#FCEBEB;color:#A32D2D;"
-            f"padding:1px 6px;border-radius:3px;font-weight:600;'>overdue {days}d</span>"
-        )
-    if delta <= threshold:
-        return (
-            f"<span style='font-size:11px;color:#BA7517;font-weight:500;'>📅 {label}</span>&nbsp;"
-            f"<span style='font-size:10px;background:#FAEEDA;color:#854F0B;"
-            f"padding:1px 6px;border-radius:3px;font-weight:600;'>due in {delta}d</span>"
-        )
-    return (
-        f"<span style='font-size:11px;color:#888;'>📅 {label}</span>"
-    )
-
-
 def _parse_date(value: str | None) -> _dt.date | None:
     if not value:
         return None
@@ -539,310 +473,223 @@ def _get_projects_filter_signature(*, is_admin: bool, owner_email: str | None, s
     return (is_admin, owner_email, supervisor_email, deadline_scope)
 
 
-def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix, threshold: int):
-    t_id      = t["id"]
-    is_owner  = t.get("owner_email") == user_email
-    is_sup    = t.get("supervisor_email") == user_email
-    can_edit  = is_admin or is_owner or is_sup
-    readonly_for_user = (not is_admin) and (not can_edit)
-    opacity   = "1" if can_edit else "0.35" if readonly_for_user else "0.45"
-    seq_id    = t.get("sequence_id") or f"T-{t_id}"
-    status    = t.get("status", "Not started")
-    priority  = (t.get("priority") or "none").lower()
-    name      = t.get("name", "")
+def _row_actions(n: int = 3):
+    """Fixed icon slots, so every row's buttons line up in the same column."""
+    return st.columns(n, gap="small")
 
-    owner_e = t.get("owner_email")
-    sup_e   = t.get("supervisor_email")
-    pills   = ""
-    if not readonly_for_user:
-        if owner_e:
-            u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
-            pills += person_pill_html(
-                u.get("name", owner_e),
-                u.get("avatar_color", "#534AB7"),
-                role="owner",
-                compact=False,
-            )
-        if sup_e and sup_e != owner_e:
-            u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
-            pills += person_pill_html(
-                u.get("name", sup_e),
-                u.get("avatar_color", "#BA7517"),
-                role="sup",
-                compact=False,
-            )
 
-    dl_html = "" if readonly_for_user else _deadline_html(t.get("deadline"), status, threshold)
-    s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
-    p_fg, p_bg = PRIORITY_COLOURS.get(priority, ("#888", "#f0f0f0"))
-    s_badge = _badge(status, s_fg, s_bg)
-    p_badge = _badge(priority, p_fg, p_bg) if not readonly_for_user else ""
-
-    col_html, col_btns = st.columns([6, 4])
-    with col_html:
-        st.html(
-            f"""
-            <div class='{TASK_ROW_CLASS}'
-                 style='display:grid;grid-template-columns:52px 1fr auto;
-                        gap:0;padding:5px 8px 5px 8px;align-items:start;
-                        opacity:{opacity};'>
-              <span style='font-family:monospace;font-size:10px;
-                           color:#aaa;padding-top:4px;'>{seq_id}</span>
-              <div>
-                <div style='display:flex;align-items:center;gap:7px;
-                            flex-wrap:wrap;margin-bottom:5px;'>
-                  <span style='{TASK_NAME_STYLE}'>{name}</span>
-                  {s_badge}
-                  {p_badge}
-                  {f"<span style='margin-left:8px;'>{dl_html}</span>" if dl_html else ""}
-                </div>
-                {f"<div>{pills}</div>" if pills else ""}
-              </div>
-              <div></div>
-            </div>
-            """
-        )
-    with col_btns:
-        if readonly_for_user:
-            st.write("")  # no actions for non-involved users
-        else:
-            b1, b2, b3 = st.columns([2.5, 2, 1])
-            with b1:
-                if st.button("Details", key=f"{key_prefix}_det_{t_id}", use_container_width=True):
-                    task_details_modal(t, can_edit)
-            with b2:
-                if st.button("+ Sub", key=f"{key_prefix}_addsub_{t_id}", disabled=not can_edit, use_container_width=True):
-                    add_subtask_modal(t_id, users)
-            with b3:
-                if is_admin:
-                    confirm_key = f"_confirm_del_t_{t_id}"
-                    if st.button("✕", key=f"{key_prefix}_delx_{t_id}", help="Permanently delete", use_container_width=True):
-                        st.session_state[confirm_key] = True
-                        st.rerun()
-
-    # ── Delete confirmation (inline, full width) ─────────────────────────────
-    confirm_key = f"_confirm_del_t_{t_id}"
-    if st.session_state.get(confirm_key):
-        with st.container():
-            st.warning(
-                f"Permanently delete **{seq_id} — {t.get('name')}**? "
-                f"This action cannot be undone."
-            )
-            cc1, cc2, cc3 = st.columns([1.5, 1.5, 7])
-            with cc1:
-                if st.button("Yes, delete", key=f"{key_prefix}_delyes_{t_id}", type="primary"):
-                    delete_task_cascade(t_id)
-                    st.session_state.pop(confirm_key, None)
-                    st.rerun()
-            with cc2:
-                if st.button("Cancel", key=f"{key_prefix}_delno_{t_id}"):
-                    st.session_state.pop(confirm_key, None)
-                    st.rerun()
-
-    # ── Nested subtasks ──────────────────────────────────────────────────────
-    t_subtasks = sort_tasks_by_deadline([s for s in subtasks if s.get("task_id") == t_id])
-    for s in t_subtasks:
-        s_id        = s["id"]
-        s_is_owner  = s.get("owner_email") == user_email
-        s_can_edit  = is_admin or s_is_owner or (s.get("supervisor_email") == user_email)
-        s_readonly  = (not is_admin) and (not s_can_edit)
-        s_opacity   = "1" if s_can_edit else "0.35" if s_readonly else "0.45"
-        s_status    = s.get("status", "Not started")
-        s_name      = s.get("name", "")
-
-        s_owner_e = s.get("owner_email")
-        s_sup_e   = s.get("supervisor_email")
-        s_pills   = ""
-        if not s_readonly:
-            if s_owner_e:
-                u = user_map.get(s_owner_e, {"name": s_owner_e, "avatar_color": "#534AB7"})
-                s_pills += person_pill_html(
-                    u.get("name", s_owner_e),
-                    u.get("avatar_color", "#534AB7"),
-                    role="owner",
-                    compact=False,
-                )
-            if s_sup_e and s_sup_e != s_owner_e:
-                u = user_map.get(s_sup_e, {"name": s_sup_e, "avatar_color": "#BA7517"})
-                s_pills += person_pill_html(
-                    u.get("name", s_sup_e),
-                    u.get("avatar_color", "#BA7517"),
-                    role="sup",
-                    compact=False,
-                )
-
-        s_dl_html = "" if s_readonly else _deadline_html(s.get("deadline"), s_status, threshold)
-        ss_fg, ss_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
-        s_badge = _badge(s_status, ss_fg, ss_bg)
-
-        scol_html, scol_btns = st.columns([6, 4])
-        with scol_html:
-            st.html(
-                f"""
-                <div class='{SUBTASK_ROW_CLASS}'
-                     style='display:grid;grid-template-columns:52px 1fr auto;
-                            gap:0;padding:5px 8px 4px 8px;align-items:start;
-                            opacity:{s_opacity};padding-left:24px;'>
-                  <span></span>
-                  <div>
-                    <div style='display:flex;align-items:center;gap:7px;
-                                flex-wrap:wrap;margin-bottom:3px;'>
-                      <span style='{SUBTASK_NAME_STYLE}'>{SUBTASK_PREFIX} {s_name}</span>
-                      {s_badge}
-                      {f"<span style='margin-left:6px;'>{s_dl_html}</span>" if s_dl_html else ""}
-                    </div>
-                    {f"<div>{s_pills}</div>" if s_pills else ""}
-                  </div>
-                  <div></div>
-                </div>
-                """
-            )
-        with scol_btns:
-            if s_readonly:
-                st.write("")
+def _confirm_delete(kind: str, item: dict, key_prefix: str) -> None:
+    """Inline confirmation under the row. Deletion is permanent (and for a
+    task it takes the subtasks with it), so it is one click to ask, one to do."""
+    i_id = item["id"]
+    confirm_key = f"_confirm_del_{kind[0]}_{i_id}"
+    if not st.session_state.get(confirm_key):
+        return
+    what = "task and its subtasks" if kind == "task" else "subtask"
+    st.warning(f"Permanently delete the {what} **{item.get('name')}**? This cannot be undone.")
+    c1, c2, _ = st.columns([1.4, 1.2, 7])
+    with c1:
+        if st.button("Yes, delete", key=f"{key_prefix}_delyes_{kind}_{i_id}", type="primary"):
+            if kind == "task":
+                delete_task_cascade(i_id)
             else:
-                sb1, sb2 = st.columns([3, 1])
-                with sb1:
-                    if st.button("Details", key=f"{key_prefix}_vistaS_{s_id}", use_container_width=True):
-                        subtask_details_modal(s, s_can_edit)
-                with sb2:
-                    if is_admin:
-                        s_confirm_key = f"_confirm_del_s_{s_id}"
-                        if st.button("✕", key=f"{key_prefix}_sdelx_{s_id}", help="Permanently delete", use_container_width=True):
-                            st.session_state[s_confirm_key] = True
-                            st.rerun()
+                supabase.table("subtasks").delete().eq("id", i_id).execute()
+            st.session_state.pop(confirm_key, None)
+            st.rerun()
+    with c2:
+        if st.button("Cancel", key=f"{key_prefix}_delno_{kind}_{i_id}"):
+            st.session_state.pop(confirm_key, None)
+            st.rerun()
 
-        # subtask delete confirmation
-        s_confirm_key = f"_confirm_del_s_{s_id}"
-        if st.session_state.get(s_confirm_key):
-            with st.container():
-                st.warning(
-                    f"Permanently delete subtask **{s.get('name')}**? "
-                    f"This action cannot be undone."
-                )
-                scc1, scc2, scc3 = st.columns([1.5, 1.5, 7])
-                with scc1:
-                    if st.button("Yes, delete", key=f"{key_prefix}_sdelyes_{s_id}", type="primary"):
-                        supabase.table("subtasks").delete().eq("id", s_id).execute()
-                        st.session_state.pop(s_confirm_key, None)
+
+def _render_task_row(t, subtasks, users, user_map, user_email, is_admin, key_prefix,
+                     threshold: int, show_done: bool = True):
+    """A task and its subtasks, in the shared row style (utils/rows.py)."""
+    t_id = t["id"]
+    can_edit = is_admin or t.get("owner_email") == user_email \
+        or t.get("supervisor_email") == user_email
+    readonly = not can_edit
+
+    c_row, c_act = st.columns(ROW_COLS, vertical_alignment="center")
+    with c_row:
+        st.html(row_html(t, kind="task", user_map=user_map, threshold=threshold,
+                         readonly=readonly))
+    with c_act:
+        if not readonly:
+            a_det, a_sub, a_del = _row_actions()
+            with a_det:
+                if st.button("✏️", key=f"{key_prefix}_det_{t_id}", type="tertiary",
+                             help="Details and edit"):
+                    task_details_modal(t, can_edit)
+            with a_sub:
+                if st.button("➕", key=f"{key_prefix}_addsub_{t_id}", type="tertiary",
+                             help="Add a subtask"):
+                    add_subtask_modal(t_id, users)
+            with a_del:
+                if is_admin and st.button("🗑️", key=f"{key_prefix}_delx_{t_id}",
+                                          type="tertiary", help="Delete permanently"):
+                    st.session_state[f"_confirm_del_t_{t_id}"] = True
+                    st.rerun()
+    _confirm_delete("task", t, key_prefix)
+
+    t_subs = [s for s in subtasks if s.get("task_id") == t_id]
+    if not show_done:
+        t_subs = [s for s in t_subs if (s.get("status") or "") not in INACTIVE]
+    for s in urgency_sort(t_subs, threshold):
+        s_id = s["id"]
+        s_can_edit = is_admin or s.get("owner_email") == user_email \
+            or s.get("supervisor_email") == user_email
+        s_readonly = not s_can_edit
+        sc_row, sc_act = st.columns(ROW_COLS, vertical_alignment="center")
+        with sc_row:
+            st.html(row_html(s, kind="subtask", user_map=user_map, threshold=threshold,
+                             readonly=s_readonly))
+        with sc_act:
+            if not s_readonly:
+                a_det, _a_gap, a_del = _row_actions()
+                with a_det:
+                    if st.button("✏️", key=f"{key_prefix}_vistaS_{s_id}", type="tertiary",
+                                 help="Details and edit"):
+                        subtask_details_modal(s, s_can_edit)
+                with a_del:
+                    if is_admin and st.button("🗑️", key=f"{key_prefix}_sdelx_{s_id}",
+                                              type="tertiary", help="Delete permanently"):
+                        st.session_state[f"_confirm_del_s_{s_id}"] = True
                         st.rerun()
-                with scc2:
-                    if st.button("Cancel", key=f"{key_prefix}_sdelno_{s_id}"):
-                        st.session_state.pop(s_confirm_key, None)
+        _confirm_delete("subtask", s, key_prefix)
+
+
+# ─── Review queue ("To review") ─────────────────────────────────────────────────
+
+def _render_review(queue: dict, user_email: str, is_admin: bool, users: list) -> None:
+    """What the supervisor has to look at before it disappears into the archive:
+    deliverables awaiting sign-off, and work others have declared closed."""
+    from db import archive_items, reopen_item
+    from utils.modals import render_signoff_panel
+    from utils.notifications import send_item_reopened
+
+    names = {u["email"]: u.get("name") or u["email"] for u in users if u.get("email")}
+    me = st.session_state.get("user_name") or names.get(user_email, user_email)
+    pending, items = queue.get("deliverables", []), queue.get("items", [])
+
+    if not pending and not items:
+        st.success("Nothing to review. Deliverables awaiting your sign-off and work "
+                   "closed under your supervision will appear here.")
+        return
+
+    # ── 1 · deliverables awaiting sign-off ───────────────────────────────────
+    st.markdown(f"#### ⏳ Deliverables awaiting your sign-off · {len(pending)}")
+    if not pending:
+        st.caption("None right now.")
+    for d in pending:
+        with st.container(border=True):
+            req = names.get(d.get("completion_requested_by"), d.get("completion_requested_by") or "?")
+            st.html(
+                "<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
+                f"{project_chip(d.get('_project'))}"
+                f"<span style='font-size:14px;font-weight:700'>{esc(d.get('name', ''))}</span>"
+                f"<span style='font-size:12px;color:#5F6368'>asked by {esc(req)} · "
+                f"deadline {fmt(d.get('deadline'))}</span></div>"
+            )
+            render_signoff_panel(d, True, names)
+
+    # ── 2 · completed work to verify ─────────────────────────────────────────
+    st.write("")
+    h1, h2 = st.columns([6, 2], vertical_alignment="bottom")
+    with h1:
+        n_t = len([i for i in items if i["_kind"] == "task"])
+        st.markdown(f"#### ✅ Closed work to review · {len(items)}")
+        st.caption(
+            f"{n_t} tasks, {len(items) - n_t} subtasks closed under your supervision "
+            "and not archived yet, oldest first. **Archive** means you have checked it; "
+            "**Reopen** sends it back to the owner."
+        )
+    with h2:
+        if items and st.button(f"🗄️ Archive all ({len(items)})", key="rv_arch_all",
+                               use_container_width=True):
+            st.session_state["_rv_confirm_all"] = True
+            st.rerun()
+    if st.session_state.get("_rv_confirm_all"):
+        st.warning(f"Archive all **{len(items)}** items as checked? They leave the board "
+                   "but stay in the database and in the reports.")
+        c1, c2, _ = st.columns([1.6, 1.2, 7])
+        with c1:
+            if st.button("Yes, archive all", key="rv_arch_all_yes", type="primary"):
+                archive_items(items)
+                st.session_state.pop("_rv_confirm_all", None)
+                st.rerun()
+        with c2:
+            if st.button("Cancel", key="rv_arch_all_no"):
+                st.session_state.pop("_rv_confirm_all", None)
+                st.rerun()
+
+    if not items:
+        st.caption("None right now.")
+        return
+
+    limit = len(items) if st.session_state.get("_rv_show_all") else 15
+    hc, _ = st.columns(ROW_COLS)
+    with hc:
+        st.html(header_html(date_label="Closed on", first_label="Item"))
+    for it in items[:limit]:
+        key = f"{it['_kind']}_{it['id']}"
+        c_row, c_act = st.columns(ROW_COLS, vertical_alignment="center")
+        with c_row:
+            st.html(row_html(
+                it, kind=it["_kind"], user_map=names, project_label=it.get("_project"),
+                path=it.get("_path"), strike_done=False,
+                date_html=f"<span style='font-size:12px;color:#5F6368'>{fmt(it.get('_closed'))}</span>",
+            ))
+        with c_act:
+            a_ok, a_back = st.columns(2, gap="small")
+            with a_ok:
+                if st.button("🗄️", key=f"rv_arch_{key}", type="tertiary",
+                             help="Checked: archive it"):
+                    archive_items([it])
+                    st.rerun()
+            with a_back:
+                if st.button("↩️", key=f"rv_reopen_{key}", type="tertiary",
+                             help="Reopen: back to 'Working on', owner notified"):
+                    st.session_state[f"_rv_reopen_{key}"] = True
+                    st.rerun()
+        if st.session_state.get(f"_rv_reopen_{key}"):
+            owner = it.get("owner_email")
+            reason = st.text_input(
+                "What still needs work? (optional, sent to the owner)",
+                key=f"rv_reason_{key}",
+            )
+            c1, c2, _ = st.columns([1.8, 1.2, 7])
+            with c1:
+                if st.button("↩️ Reopen and notify" if owner and owner != user_email
+                             else "↩️ Reopen", key=f"rv_reopen_yes_{key}", type="primary"):
+                    ok, err = reopen_item(it, user_email)
+                    if not ok:
+                        st.error(f"Could not reopen: {err}")
+                    else:
+                        if owner and owner != user_email:
+                            try:
+                                send_item_reopened(it, owner, me, reason)
+                            except Exception as exc:
+                                print(f"[projects.review] reopen mail failed: {exc}")
+                        st.session_state.pop(f"_rv_reopen_{key}", None)
                         st.rerun()
+            with c2:
+                if st.button("Cancel", key=f"rv_reopen_no_{key}"):
+                    st.session_state.pop(f"_rv_reopen_{key}", None)
+                    st.rerun()
+    if len(items) > limit:
+        if st.button(f"Show all {len(items)}", key="rv_show_all", type="tertiary"):
+            st.session_state["_rv_show_all"] = True
+            st.rerun()
 
 
 # ─── Main view ──────────────────────────────────────────────────────────────────
-
-def _render_archive_completed(tasks: list, subtasks: list, user_email: str) -> None:
-    """Archive the Completed items in view that are *mine* — owned or supervised.
-
-    Deliberately never global: clearing someone else's board is a decision for
-    the Admin Panel (Archive tab → *Archive ALL completed tasks*), not a side
-    effect of whatever filter happens to be open here. Archiving hides, never
-    deletes — the data stays for the punctuality and trend reports, which read
-    archived rows on purpose.
-    """
-    def _mine(item: dict) -> bool:
-        return (item.get("owner_email") == user_email
-                or item.get("supervisor_email") == user_email)
-
-    done_t = [t for t in tasks
-              if (t.get("status") or "") == "Completed" and not t.get("is_archived") and _mine(t)]
-    done_s = [s for s in subtasks
-              if (s.get("status") or "") == "Completed" and not s.get("is_archived") and _mine(s)]
-    total = len(done_t) + len(done_s)
-
-    key = "_confirm_archive_completed"
-    c_info, c_btn = st.columns([6, 2])
-    with c_info:
-        if total:
-            plural = lambda n, w: f"{n} {w}" + ("" if n == 1 else "s")
-            st.caption(
-                f"🗄️ **{total} completed item{'' if total == 1 else 's'} of yours in view** "
-                f"({plural(len(done_t), 'task')}, {plural(len(done_s), 'subtask')}) — "
-                "archiving clears your board without losing history."
-            )
-        else:
-            # Always render the control, otherwise it is impossible to find when
-            # the current scope happens to contain nothing completed.
-            st.caption(
-                "🗄️ Nothing completed of yours in the current view. This button only "
-                "touches items you own or supervise — the lab-wide sweep lives in "
-                "**Admin Panel → Archive**."
-            )
-    with c_btn:
-        if not total:
-            st.button("🗄️ Archive my completed", key="arch_done_none",
-                      use_container_width=True, disabled=True,
-                      help="Nothing completed of yours in the current view.")
-        elif st.session_state.get(key):
-            if st.button(f"✅ Confirm ({total})", key="arch_done_ok",
-                         type="primary", use_container_width=True):
-                ok_t = ok_s = 0
-                try:
-                    if done_t:
-                        supabase.table("tasks").update({"is_archived": True}).in_(
-                            "id", [t["id"] for t in done_t]).execute()
-                        ok_t = len(done_t)
-                    if done_s:
-                        supabase.table("subtasks").update({"is_archived": True}).in_(
-                            "id", [s["id"] for s in done_s]).execute()
-                        ok_s = len(done_s)
-                    st.session_state.pop(key, None)
-                    st.success(f"Archived {ok_t} tasks and {ok_s} subtasks.")
-                    st.rerun()
-                except Exception as e:
-                    st.session_state.pop(key, None)
-                    st.error(f"Archiving failed: {e}")
-        else:
-            if st.button("🗄️ Archive my completed", key="arch_done",
-                         use_container_width=True,
-                         help="Archive the Completed tasks/subtasks shown here that "
-                              "you own or supervise."):
-                st.session_state[key] = True
-                st.rerun()
-    if st.session_state.get(key):
-        st.warning(
-            f"Archive **{total}** completed items you own or supervise? They disappear "
-            "from the board but stay in the database (and in the reports). Use "
-            "*Show Archived* to see them."
-        )
-
 
 def show_projects():
     st.title("Projects")
     st.caption(
         "The full work breakdown: project → deliverable → task → subtask. "
         "Create and organise here; the **Dashboard** tells you what is urgent."
-    )
-
-    # Compact row rhythm for dense task/subtask tables in this page.
-    st.markdown(
-        """
-        <style>
-        div[data-testid='stButton'] > button {
-            min-height: 1.75rem;
-            padding: 0.15rem 0.5rem;
-            font-size: 0.78rem;
-        }
-        div[data-testid='stHorizontalBlock'] {
-            padding-top: 3px !important;
-            padding-bottom: 3px !important;
-        }
-        /* tighten vertical spacing between rows inside project view */
-        div[data-testid='stVerticalBlock'] > div:has(> div[data-testid='stHorizontalBlock']) {
-            margin-top: 0.05rem !important;
-            margin-bottom: 0.05rem !important;
-        }
-        /* deliverable box custom green border */
-        .deliverable-box [data-testid="stVerticalBlockBorderWrapper"] {
-            border: 1px solid #9FD9C8 !important;
-            border-radius: 0.5rem !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
     )
 
     user_email = st.session_state.get('user_email')
@@ -881,22 +728,44 @@ def show_projects():
         with a_arch:
             show_archived = st.checkbox("Show Archived", value=False)
 
-    only_mine = is_admin and not show_all
-    if only_mine:
-        st.caption("Showing only tasks where you are owner or supervisor.")
+    # ── Tree / To review ─────────────────────────────────────────────────────
+    from db import get_review_queue
+    queue = get_review_queue(user_email, is_admin)
+    n_review = len(queue["deliverables"]) + len(queue["items"])
+    v_col, d_col = st.columns([3, 5], vertical_alignment="center")
+    with v_col:
+        view = st.segmented_control(
+            "View", ["tree", "review"], default="tree", key="proj_view",
+            format_func=lambda v: "🌳 Tree" if v == "tree" else f"🔍 To review · {n_review}",
+            label_visibility="collapsed",
+        ) or "tree"
+    with d_col:
+        show_done = True
+        if view == "tree":
+            show_done = st.checkbox("Show completed", value=True, key="proj_show_done",
+                                    help="Completed and cancelled items, struck through.")
 
     projects, deliverables, tasks, subtasks, users, user_map = fetch_hierarchy(
         show_archived,
         user_email=user_email,
         is_admin=is_admin,
-        only_mine=only_mine,
+        only_mine=is_admin and not show_all,
     )
+
+    if view == "review":
+        _render_review(queue, user_email, is_admin, users)
+        return
+
+    only_mine = is_admin and not show_all
+    if only_mine:
+        st.caption("Showing only tasks where you are owner or supervisor.")
 
     # deadline urgency threshold from settings
     try:
         settings = get_settings()
         threshold = int(settings.get("expiring_threshold_days", 7))
     except Exception:
+        settings = {}
         threshold = 7
 
     if not projects:
@@ -1001,14 +870,15 @@ def show_projects():
     if filters_active:
         st.caption("🔎 Filters are active — some projects may be hidden.")
 
-    # ── Housekeeping: clear my own backlog of finished work ──────────────────
-    if is_admin:
-        _render_archive_completed(filtered_tasks, filtered_subtasks, user_email)
-
     projects = filtered_projects
     deliverables = filtered_deliverables
     tasks = filtered_tasks
     subtasks = filtered_subtasks
+    # Progress bars count every task of a deliverable, even when the completed
+    # ones are hidden from the list below.
+    all_tasks = tasks
+    if not show_done:
+        tasks = [t for t in tasks if (t.get("status") or "") not in INACTIVE]
 
     expand_all_once = bool(st.session_state.get("_projects_expand_all_once", False))
     expand_mode = st.session_state.get("_projects_expand_mode")
@@ -1037,136 +907,90 @@ def show_projects():
 
             proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
 
-            # ── Top-bar: add deliverable + add generic task ───────────────────
-            tc1, tc2, _ = st.columns([2, 2, 6])
+            # ── Project actions ──────────────────────────────────────────────
+            tc1, tc2, tc3 = st.columns([1.3, 2.1, 6], vertical_alignment="center")
             with tc1:
                 if is_admin:
                     if st.button("➕ Deliverable", key=f"add_del_{proj_id}", use_container_width=True):
                         add_deliverable_modal(proj_id, users)
             with tc2:
-                if st.button("➕ Generic Task", key=f"add_generic_t_{proj_id}", use_container_width=True):
+                if st.button("➕ Task without deliverable", key=f"add_generic_t_{proj_id}",
+                             use_container_width=True):
                     add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=None)
-            with _:
+            with tc3:
                 if not proj_deliverables:
-                    st.markdown(
-                        "<div style='font-style:italic;color:#888;font-size:0.85rem;"
-                        "line-height:2.2rem;padding-left:0.25rem'>"
-                        "No deliverables defined for this project."
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
+                    st.caption("No deliverables defined for this project.")
 
-            # ── One styled block per deliverable ──────────────────────────────
+            # ── One block per deliverable ────────────────────────────────────
             for d in proj_deliverables:
-                d_id     = d["id"]
-                d_name   = d.get("name", "")
-                d_type   = d.get("type", "")
-                d_status = d.get("status", "Not started")
-                arch_d   = " (archived)" if d.get("is_archived") else ""
-                owner_e  = d.get("owner_email")
-                sup_e    = d.get("supervisor_email")
+                d_id = d["id"]
+                d_all = [t for t in all_tasks if t.get("deliverable_id") == d_id]
+                deliv_tasks = urgency_sort(
+                    [t for t in tasks if t.get("deliverable_id") == d_id], threshold)
 
-                user_map = {u["email"]: u for u in users}
-                d_people = ""
-                if owner_e:
-                    u = user_map.get(owner_e, {"name": owner_e, "avatar_color": "#534AB7"})
-                    d_people += person_pill_html(
-                        u.get("name", owner_e),
-                        u.get("avatar_color", "#534AB7"),
-                        role="owner",
-                        compact=False,
-                    )
-                if sup_e and sup_e != owner_e:
-                    u = user_map.get(sup_e, {"name": sup_e, "avatar_color": "#BA7517"})
-                    d_people += person_pill_html(
-                        u.get("name", sup_e),
-                        u.get("avatar_color", "#BA7517"),
-                        role="sup",
-                        compact=False,
-                    )
+                with st.container(border=True, gap=None):
+                    h_row, h_act = st.columns(ROW_COLS, vertical_alignment="center")
+                    with h_row:
+                        st.html(deliverable_head_html(d, d_all, user_map, threshold,
+                                                   deliverable_chip_html(d.get('type') or 'generic', settings)))
+                    with h_act:
+                        a_det, _a_gap, a_arch = _row_actions()
+                        with a_det:
+                            if st.button("✏️", key=f"det_del_{d_id}", type="tertiary",
+                                         help="Details, edit and sign-off"):
+                                d_can_edit = (
+                                    is_admin
+                                    or d.get("owner_email") == user_email
+                                    or d.get("supervisor_email") == user_email
+                                ) and not d.get("is_archived")
+                                deliverable_details_modal(d, can_edit=d_can_edit)
+                        with a_arch:
+                            if is_admin and not d.get("is_archived"):
+                                if st.button("🗑️", key=f"arch_del_{d_id}", type="tertiary",
+                                             help="Archive deliverable"):
+                                    supabase.table("deliverables").update(
+                                        {"is_archived": True}).eq("id", d_id).execute()
+                                    st.rerun()
 
-                deliv_tasks = [t for t in tasks if t.get("deliverable_id") == d_id]
-                deliv_tasks = sort_tasks_by_deadline(deliv_tasks)
-
-                # Wrap each deliverable block so we can scope a custom border colour
-                st.markdown("<div class='deliverable-box'>", unsafe_allow_html=True)
-                with st.container(border=True):
-                    # Deliverable header
-                    h1, h_det, h_arch = st.columns([6.5, 1.2, 0.8])
-                    d_deadline_txt = f" · {fmt_date(d.get('deadline'))}" if d.get("deadline") else ""
-                    d_type_chip = deliverable_chip_html(d_type or "generic", settings)
-                    with h1:
-                        st.html(
-                            f"<div style='background:#E6F7F3;border-radius:6px;padding:6px 10px;"
-                            f"margin-bottom:4px'>"
-                            f"<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;'>Deliverable</span> "
-                            f"<b style='color:#0F5943;'>{d_name}</b>"
-                            f"<i style='color:#2E8B6E;font-size:0.85rem'>"
-                            f"  {d_type_chip}{d_deadline_txt}{arch_d}</i>"
-                            f"&nbsp;&nbsp;"
-                            f"<span style='float:right'>{_status_badge(d_status)}</span>"
-                            f"</div>"
-                        )
-                        st.html(d_people if d_people else "<span style='color:#2E8B6E;font-size:0.82rem'>Owner/Supervisor: —</span>")
-                    with h_det:
-                        if st.button("🔍", key=f"det_del_{d_id}", use_container_width=True):
-                            d_can_edit = (
-                                is_admin
-                                or d.get("owner_email") == user_email
-                                or d.get("supervisor_email") == user_email
-                            ) and not d.get("is_archived")
-                            deliverable_details_modal(d, can_edit=d_can_edit)
-                    with h_arch:
-                        if is_admin and not d.get("is_archived"):
-                            if st.button("🗑️", key=f"arch_del_{d_id}", help="Archive Deliverable"):
-                                supabase.table("deliverables").update({"is_archived": True}).eq("id", d_id).execute()
-                                st.rerun()
-
-                    # Task rows
-                    if not deliv_tasks:
-                        st.caption("    *No tasks for this deliverable.*")
-                    else:
+                    if deliv_tasks:
+                        hc, _ = st.columns(ROW_COLS)
+                        with hc:
+                            st.html(header_html(first_label="Task"))
                         for t in deliv_tasks:
                             _render_task_row(
-                                t,
-                                subtasks,
-                                users,
-                                user_map,
-                                user_email,
-                                is_admin,
-                                key_prefix=f"d{d_id}",
-                                threshold=threshold,
+                                t, subtasks, users, user_map, user_email, is_admin,
+                                key_prefix=f"d{d_id}", threshold=threshold,
+                                show_done=show_done,
                             )
+                    elif d_all:
+                        st.caption("All tasks are completed — tick **Show completed** to see them.")
+                    else:
+                        st.caption("No tasks for this deliverable yet.")
 
-                    # Per-deliverable "+ New Task" button
-                    if st.button(f"➕ New Task in «{d_name}»", key=f"add_dt_{d_id}",
-                                 use_container_width=True):
+                    if st.button("➕ Add task", key=f"add_dt_{d_id}", type="tertiary"):
                         add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=d_id)
-                st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Unassigned tasks section ──────────────────────────────────────
-            unassigned = [
+            # ── Tasks without deliverable ────────────────────────────────────
+            unassigned = urgency_sort([
                 t for t in tasks
                 if t.get("project_id") == proj_id and not t.get("deliverable_id")
-            ]
-            unassigned = sort_tasks_by_deadline(unassigned)
+            ], threshold)
 
             if unassigned:
-                st.html(
-                    "<span style='font-size:0.75rem;font-weight:700;letter-spacing:0.08em;"
-                    "color:#666;text-transform:uppercase'>Tasks without deliverable</span>"
-                )
-                with st.container(border=True):
+                with st.container(border=True, gap=None):
+                    st.html(
+                        "<span style='font-size:11px;font-weight:700;letter-spacing:0.06em;"
+                        "color:#5F6368'>📂 TASKS WITHOUT DELIVERABLE · "
+                        f"{len(unassigned)}</span>"
+                    )
+                    hc, _ = st.columns(ROW_COLS)
+                    with hc:
+                        st.html(header_html(first_label="Task"))
                     for t in unassigned:
                         _render_task_row(
-                            t,
-                            subtasks,
-                            users,
-                            user_map,
-                            user_email,
-                            is_admin,
-                            key_prefix=f"p{proj_id}_u",
-                            threshold=threshold,
+                            t, subtasks, users, user_map, user_email, is_admin,
+                            key_prefix=f"p{proj_id}_u", threshold=threshold,
+                            show_done=show_done,
                         )
 
     if expand_all_once:

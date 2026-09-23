@@ -133,6 +133,10 @@ st.markdown("""
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Shared row style (utils/rows.py): one look for every task/deliverable list.
+from utils.rows import ROW_CSS as _ROW_CSS
+st.markdown(f"<style>{_ROW_CSS}</style>", unsafe_allow_html=True)
+
 from core.auth import check_login, logout
 
 def _load_build_label(default: str = "beta 1.18.72") -> str:

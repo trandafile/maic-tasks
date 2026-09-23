@@ -12,7 +12,6 @@ urgency-first and flat:
 """
 
 import datetime
-import html as _htmllib
 
 import streamlit as st
 
@@ -21,29 +20,11 @@ from db import (
     get_settings, compute_delay_stats, get_conference_paper_tasks, get_comment_counts,
     get_pending_timesheets, days_since_update, stale_threshold,
 )
-from utils.helpers import (
-    PRIORITY_ORDER, strip_markdown, sort_tasks_by_deadline, comment_badge_html,
-    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX, stable_colour,
-)
-from utils.modals import person_pill_html, task_details_modal, subtask_details_modal
+from utils.helpers import PRIORITY_ORDER
+from utils.modals import task_details_modal, subtask_details_modal
+from utils.rows import ROW_COLS, row_html, header_html, urgency_sort
 
 _INACTIVE = {"Completed", "Cancelled"}
-
-_STATUS_BADGE = {
-    "Not started": ("⚪", "#888888"),
-    "Working on": ("🔵", "#1565C0"),
-    "Blocked": ("🔴", "#D93025"),
-    "Completed": ("🟢", "#188038"),
-    "Cancelled": ("⚫", "#444444"),
-}
-
-_PRIORITY_BADGE = {
-    "urgent": ("🔴", "Urgent"),
-    "high": ("🟠", "High"),
-    "medium": ("🔵", "Medium"),
-    "low": ("🟢", "Low"),
-    "none": ("⚪", "None"),
-}
 
 # Buckets, in the order they are shown. A task lands in the FIRST one it matches,
 # so nothing is ever listed twice.
@@ -56,8 +37,6 @@ _BUCKETS = [
 ]
 _BUCKET_META = {k: (label, fg, bg) for k, label, fg, bg in _BUCKETS}
 
-# Colours come from utils.helpers.stable_colour so the app and the notification
-# emails always agree on a project's colour.
 
 
 # ─── small helpers ────────────────────────────────────────────────────────────
@@ -69,92 +48,6 @@ def _parse_date(value):
         return datetime.date.fromisoformat(str(value)[:10])
     except Exception:
         return None
-
-
-def _esc(v) -> str:
-    return _htmllib.escape(str(v or ""))
-
-
-def _proj_chip(label: str) -> str:
-    if not label:
-        return ""
-    c = stable_colour(label)
-    return (
-        f"<span style='background:{c};color:#fff;border-radius:4px;padding:1px 7px;"
-        f"font-size:10px;font-weight:700;white-space:nowrap'>{_esc(label)}</span>"
-    )
-
-
-def _status_badge_html(status: str) -> str:
-    icon, color = _STATUS_BADGE.get(status or "Not started", ("⚪", "#888888"))
-    return (
-        f"<span style='background:{color}22;color:{color};border-radius:4px;padding:1px 8px;"
-        f"font-size:11px;white-space:nowrap'>{icon} {_esc(status or 'Not started')}</span>"
-    )
-
-
-def _priority_badge_html(priority) -> str:
-    icon, lbl = _PRIORITY_BADGE.get((priority or "none").lower(), ("⚪", "None"))
-    if lbl == "None":
-        return ""
-    return (
-        "<span style='background:#f5f5f5;color:#555;border:1px solid #ddd;border-radius:4px;"
-        f"padding:1px 7px;font-size:11px;white-space:nowrap'>{icon} {lbl}</span>"
-    )
-
-
-def _deadline_html(deadline, threshold: int) -> str:
-    dl = _parse_date(deadline)
-    if not dl:
-        return "<span style='font-size:11px;color:#aaa;'>no deadline</span>"
-    delta = (dl - datetime.date.today()).days
-    label = dl.strftime("%d/%m/%Y")
-    if delta < 0:
-        return (
-            f"<span style='font-size:11px;color:#C62828;font-weight:700;'>📅 {label}</span>"
-            f" <span style='font-size:10px;background:#FDECEC;color:#A32020;padding:1px 6px;"
-            f"border-radius:3px;font-weight:700'>overdue {abs(delta)}d</span>"
-        )
-    if delta <= threshold:
-        lbl = "today" if delta == 0 else f"in {delta}d"
-        return (
-            f"<span style='font-size:11px;color:#B26A00;font-weight:700;'>📅 {label}</span>"
-            f" <span style='font-size:10px;background:#FFF4E5;color:#8A4B00;padding:1px 6px;"
-            f"border-radius:3px;font-weight:700'>{lbl}</span>"
-        )
-    return f"<span style='font-size:11px;color:#666;'>📅 {label}</span>"
-
-
-def _stale_badge(item: dict, threshold: int) -> str:
-    """'Fermo da N giorni' — the signal that actually works on long tasks,
-    where a far-off deadline says nothing for months. Silent when the
-    freshness migration has not been run yet."""
-    d = days_since_update(item)
-    if d is None or d < threshold:
-        return ""
-    fg, bg = ("#B80D48", "#FBE7EE") if d >= threshold * 2 else ("#B26A00", "#FFF4E5")
-    return (f"<span style='background:{bg};color:{fg};border-radius:4px;padding:1px 7px;"
-            f"font-size:11px;font-weight:700;white-space:nowrap'>⏳ idle {d}d</span>")
-
-
-def _people_pills(owner_email, sup_email, user_map: dict) -> str:
-    pills = ""
-    if owner_email:
-        u = user_map.get(owner_email, {"name": owner_email, "avatar_color": "#534AB7"})
-        pills += person_pill_html(u.get("name", owner_email), u.get("avatar_color", "#534AB7"),
-                                  role="owner", compact=True)
-    if sup_email and sup_email != owner_email:
-        u = user_map.get(sup_email, {"name": sup_email, "avatar_color": "#BA7517"})
-        pills += person_pill_html(u.get("name", sup_email), u.get("avatar_color", "#BA7517"),
-                                  role="sup", compact=True)
-    return pills
-
-
-def _truncate(value, max_len: int = 110) -> str:
-    txt = strip_markdown(value or "").strip()
-    if len(txt) <= max_len:
-        return txt
-    return f"{txt[:max_len - 1].rstrip()}…"
 
 
 # ─── bucketing ────────────────────────────────────────────────────────────────
@@ -186,100 +79,85 @@ def _sort_key(item: dict):
 
 
 # ─── row rendering ────────────────────────────────────────────────────────────
+# Same row as the Projects tree (utils/rows.py): name | status | deadline |
+# owner / supervisor, tinted light red when late and light orange when due soon.
+# Here the project is a chip and the parent a muted second line, because the
+# dashboard is flat — never a folder to open.
+
+def _row_context(item: dict, kind: str, ctx: dict) -> tuple[str, str, str]:
+    """(project label, path line, meta line) for a flat row."""
+    if kind == "task":
+        proj = ctx["projects"].get(item.get("project_id"), {})
+        deliv = ctx["deliverables"].get(item.get("deliverable_id"))
+        path = deliv.get("name") if deliv else ""
+        cc = ctx["comment_counts"].get(item.get("id"), 0)
+    else:
+        parent = ctx["task_map"].get(item.get("task_id"), {})
+        proj = ctx["projects"].get(parent.get("project_id"), {})
+        path = f"in: {parent.get('name')}" if parent.get("name") else ""
+        cc = 0  # comments live on tasks
+
+    meta = []
+    idle = days_since_update(item)
+    if idle is not None and idle >= ctx["stale_threshold"]:
+        meta.append(f"idle {idle}d")
+    if cc:
+        meta.append(f"💬 {cc}")
+    label = proj.get("acronym") or proj.get("identifier") or proj.get("name") or ""
+    return label, path, " · ".join(meta)
+
 
 def _render_row(item: dict, *, kind: str, ctx: dict, key_prefix: str,
                 show_people: bool = True):
-    """One flat, self-contained row. The project is a chip — never a folder."""
-    threshold = ctx["threshold"]
-    user_map = ctx["user_map"]
-    projects = ctx["projects"]
-    task_map = ctx["task_map"]
-    email = ctx["email"]
-    is_admin = ctx["is_admin"]
+    email, is_admin = ctx["email"], ctx["is_admin"]
+    can_edit = (is_admin or item.get("owner_email") == email
+                or item.get("supervisor_email") == email)
+    label, path, meta = _row_context(item, kind, ctx)
 
-    if kind == "task":
-        proj = projects.get(item.get("project_id"), {})
-        parent_note = ""
-        name_style = TASK_NAME_STYLE
-        prefix = ""
-        cc = ctx["comment_counts"].get(item.get("id"), 0)
-    else:
-        parent = task_map.get(item.get("task_id"), {})
-        proj = projects.get(parent.get("project_id"), {})
-        pname = parent.get("name") or ""
-        parent_note = (
-            f"<span style='font-size:11px;color:#999'>in: {_esc(pname)}</span>"
-            if pname else ""
-        )
-        name_style = SUBTASK_NAME_STYLE
-        prefix = f"{SUBTASK_PREFIX} "
-        cc = 0  # comments live on tasks
-
-    proj_label = proj.get("acronym") or proj.get("identifier") or proj.get("name") or ""
-    can_edit = (
-        is_admin
-        or item.get("owner_email") == email
-        or item.get("supervisor_email") == email
-    )
-
-    notes = _truncate(item.get("notes"))
-    people = _people_pills(item.get("owner_email"), item.get("supervisor_email"), user_map) if show_people else ""
-
-    col_main, col_btn = st.columns([8.6, 1.4])
-    with col_main:
-        st.html(
-            f"<div style='padding:6px 4px;'>"
-            f"  <div style='display:flex;align-items:center;gap:7px;flex-wrap:wrap;'>"
-            f"    {_proj_chip(proj_label)}"
-            f"    <span style='{name_style}'>{prefix}{_esc(item.get('name'))}</span>"
-            f"    {_status_badge_html(item.get('status'))}"
-            f"    {_priority_badge_html(item.get('priority')) if kind == 'task' else ''}"
-            f"    {_stale_badge(item, ctx['stale_threshold'])}"
-            f"    {comment_badge_html(cc)}"
-            f"    <span style='margin-left:auto;white-space:nowrap'>"
-            f"      {_deadline_html(item.get('deadline'), threshold)}</span>"
-            f"  </div>"
-            f"  <div style='display:flex;align-items:center;justify-content:space-between;"
-            f"              gap:8px;margin-top:3px;'>"
-            f"    <span style='font-size:11px;color:#888;'>"
-            f"      {parent_note}{' · ' if parent_note and notes else ''}{_esc(notes)}</span>"
-            f"    <span style='white-space:nowrap'>{people}</span>"
-            f"  </div>"
-            f"</div>"
-        )
-    with col_btn:
-        if st.button("Details", key=f"{key_prefix}_{kind}_{item['id']}", use_container_width=True):
+    c_row, c_act = st.columns(ROW_COLS, vertical_alignment="center")
+    with c_row:
+        st.html(row_html(item, kind=kind, user_map=ctx["user_map"],
+                         threshold=ctx["threshold"], project_label=label,
+                         path=path, meta=meta, show_people=show_people))
+    with c_act:
+        if st.button("✏️", key=f"{key_prefix}_{kind}_{item['id']}", type="tertiary",
+                     help="Details and edit"):
             if kind == "task":
                 task_details_modal(item, can_edit=can_edit)
             else:
                 subtask_details_modal(item, can_edit=can_edit)
 
 
+def _render_rows(items: list, ctx: dict, key_prefix: str, show_people: bool = True,
+                 first_label: str = "Item"):
+    """A bordered block of rows with the shared column header."""
+    with st.container(border=True, gap=None):
+        hc, _ = st.columns(ROW_COLS)
+        with hc:
+            st.html(header_html(first_label=first_label))
+        for it in items:
+            _render_row(it, kind=it["_kind"], ctx=ctx, key_prefix=key_prefix,
+                        show_people=show_people)
+
+
+def _section_title(title: str, note: str = "", colour: str = "#202124") -> None:
+    st.html(f"<div style='margin:14px 0 4px 0'><span style='font-size:15px;font-weight:700;"
+            f"color:{colour}'>{title}</span>"
+            + (f"<span style='color:#80868B;font-size:12px'> — {note}</span>" if note else "")
+            + "</div>")
+
+
 def _render_bucket(bucket: str, items: list, ctx: dict, key_prefix: str,
                    collapsed: bool = False, show_people: bool = True):
     if not items:
         return
-    label, fg, bg = _BUCKET_META[bucket]
-    header = (
-        f"<div style='background:{bg};border-left:4px solid {fg};border-radius:5px;"
-        f"padding:5px 10px;margin:10px 0 2px 0;'>"
-        f"<span style='color:{fg};font-weight:800;font-size:13px;letter-spacing:0.02em'>"
-        f"{label}</span>"
-        f"<span style='color:{fg};font-size:12px;font-weight:600'> · {len(items)}</span>"
-        f"</div>"
-    )
-
+    label, fg, _bg = _BUCKET_META[bucket]
     if collapsed:
         with st.expander(f"{label} · {len(items)}", expanded=False):
-            for it in items:
-                _render_row(it, kind=it["_kind"], ctx=ctx, key_prefix=key_prefix,
-                            show_people=show_people)
+            _render_rows(items, ctx, key_prefix, show_people)
         return
-
-    st.html(header)
-    for it in items:
-        _render_row(it, kind=it["_kind"], ctx=ctx, key_prefix=key_prefix,
-                    show_people=show_people)
+    _section_title(f"{label} · {len(items)}", colour=fg)
+    _render_rows(items, ctx, key_prefix, show_people)
 
 
 # ─── data ─────────────────────────────────────────────────────────────────────
@@ -300,6 +178,11 @@ def _fetch(email: str):
     users = supabase.table("users").select("email, name, avatar_color").eq(
         "is_approved", True
     ).execute().data or []
+    deliverables = {
+        d["id"]: d for d in (
+            supabase.table("deliverables").select("id, name").execute().data or []
+        )
+    }
 
     task_map = {t["id"]: t for t in tasks}
     # Only work that belongs to a live project.
@@ -316,6 +199,7 @@ def _fetch(email: str):
         "tasks": tasks,
         "subtasks": subtasks,
         "task_map": task_map,
+        "deliverables": deliverables,
         "user_map": {u["email"]: u for u in users},
         "email": email,
         "is_admin": st.session_state.get("user_role") == "admin",
@@ -385,10 +269,9 @@ def _render_conference_strip(email: str, ctx: dict) -> None:
         f"<span style='background:#EEF3FF;color:#1A3E8B;border-radius:99px;padding:1px 9px;"
         f"font-size:11px;font-weight:700'>{len(items)}</span></div>"
     )
-    with st.container(border=True):
-        for t in sort_tasks_by_deadline(items):
-            t["_kind"] = "task"
-            _render_row(t, kind="task", ctx=ctx, key_prefix="confdash")
+    for t in items:
+        t["_kind"] = "task"
+    _render_rows(urgency_sort(items, ctx["threshold"]), ctx, "confdash", first_label="Paper")
 
 
 def _render_my_work(ctx: dict) -> None:
@@ -438,11 +321,11 @@ def _render_my_work(ctx: dict) -> None:
         st.success("✅ Nothing on your plate. All your tasks are completed.")
         return
 
-    _render_bucket("overdue", buckets["overdue"], ctx, "mw", show_people=False)
-    _render_bucket("blocked", buckets["blocked"], ctx, "mw", show_people=False)
-    _render_bucket("due_soon", buckets["due_soon"], ctx, "mw", show_people=False)
-    _render_bucket("in_progress", buckets["in_progress"], ctx, "mw", show_people=False)
-    _render_bucket("later", buckets["later"], ctx, "mw", collapsed=True, show_people=False)
+    _render_bucket("overdue", buckets["overdue"], ctx, "mw")
+    _render_bucket("blocked", buckets["blocked"], ctx, "mw")
+    _render_bucket("due_soon", buckets["due_soon"], ctx, "mw")
+    _render_bucket("in_progress", buckets["in_progress"], ctx, "mw")
+    _render_bucket("later", buckets["later"], ctx, "mw", collapsed=True)
 
 
 def _render_supervision(ctx: dict) -> None:
@@ -465,49 +348,32 @@ def _render_supervision(ctx: dict) -> None:
     for i in items:
         by_person.setdefault(i.get("owner_email") or "—", []).append(i)
 
+    from db import get_supervisor_digest
+    dig = get_supervisor_digest(email, days=7)
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("🔴 Overdue", len(buckets["overdue"]))
     m2.metric("🚫 Blocked", len(buckets["blocked"]))
     m3.metric(f"🟠 Due ≤{threshold}d", len(buckets["due_soon"]))
-    m4.metric("People", len(by_person))
-
-    # ── Weekly digest: what moved and what went quiet ────────────────────────
-    from db import get_supervisor_digest
-    dig = get_supervisor_digest(email, days=7)
-    d1, d2, d3 = st.columns(3)
-    d1.metric("✅ Closed (7d)", len(dig["completed"]))
-    d2.metric("📈 Moved (7d)", len(dig["moved"]))
-    d3.metric(f"⏳ Idle ≥{stale_threshold()}d", len(dig["stuck"]))
-    if dig["stuck"]:
-        st.caption(
-            "'Idle' does not mean late — it means nobody has touched it. On a long "
-            "task that is the most reliable signal you have."
-        )
-
-    # ── What needs the supervisor, across everyone ───────────────────────────
-    attention = buckets["overdue"] + buckets["blocked"]
-    if attention:
-        st.html(
-            "<div style='margin:12px 0 2px 0'>"
-            "<span style='font-size:14px;font-weight:800;color:#B3261E'>"
-            "⚠️ Needs your attention</span>"
-            "<span style='color:#888;font-size:12px'> — late or blocked, "
-            "whoever is executing</span></div>"
-        )
-        with st.container(border=True):
-            for it in sorted(attention, key=_sort_key):
-                _render_row(it, kind=it["_kind"], ctx=ctx, key_prefix="sup_att")
-    else:
-        st.success("✅ Nothing late or blocked under your supervision.")
-
-    # ── Per person ───────────────────────────────────────────────────────────
-    st.html(
-        "<div style='margin:16px 0 2px 0'>"
-        "<span style='font-size:14px;font-weight:800;color:#333'>👥 By person</span>"
-        "<span style='color:#888;font-size:12px'> — sorted by who needs help most</span></div>"
+    m4.metric(f"⏳ Idle ≥{stale_threshold()}d", len(dig["stuck"]))
+    st.caption(
+        f"Last 7 days: **{len(dig['completed'])}** closed · **{len(dig['moved'])}** moved · "
+        f"{len(by_person)} people supervised. 'Idle' does not mean late — it means "
+        "nobody has touched it; on a long task that is the most reliable signal you have."
     )
 
-    today = datetime.date.today()
+    # ── What needs the supervisor, across everyone ───────────────────────────
+    attention = urgency_sort(buckets["overdue"] + buckets["blocked"] + buckets["due_soon"],
+                             threshold)
+    if attention:
+        _section_title("⚠️ Needs your attention", "late, due soon or blocked, whoever is executing",
+                       colour="#B3261E")
+        _render_rows(attention, ctx, "sup_att", first_label="Task")
+    else:
+        st.success("✅ Nothing late, due soon or blocked under your supervision.")
+
+    # ── Per person ───────────────────────────────────────────────────────────
+    _section_title("👥 By person", "who needs help most first")
 
     def _counts(lst):
         b = _bucketize(lst, threshold)
@@ -522,29 +388,25 @@ def _render_supervision(ctx: dict) -> None:
     for _, c, owner, lst in people:
         u = ctx["user_map"].get(owner, {"name": owner})
         name = u.get("name", owner)
-        chips = []
+        bits = []
         if c["overdue"]:
-            chips.append(f"<span style='background:#FDECEC;color:#C62828;border-radius:4px;"
-                         f"padding:1px 7px;font-size:11px;font-weight:700'>{c['overdue']} overdue</span>")
+            bits.append(f":red[**{c['overdue']} overdue**]")
         if c["blocked"]:
-            chips.append(f"<span style='background:#FDEDEC;color:#D93025;border-radius:4px;"
-                         f"padding:1px 7px;font-size:11px;font-weight:700'>{c['blocked']} blocked</span>")
+            bits.append(f":red[**{c['blocked']} blocked**]")
         if c["due_soon"]:
-            chips.append(f"<span style='background:#FFF4E5;color:#B26A00;border-radius:4px;"
-                         f"padding:1px 7px;font-size:11px;font-weight:700'>{c['due_soon']} due soon</span>")
-        if not chips:
-            chips.append("<span style='background:#E8F5E9;color:#2E7D32;border-radius:4px;"
-                         "padding:1px 7px;font-size:11px;font-weight:700'>on track</span>")
+            bits.append(f":orange[**{c['due_soon']} due soon**]")
+        if not bits:
+            bits.append(":green[on track]")
+        bits.append(f"{len(lst)} active")
+        touched = [d for d in (days_since_update(i) for i in lst) if d is not None]
+        if touched:
+            last = min(touched)
+            bits.append("updated today" if last == 0 else f"last update {last}d ago")
 
-        title = f"{name} — {len(lst)} active"
-        with st.expander(title, expanded=bool(c["overdue"] or c["blocked"])):
-            st.html(f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin-bottom:4px'>"
-                    f"{''.join(chips)}</div>")
-            pb = _bucketize(lst, threshold)
-            for bucket in ("overdue", "blocked", "due_soon", "in_progress", "later"):
-                for it in pb[bucket]:
-                    _render_row(it, kind=it["_kind"], ctx=ctx,
-                                key_prefix=f"sup_{owner}", show_people=False)
+        with st.expander(f"**{name}** · " + " · ".join(bits),
+                         expanded=bool(c["overdue"] or c["blocked"])):
+            _render_rows(urgency_sort(lst, threshold), ctx, f"sup_{owner}",
+                         first_label="Task")
 
 
 # ─── entry point ──────────────────────────────────────────────────────────────
@@ -555,11 +417,6 @@ def show_dashboard():
         <style>
         div[data-testid='stButton'] > button {
             min-height: 1.7rem; padding: 0.1rem 0.5rem; font-size: 0.78rem;
-        }
-        div[data-testid='stHorizontalBlock'] {
-            background: transparent !important;
-            border-bottom: 1px solid #F1F3F4;
-            padding-top: 1px !important; padding-bottom: 1px !important;
         }
         </style>
         """,

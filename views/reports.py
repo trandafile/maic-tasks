@@ -5,10 +5,10 @@ from core.supabase_client import supabase
 from db import get_settings, compute_delay_stats, rbac_or_filter, get_comment_counts
 from utils.pdf_generator import generate_report_pdf
 from utils.modals import person_pill_html, task_details_modal, subtask_details_modal, deliverable_details_modal
+from utils.rows import ROW_COLS, row_html, header_html, deliverable_head_html, urgency_sort
 from utils.helpers import (
-    fmt_date, sort_tasks_by_deadline, deliverable_chip_html, comment_badge_html,
-    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, SUBTASK_PREFIX, TASK_ROW_CLASS, SUBTASK_ROW_CLASS,
-    stable_colour,
+    fmt_date, sort_tasks_by_deadline, deliverable_chip_html,
+    TASK_NAME_STYLE, SUBTASK_NAME_STYLE, stable_colour,
 )
 
 # ─── Colour constants ──────────────────────────────────────────────────────────
@@ -268,87 +268,33 @@ def _build_main_report_markdown(
     return "\n".join(lines).strip() + "\n"
 
 
-def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_t"):
-    """Render a task row visually aligned with Active Tasks view."""
-    seq_id   = t.get("sequence_id") or f"T-{t['id']}"
-    name     = _esc(t.get("name", ""))
-    status   = t.get("status", "Not started")
-    priority = (t.get("priority") or "none").lower()
-
-    s_fg, s_bg = STATUS_COLOURS.get(status, ("#888", "#f0f0f0"))
-    p_fg, p_bg = PRIORITY_COLOURS.get(priority, ("#888", "#f0f0f0"))
-    s_badge = _badge(status, s_fg, s_bg)
-    p_badge = _badge(priority, p_fg, p_bg)
-    dl_html = _deadline_html(t.get("deadline"))
-    compl_html = ""
-    if (t.get("status") == "Completed") and t.get("completion_date"):
-        compl_html = f"<span style='font-size:11px;color:#888;'>&nbsp;· ✅ {fmt_date(t.get('completion_date'))}</span>"
-
-    pills = _render_people_pills(t.get("owner_email"), t.get("supervisor_email"), users_meta)
-    cc_html = comment_badge_html(st.session_state.get("_comment_counts", {}).get(t.get("id"), 0))
-
-    col_html, col_btns = st.columns([7.5, 2.5])
-    with col_html:
-        st.html(
-            f"""
-            <div class='{TASK_ROW_CLASS}'
-                 style='display:grid;grid-template-columns:52px 1fr auto;
-                        gap:0;padding:3px 8px 3px 8px;align-items:start;'>
-              <span style='font-family:monospace;font-size:10px;
-                                                     color:#aaa;padding-top:3px;'>{seq_id}</span>
-              <div>
-                <div style='display:flex;align-items:center;gap:7px;
-                                                        flex-wrap:wrap;margin-bottom:2px;'>
-                  <span style='{TASK_NAME_STYLE}'>{name}</span>
-                  {s_badge}
-                  {p_badge}
-                  {cc_html}
-                  <span style='margin-left:8px;'>{dl_html}{compl_html}</span>
-                </div>
-                <div>{pills}</div>
-              </div>
-              <div></div>
-            </div>
-            """
-        )
-    with col_btns:
-        if st.button("Details", key=f"{key_prefix}_{t['id']}", use_container_width=False):
+def _render_task_row(t: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_t",
+                     threshold: int = 7):
+    """A task row in the app-wide style (utils/rows.py), as in Projects."""
+    meta = []
+    cc = st.session_state.get("_comment_counts", {}).get(t.get("id"), 0)
+    if cc:
+        meta.append(f"💬 {cc}")
+    if t.get("status") == "Completed" and t.get("completion_date"):
+        meta.append(f"closed {fmt_date(t.get('completion_date'))}")
+    c_row, c_act = st.columns(ROW_COLS, vertical_alignment="center")
+    with c_row:
+        st.html(row_html(t, kind="task", user_map=users_meta, threshold=threshold,
+                         meta=" · ".join(meta) or None))
+    with c_act:
+        if st.button("✏️", key=f"{key_prefix}_{t['id']}", type="tertiary", help="Details"):
             task_details_modal(t, can_edit=can_edit)
 
 
-def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_s"):
-    """Render subtask row aligned with Active Tasks style."""
-    s_name   = _esc(s.get("name", ""))
-    s_status = s.get("status", "Not started")
-    s_fg, s_bg = STATUS_COLOURS.get(s_status, ("#888", "#f0f0f0"))
-    s_badge = _badge(s_status, s_fg, s_bg)
-    s_dl_html = _deadline_html(s.get("deadline"))
-    s_pills = _render_people_pills(s.get("owner_email"), s.get("supervisor_email"), users_meta)
-
-    scol_html, scol_btns = st.columns([7.5, 2.5])
-    with scol_html:
-        st.html(
-            f"""
-            <div class='{SUBTASK_ROW_CLASS}'
-                 style='display:grid;grid-template-columns:52px 1fr auto;
-                        gap:0;padding:3px 8px 2px 8px;align-items:start;padding-left:24px;'>
-              <span></span>
-              <div>
-                <div style='display:flex;align-items:center;gap:7px;
-                            flex-wrap:wrap;margin-bottom:2px;'>
-                  <span style='{SUBTASK_NAME_STYLE}'>{SUBTASK_PREFIX} {s_name}</span>
-                  {s_badge}
-                  <span style='margin-left:8px;'>{s_dl_html}</span>
-                </div>
-                <div>{s_pills}</div>
-              </div>
-              <div></div>
-            </div>
-            """
-        )
-    with scol_btns:
-        if st.button("Details", key=f"{key_prefix}_{s['id']}", use_container_width=False):
+def _render_subtask_row(s: dict, users_meta: dict, can_edit: bool, key_prefix: str = "rp_s",
+                        threshold: int = 7):
+    c_row, c_act = st.columns(ROW_COLS, vertical_alignment="center")
+    with c_row:
+        st.html(row_html(s, kind="subtask", user_map=users_meta, threshold=threshold))
+    with c_act:
+        if st.button("✏️", key=f"{key_prefix}_{s['id']}", type="tertiary", help="Details"):
             subtask_details_modal(s, can_edit=can_edit)
+
 
 def _fetch(rbac_email: str | None = None):
     """Fetch report data. For non-admin users the RBAC filter on tasks and
@@ -383,6 +329,10 @@ def _render_main_report():
 
     projects, deliverables, tasks, subtasks, users = _fetch(rbac_email)
     settings = get_settings()
+    try:
+        _rp_threshold = int(settings.get("expiring_threshold_days", 7))
+    except (TypeError, ValueError):
+        _rp_threshold = 7
     if not projects:
         st.info("No projects available.")
         return
@@ -633,48 +583,16 @@ def _render_main_report():
             for d in proj_deliverables:
                 did      = d["id"]
                 d_tasks  = [t for t in tasks if t.get("deliverable_id") == did and t.get("id") in visible_task_ids]
-                d_tasks  = sort_tasks_by_deadline(d_tasks)
-                total    = len(d_tasks)
-                done     = len([t for t in d_tasks if t.get("status") == "Completed"])
-                progress = done / total if total > 0 else 0.0
-                d_status = d.get("status", "Not started")
-                d_sl_fg, d_sl_bg = STATUS_COLOURS.get(d_status, ("#888", "#f0f0f0"))
-
-                # Wrap deliverable header, progress and tasks in a single bordered container
-                d_people = _render_people_pills(d.get("owner_email"), d.get("supervisor_email"), users_meta)
-                d_deadline_txt = fmt_date(d.get("deadline"))
+                d_tasks  = urgency_sort(d_tasks, _rp_threshold)
                 d_type_chip = deliverable_chip_html(d.get("type") or "generic", settings)
 
-                st.markdown("<div class='deliverable-box'>", unsafe_allow_html=True)
-                with st.container(border=True):
-                    # Deliverable header (aligned with Active Tasks style)
-                    h1, h2 = st.columns([8, 2])
-                    with h1:
-                        st.html(
-                            f"<div style='background:#E6F7F3;border-radius:6px;padding:5px 10px;"
-                            f"margin-bottom:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>"
-                            f"<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;'>Deliverable</span>"
-                            f"<span style='font-size:13px;font-weight:600;color:#0F5943;'>"
-                            f"{_esc(d.get('name',''))}"
-                            f"</span>"
-                            f"<span style='font-size:11px;color:#2E8B6E;'>"
-                            f"{d_type_chip} · deadline {d_deadline_txt}"
-                            f"</span>"
-                            f"<span style='margin-left:auto;display:flex;align-items:center;gap:10px;'>"
-                            f"<span style='font-size:11px;color:#2E8B6E;font-weight:600;white-space:nowrap;'>"
-                            f"{done}/{total} tasks completed"
-                            f"</span>"
-                            f"{_badge(d_status, d_sl_fg, d_sl_bg)}"
-                            f"</span>"
-                            f"</div>"
-                        )
-                        st.html(
-                            d_people
-                            if d_people
-                            else "<span style='color:#2E8B6E;font-size:11px'>Owner/Supervisor: —</span>"
-                        )
-                    with h2:
-                        if st.button("Details", key=f"rp_dd_{did}", use_container_width=True):
+                with st.container(border=True, gap=None):
+                    h_row, h_act = st.columns(ROW_COLS, vertical_alignment="center")
+                    with h_row:
+                        st.html(deliverable_head_html(
+                            d, d_tasks, users_meta, _rp_threshold, d_type_chip))
+                    with h_act:
+                        if st.button("✏️", key=f"rp_dd_{did}", type="tertiary", help="Details"):
                             d_can_edit = (
                                 is_admin
                                 or d.get("owner_email") == user_email
@@ -685,9 +603,10 @@ def _render_main_report():
                                 can_edit=d_can_edit,
                                 breadcrumb=f"Reports / {proj.get('name', '-') } / Deliverable",
                             )
-
-                    # Progress bar directly under header
-                    st.progress(progress)
+                    if d_tasks:
+                        hc, _ = st.columns(ROW_COLS)
+                        with hc:
+                            st.html(header_html(first_label="Task"))
 
                     # Tasks and subtasks inside the same bordered box
                     if d_tasks:
@@ -696,7 +615,8 @@ def _render_main_report():
                                 t.get("owner_email") == user_email
                                 or t.get("supervisor_email") == user_email
                             )
-                            _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_{did}")
+                            _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_{did}",
+                                             threshold=_rp_threshold)
                             t_subtasks = [
                                 s for s in subtasks
                                 if s.get("task_id") == t.get("id")
@@ -712,10 +632,10 @@ def _render_main_report():
                                     users_meta,
                                     can_edit=can_edit_s,
                                     key_prefix=f"rp_s_{did}_{t.get('id')}",
+                                    threshold=_rp_threshold,
                                 )
                     else:
                         st.caption("No tasks matching the filters.")
-                st.markdown("</div>", unsafe_allow_html=True)
 
         unassigned = [
             t for t in tasks
@@ -725,19 +645,21 @@ def _render_main_report():
         ]
         unassigned = sort_tasks_by_deadline(unassigned)
         if unassigned:
-            st.html(
-                "<div style='border:2px dashed #FAC775;border-radius:8px;"
-                "padding:8px 12px;margin:10px 0 4px 0;background:#FFF8F0;'>"
-                "<span style='font-weight:700;color:#854F0B;font-size:0.95rem'>"
-                "GENERIC TASKS (NO DELIVERABLE)</span></div>"
-            )
-            with st.container():
+            with st.container(border=True, gap=None):
+                st.html(
+                    "<span style='font-size:11px;font-weight:700;letter-spacing:0.06em;"
+                    f"color:#5F6368'>📂 TASKS WITHOUT DELIVERABLE · {len(unassigned)}</span>"
+                )
+                hc, _ = st.columns(ROW_COLS)
+                with hc:
+                    st.html(header_html(first_label="Task"))
                 for t in unassigned:
                     can_edit_t = is_admin or (
                         t.get("owner_email") == user_email
                         or t.get("supervisor_email") == user_email
                     )
-                    _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_un_{pid}")
+                    _render_task_row(t, users_meta, can_edit=can_edit_t, key_prefix=f"rp_t_un_{pid}",
+                                     threshold=_rp_threshold)
                     t_subtasks = [
                         s for s in subtasks
                         if s.get("task_id") == t.get("id")
@@ -748,7 +670,9 @@ def _render_main_report():
                             s.get("owner_email") == user_email
                             or s.get("supervisor_email") == user_email
                         )
-                        _render_subtask_row(s, users_meta, can_edit=can_edit_s, key_prefix=f"rp_s_un_{pid}_{t.get('id')}")
+                        _render_subtask_row(s, users_meta, can_edit=can_edit_s,
+                                            key_prefix=f"rp_s_un_{pid}_{t.get('id')}",
+                                            threshold=_rp_threshold)
 
         st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
         st.divider()

@@ -1008,6 +1008,10 @@ def _signoff_panel(deliverable: dict, can_edit: bool, users_map: dict) -> None:
         st.divider()
 
 
+# Public name: the Projects review queue renders the same panel inline.
+render_signoff_panel = _signoff_panel
+
+
 @st.dialog("Deliverable Details", width="large")
 def deliverable_details_modal(deliverable: dict, can_edit: bool = False, breadcrumb: str | None = None):
     """Show deliverable details with an optional edit form for admins."""

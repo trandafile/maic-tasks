@@ -350,6 +350,47 @@ def send_deliverable_signoff_rejected(deliverable: dict, to_email: str,
     return _send(subject, body, to_email, html_body=html)
 
 
+def send_item_reopened(item: dict, to_email: str, actor_name: str,
+                       reason: str = "") -> bool:
+    """A supervisor reviewed a task/subtask declared closed and reopened it."""
+    if not to_email:
+        return False
+    cfg = _get_settings()
+    app_url = cfg.get("app_url", "http://localhost:8501")
+    who = _get_name_from_email(to_email).split()[0]
+    kind = "subtask" if item.get("_kind") == "subtask" else "task"
+    name = item.get("name", "")
+    seq = item.get("sequence_id")
+    label = f"{seq} — {name}" if seq else name
+    reason = (reason or "").strip()
+
+    subject = f"[MAIC LAB] Riaperto: {label}"
+    body = (
+        f"Ciao {who},\n\n"
+        f"{actor_name} ha verificato il {kind} che avevi chiuso e lo ha riaperto: "
+        f"ora risulta di nuovo 'Working on'.\n\n"
+        f"{kind.capitalize()}: {label}\n"
+        + (f"\nMotivo:\n{reason}\n" if reason else "")
+        + f"\n{app_url}\n\n— MAIC LAB Task Manager"
+    )
+    from utils import email_templates as T
+    html = T.shell(
+        preheader=f"{actor_name} ha riaperto {name}",
+        heading=f"Un tuo {kind} è stato riaperto",
+        body_html="".join([
+            T.paragraph(f"Ciao <b>{T.esc(who)}</b>,"),
+            T.paragraph(f"<b>{T.esc(actor_name)}</b> ha verificato il {kind} che avevi "
+                        f"chiuso e lo ha riaperto: ora risulta di nuovo "
+                        f"<b>Working on</b>."),
+            T.section("↩ RIAPERTO", "normal", [item]),
+            (T.paragraph("Motivo:") + _quote_box(reason, T, "#B4472E")) if reason else "",
+        ]),
+        app_url=app_url,
+        cta_label="Apri il Task Manager",
+    )
+    return _send(subject, body, to_email, html_body=html)
+
+
 def send_deadline_reminder(task: dict, assignee_email: str, days_left: int) -> bool:
     """Notify assignee that deadline is approaching."""
     if not assignee_email:
