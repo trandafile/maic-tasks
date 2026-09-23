@@ -759,6 +759,35 @@ def _render_review(queue: dict, user_email: str, is_admin: bool, users: list) ->
                                 st.rerun()
 
 
+# ─── Project header ─────────────────────────────────────────────────────────────
+
+def _toggle_project(pid: int) -> None:
+    """Runs before the rerun, so the header already shows the new state."""
+    state = st.session_state.setdefault("_proj_open", {})
+    state[pid] = not state.get(pid, False)
+
+
+# The title row must stay as low as a text line: app.py pads every column
+# block by 10px, and buttons default to ~40px.
+_PROJECT_HEAD_CSS = """
+<style>
+div[class*="st-key-projhead_"] div[data-testid='stHorizontalBlock'] {
+    padding-top: 0 !important; padding-bottom: 0 !important;
+    background: transparent !important; font-weight: normal !important;
+}
+div[class*="st-key-projhead_"] button {
+    min-height: 0 !important; height: 28px; padding: 0 6px !important;
+}
+div[class*="st-key-projhead_"] button p { font-size: 0.85rem; white-space: nowrap; }
+div[class*="st-key-projtgl_"] button { justify-content: flex-start; }
+div[class*="st-key-projtgl_"] button p {
+    font-size: 0.98rem !important; font-weight: 600; color: #202124;
+}
+div[class*="st-key-projbox_"] { gap: 0.6rem; }
+</style>
+"""
+
+
 # ─── Main view ──────────────────────────────────────────────────────────────────
 
 def show_projects():
@@ -792,14 +821,10 @@ def show_projects():
         with a_exp:
             if st.button("Expand all", key="proj_expand_all", use_container_width=True):
                 st.session_state["_projects_expand_mode"] = "all"
-                st.session_state["_projects_expand_nonce"] = \
-                    int(st.session_state.get("_projects_expand_nonce", 0)) + 1
                 st.rerun()
         with a_col:
             if st.button("Collapse all", key="proj_collapse_all", use_container_width=True):
                 st.session_state["_projects_expand_mode"] = "none"
-                st.session_state["_projects_expand_nonce"] = \
-                    int(st.session_state.get("_projects_expand_nonce", 0)) + 1
                 st.rerun()
         with a_arch:
             show_archived = st.checkbox("Show Archived", value=False)
@@ -956,46 +981,51 @@ def show_projects():
     if not show_done:
         tasks = [t for t in tasks if (t.get("status") or "") not in INACTIVE]
 
-    expand_all_once = bool(st.session_state.get("_projects_expand_all_once", False))
-    expand_mode = st.session_state.get("_projects_expand_mode")
-    expand_all_now = (expand_mode == "all") or expand_all_once
-    collapse_all_now = expand_mode == "none"
+    # Open/closed state per project. Not an st.expander: its title cannot hold
+    # widgets, and the project actions belong on the title row. A one-shot
+    # mode (Expand/Collapse all, or a filter change) overrides every project.
+    open_state = st.session_state.setdefault("_proj_open", {})
+    mode = st.session_state.pop("_projects_expand_mode", None)
+    if st.session_state.pop("_projects_expand_all_once", False):
+        mode = "all"
+    if mode in ("all", "none"):
+        for proj in projects:
+            open_state[proj["id"]] = mode == "all"
 
-    # Streamlit only applies `expanded=` when the expander is a *new* element.
-    # The default is already expanded=False, so after opening a project by hand
-    # "Collapse all" passed False again — an unchanged value — and Streamlit kept
-    # the user's manual state: the button did nothing. Flipping an invisible
-    # zero-width space in the label changes the element identity on every click,
-    # which forces the expander to remount and honour `expanded`.
-    _nonce = "​" * (int(st.session_state.get("_projects_expand_nonce", 0)) % 2)
+    st.markdown(_PROJECT_HEAD_CSS, unsafe_allow_html=True)
 
     for proj in projects:
         proj_id   = proj["id"]
         proj_name = proj.get("name", "Project")
         acronym   = proj.get("acronym", "")
-        arch_tag  = " 🗄️ ARCHIVED" if proj.get("is_archived") else ""
+        arch_tag  = "  · archived" if proj.get("is_archived") else ""
+        is_open   = bool(open_state.get(proj_id, False))
 
-        # Open all on filter-change one-shot or when requested via top command bar.
-        with st.expander(
-            f"📁 {proj_name} ({acronym}){arch_tag}{_nonce}",
-            expanded=expand_all_now if not collapse_all_now else False,
-        ):
+        with st.container(border=True, key=f"projbox_{proj_id}"):
+            # ── Title row: toggle on the left, actions on the right ──────────
+            with st.container(key=f"projhead_{proj_id}"):
+                h_title, h_actions = st.columns([6, 4], vertical_alignment="center")
+                with h_title:
+                    st.button(
+                        f"{'▾' if is_open else '▸'}  📁  {proj_name} ({acronym}){arch_tag}",
+                        key=f"projtgl_{proj_id}", type="tertiary",
+                        on_click=_toggle_project, args=(proj_id,),
+                    )
+                with h_actions:
+                    with st.container(horizontal=True, horizontal_alignment="right", gap="small"):
+                        if is_admin and st.button("➕ Deliverable", key=f"add_del_{proj_id}",
+                                                  type="tertiary"):
+                            add_deliverable_modal(proj_id, users)
+                        if st.button("➕ Task without deliverable",
+                                     key=f"add_generic_t_{proj_id}", type="tertiary"):
+                            add_task_modal(proj_id, deliverables, users,
+                                           prefill_deliverable_id=None)
+            if not is_open:
+                continue
 
             proj_deliverables = [d for d in deliverables if d.get("project_id") == proj_id]
-
-            # ── Project actions ──────────────────────────────────────────────
-            tc1, tc2, tc3 = st.columns([1.3, 2.1, 6], vertical_alignment="center")
-            with tc1:
-                if is_admin:
-                    if st.button("➕ Deliverable", key=f"add_del_{proj_id}", use_container_width=True):
-                        add_deliverable_modal(proj_id, users)
-            with tc2:
-                if st.button("➕ Task without deliverable", key=f"add_generic_t_{proj_id}",
-                             use_container_width=True):
-                    add_task_modal(proj_id, deliverables, users, prefill_deliverable_id=None)
-            with tc3:
-                if not proj_deliverables:
-                    st.caption("No deliverables defined for this project.")
+            if not proj_deliverables:
+                st.caption("No deliverables defined for this project.")
 
             # ── One block per deliverable ────────────────────────────────────
             for d in proj_deliverables:
@@ -1055,9 +1085,14 @@ def show_projects():
             if unassigned:
                 with st.container(border=True, gap=None):
                     st.html(
-                        "<span style='font-size:11px;font-weight:700;letter-spacing:0.06em;"
-                        "color:#5F6368'>📂 TASKS WITHOUT DELIVERABLE · "
-                        f"{len(unassigned)}</span>"
+                        "<div style='background:#F1F3F4;border-radius:6px;padding:5px 8px;"
+                        "display:flex;align-items:center;gap:8px'>"
+                        "<span style='font-size:16px;line-height:1'>📋</span>"
+                        "<span style='font-size:14px;font-weight:700;color:#3C4043'>"
+                        "Tasks without deliverable</span>"
+                        f"<span style='font-size:11px;color:#5F6368;background:#FFFFFF;"
+                        f"border:1px solid #DADCE0;border-radius:10px;padding:0 7px'>"
+                        f"{len(unassigned)}</span></div>"
                     )
                     hc, _ = st.columns(ROW_COLS)
                     with hc:
@@ -1069,5 +1104,3 @@ def show_projects():
                             show_done=show_done,
                         )
 
-    if expand_all_once:
-        st.session_state["_projects_expand_all_once"] = False
