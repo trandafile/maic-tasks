@@ -206,10 +206,12 @@ def generate_report_pdf(
     rbac_email=None, title: str = "Project report",
 ):
     buf = BytesIO()
+    # Narrow margins: the tables run the full width of the sheet, and more
+    # rows fit on a page when printing.
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        leftMargin=20*mm, rightMargin=20*mm,
-        topMargin=25*mm, bottomMargin=18*mm,
+        leftMargin=10*mm, rightMargin=10*mm,
+        topMargin=19*mm, bottomMargin=14*mm,
         title=f"MAIC LAB — {title}",
     )
     styles = getSampleStyleSheet()
@@ -310,8 +312,8 @@ def generate_report_pdf(
         threshold = 7
     type_colour = _type_colours(_settings)
 
-    W = 170 * mm
-    COLS = [15 * mm, 59 * mm, 22 * mm, 30 * mm, 44 * mm]      # code · task · status · deadline · people
+    W = doc.width                                             # 190 mm on A4
+    COLS = [W * f for f in (0.08, 0.385, 0.11, 0.17, 0.255)]    # code · task · status · deadline · people
     INK, MUTED, SOFT = "#1F2328", "#80868B", "#5F6368"
     ST_COL = {"Not started": "#5F6368", "Working on": "#1558B0", "Blocked": "#B3261E",
               "Completed": "#1E7E34", "Cancelled": "#80868B"}
@@ -521,7 +523,7 @@ def generate_report_pdf(
         canv.setStrokeColor(rule)
         canv.setLineWidth(0.5)
         canv.line(doc.leftMargin, y - 1.6 * mm, page_w - doc.rightMargin, y - 1.6 * mm)
-        fy = doc.bottomMargin - 9 * mm
+        fy = doc.bottomMargin - 8 * mm
         canv.line(doc.leftMargin, fy + 4 * mm, page_w - doc.rightMargin, fy + 4 * mm)
         canv.setFont("Helvetica", 7.5)
         canv.drawString(doc.leftMargin, fy, f"MAIC LAB · {title} · {generated}")
