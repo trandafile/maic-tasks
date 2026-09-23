@@ -65,16 +65,43 @@ INACTIVE = ("Completed", "Cancelled")
 ROW_COLS = [12, 1.7]
 
 # Grid of the HTML part. Kept in one place so header and rows always align.
-_GRID = "grid-template-columns:minmax(0,1fr) 104px 150px 196px;"
+# Every cell is ONE line: owner and supervisor side by side, date and delta
+# side by side, the path muted after the name. Height comes from rhythm (CSS
+# below), never from wrapped cells.
+_GRID = "grid-template-columns:minmax(0,1fr) 96px 150px 290px;"
 
-# Injected once by app.py. Marker divs inside st.html let the CSS tint the
+# Injected once by app.py. Marker classes inside st.html let the CSS reach the
 # whole Streamlit row (both columns), which inline styles alone cannot do.
+#
+# Vertical rhythm, as in typesetting:
+#   subtasks  — set solid: no rule, no gap (the lines of a paragraph)
+#   task      — a hairline and a small gap above (a new paragraph)
+#   deliverable — its own bordered block with the larger gap (a section)
+#   flat lists (dashboard, review) — every row a thin rule, no grouping
+#
+# app.py pads EVERY column block by 10px top and bottom — including the
+# nested block of icon buttons inside a row. Both must be zeroed here, or a
+# one-line row grows to 60px.
 ROW_CSS = f"""
+    div[data-testid='stHorizontalBlock']:has(.maic-row),
+    div[data-testid='stHorizontalBlock']:has(.maic-row-head),
+    div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) {{
+        padding-top: 0 !important; padding-bottom: 0 !important;
+        font-weight: normal !important; border-radius: 0 !important;
+        min-height: 0;
+    }}
+    div[data-testid='stHorizontalBlock']:has(.maic-row) div[data-testid='stHorizontalBlock'],
+    div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) div[data-testid='stHorizontalBlock'] {{
+        padding-top: 0 !important; padding-bottom: 0 !important;
+    }}
     div[data-testid='stHorizontalBlock']:has(.maic-row) {{
         background-color: #FFFFFF !important;
-        border-bottom: 1px solid #EEF0F2;
-        font-weight: normal !important;
-        border-radius: 0 !important;
+    }}
+    div[data-testid='stHorizontalBlock']:has(.maic-row-task) {{
+        margin-top: 7px; border-top: 1px solid #E6E8EB;
+    }}
+    div[data-testid='stHorizontalBlock']:has(.maic-row-flat) {{
+        border-top: 1px solid #EEF0F2;
     }}
     div[data-testid='stHorizontalBlock']:has(.maic-row-overdue) {{
         background-color: {ROW_BG['overdue']} !important;
@@ -87,16 +114,22 @@ ROW_CSS = f"""
     div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) {{
         background-color: #EEF7F3 !important;
         border-radius: 6px !important;
-        font-weight: normal !important;
     }}
     div[data-testid='stHorizontalBlock']:has(.maic-row-head) {{
         background-color: transparent !important;
-        border-bottom: 1px solid #E3E6EA;
-        font-weight: normal !important;
     }}
-    /* icon buttons in the action column: small, borderless, tight */
-    div[data-testid='stHorizontalBlock']:has(.maic-row) button[kind='tertiary'] {{
-        min-height: 1.6rem; padding: 0 0.25rem; font-size: 0.95rem;
+    /* icon buttons: as tall as a line of text */
+    div[data-testid='stHorizontalBlock']:has(.maic-row) button,
+    div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) button {{
+        min-height: 0 !important; height: 22px; padding: 0 4px !important;
+        line-height: 1 !important;
+    }}
+    div[data-testid='stHorizontalBlock']:has(.maic-row) button p,
+    div[data-testid='stHorizontalBlock']:has(.maic-deliv-head) button p {{
+        font-size: 0.88rem; line-height: 1; margin: 0;
+    }}
+    div[data-testid='stHorizontalBlock']:has(.maic-row) div[data-testid='stCheckbox'] {{
+        min-height: 0;
     }}
 """
 
@@ -160,8 +193,8 @@ def urgency_sort(items: list, threshold: int = 14) -> list:
 def chip(text: str, fg: str, bg: str, border: str | None = None) -> str:
     b = f"border:1px solid {border};" if border else ""
     return (f"<span style='display:inline-block;background:{bg};color:{fg};{b}"
-            f"padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;"
-            f"white-space:nowrap;line-height:1.5'>{esc(text)}</span>")
+            f"padding:0 6px;border-radius:4px;font-size:10.5px;font-weight:600;"
+            f"white-space:nowrap;line-height:1.55'>{esc(text)}</span>")
 
 
 def status_chip(status: str | None) -> str:
@@ -187,13 +220,14 @@ def deadline_cell(item: dict, threshold: int = 14) -> str:
     if tier == "done":
         return f"<span style='color:{TEXT_MUTED};font-size:12px'>{label}</span>"
     if tier == "overdue":
-        return (f"<span style='color:{TEXT_OVERDUE};font-size:12px;font-weight:600'>{label}</span>"
-                f"<span style='display:block;color:{TEXT_OVERDUE};font-size:11px'>"
-                f"{abs(days)}d late</span>")
+        return (f"<span style='color:{TEXT_OVERDUE};font-size:12px;font-weight:600;"
+                f"white-space:nowrap'>{label} <span style='font-weight:400;font-size:11px'>"
+                f"· {abs(days)}d late</span></span>")
     if tier == "soon":
         when = "today" if days == 0 else f"in {days}d"
-        return (f"<span style='color:{TEXT_SOON};font-size:12px;font-weight:600'>{label}</span>"
-                f"<span style='display:block;color:{TEXT_SOON};font-size:11px'>{when}</span>")
+        return (f"<span style='color:{TEXT_SOON};font-size:12px;font-weight:600;"
+                f"white-space:nowrap'>{label} <span style='font-weight:400;font-size:11px'>"
+                f"· {when}</span></span>")
     return f"<span style='color:{TEXT_SOFT};font-size:12px'>{label}</span>"
 
 
@@ -209,18 +243,16 @@ def person_name(email: str | None, user_map: dict) -> str:
 
 def people_cell(owner_email: str | None, sup_email: str | None, user_map: dict,
                 muted: bool = False) -> str:
+    """'Owner Name · sup Name' on a single line (supervisor muted)."""
     owner = person_name(owner_email, user_map)
     sup = person_name(sup_email, user_map) if sup_email and sup_email != owner_email else ""
     if not owner and not sup:
         return f"<span style='color:{TEXT_MUTED};font-size:12px'>—</span>"
     main = TEXT_MUTED if muted else TEXT_MAIN
-    out = (f"<span style='display:block;font-size:12.5px;color:{main};white-space:nowrap;"
-           f"overflow:hidden;text-overflow:ellipsis'>{esc(owner or '—')}</span>")
-    if sup:
-        out += (f"<span style='display:block;font-size:11px;color:{TEXT_MUTED};"
-                f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>"
-                f"sup · {esc(sup)}</span>")
-    return out
+    sup_html = (f"<span style='color:{TEXT_MUTED};font-size:11px'> · sup {esc(sup)}</span>"
+                if sup else "")
+    return (f"<div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+            f"font-size:12.5px;color:{main}'>{esc(owner or '—')}{sup_html}</div>")
 
 
 def project_chip(label: str | None) -> str:
@@ -236,9 +268,9 @@ def project_chip(label: str | None) -> str:
 
 def header_html(date_label: str = "Deadline", people_label: str = "Owner / supervisor",
                 first_label: str = "Item") -> str:
-    cell = f"font-size:11px;color:{TEXT_MUTED};letter-spacing:0.02em"
+    cell = f"font-size:10.5px;color:{TEXT_MUTED};letter-spacing:0.03em"
     return (f"<div class='maic-row-head' style='display:grid;{_GRID}gap:10px;"
-            f"padding:4px 8px;align-items:center'>"
+            f"padding:3px 8px 0 8px;align-items:center'>"
             f"<span style='{cell}'>{esc(first_label)}</span>"
             f"<span style='{cell}'>Status</span>"
             f"<span style='{cell}'>{esc(date_label)}</span>"
@@ -249,14 +281,16 @@ def row_html(item: dict, *, kind: str = "task", user_map: dict | None = None,
              threshold: int = 14, path: str | None = None,
              project_label: str | None = None, meta: str | None = None,
              date_html: str | None = None, readonly: bool = False,
-             show_people: bool = True, strike_done: bool = True) -> str:
-    """One work item as a grid row.
+             show_people: bool = True, strike_done: bool = True,
+             flat: bool = False) -> str:
+    """One work item as a one-line grid row.
 
-    kind: "task" | "subtask". ``path`` is a muted second line (where the item
-    lives); ``meta`` a muted suffix on that line (idle, comments…).
-    ``date_html`` replaces the deadline cell (the review queue shows the
-    closing date there). ``readonly`` = the viewer is not involved: the row is
-    shown muted and without people/deadline, as the rest of the app does.
+    kind: "task" | "subtask". In a tree (default) a task opens a group and its
+    subtasks are set solid beneath it; ``flat=True`` is for mixed lists
+    (dashboard, review) where every row is separated the same way.
+    ``path`` / ``meta`` follow the name, muted. ``date_html`` replaces the
+    deadline cell. ``readonly`` = the viewer is not involved: muted, without
+    people and deadline, as the rest of the app does.
     """
     user_map = user_map or {}
     status = item.get("status") or "Not started"
@@ -264,54 +298,56 @@ def row_html(item: dict, *, kind: str = "task", user_map: dict | None = None,
     if readonly:
         tier = "done" if tier == "done" else "normal"
     done = tier == "done"
+    is_sub = kind == "subtask"
 
-    classes = "maic-row"
+    classes = "maic-row " + ("maic-row-flat" if flat else
+                             ("maic-row-sub" if is_sub else "maic-row-task"))
     if tier == "overdue":
         classes += " maic-row-overdue"
     elif tier == "soon":
         classes += " maic-row-soon"
 
-    is_sub = kind == "subtask"
-    name_color = TEXT_MUTED if (done or readonly) else TEXT_MAIN
+    name_color = TEXT_MAIN if (not strike_done or not (done or readonly)) else TEXT_MUTED
     strike = ("text-decoration:line-through;text-decoration-color:#B8BCC2;"
               if done and strike_done else "")
-    if not strike_done:
-        name_color = TEXT_MAIN
     weight = "500" if is_sub else "600"
-    size = "13px" if is_sub else "14px"
-    prefix = "<span style='color:#9AA0A6;margin-right:4px'>↳</span>" if is_sub else ""
+    size = "12.5px" if is_sub else "13.5px"
+    indent = "20px" if (is_sub and not flat) else "0"
+    prefix = "<span style='color:#9AA0A6;margin-right:3px'>↳</span>" if is_sub else ""
     seq = item.get("sequence_id")
     title = f" title='{esc(seq)}'" if seq else ""
     archived = (" <span style='font-size:10px;color:#80868B'>· archived</span>"
                 if item.get("is_archived") else "")
-
     second = " · ".join(x for x in (path, meta) if x)
-    second_html = (f"<span style='display:block;font-size:11px;color:{TEXT_MUTED};"
-                   f"margin-top:1px;white-space:nowrap;overflow:hidden;"
-                   f"text-overflow:ellipsis'>{esc(second)}</span>") if second else ""
+    second_html = (f"<span style='flex:1 1 auto;min-width:0;overflow:hidden;"
+                   f"text-overflow:ellipsis;font-size:11px;color:{TEXT_MUTED}'>"
+                   f"{esc(second)}</span>") if second else ""
 
     name_cell = (
-        f"<div style='min-width:0;padding-left:{'22px' if is_sub else '0'}'>"
-        f"<div style='display:flex;align-items:center;gap:6px;flex-wrap:wrap'>"
+        f"<div style='min-width:0;padding-left:{indent};display:flex;align-items:center;"
+        f"gap:6px;white-space:nowrap;overflow:hidden'>"
         f"{project_chip(project_label)}{prefix}"
-        f"<span{title} style='font-size:{size};font-weight:{weight};color:{name_color};"
-        f"line-height:1.35;{strike}'>{esc(item.get('name', ''))}</span>"
+        f"<span{title} style='flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;"
+        f"font-size:{size};font-weight:{weight};color:{name_color};{strike}'>"
+        f"{esc(item.get('name', ''))}</span>"
         f"{'' if (done or readonly) else priority_chip(item.get('priority'))}{archived}"
-        f"</div>{second_html}</div>"
+        f"{second_html}</div>"
     )
     if readonly:
         date_cell, people = "", ""
     else:
         date_cell = date_html if date_html is not None else deadline_cell(item, threshold)
         people = people_cell(item.get("owner_email"), item.get("supervisor_email"),
-                             user_map, muted=done) if show_people else ""
+                             user_map, muted=done and strike_done) if show_people else ""
 
+    pad = "1px 8px" if is_sub else "3px 8px"
     return (f"<div class='{classes}' style='display:grid;{_GRID}gap:10px;"
-            f"padding:5px 8px;align-items:center;{'opacity:0.55;' if readonly else ''}'>"
+            f"padding:{pad};align-items:center;line-height:1.3;"
+            f"{'opacity:0.55;' if readonly else ''}'>"
             f"{name_cell}"
             f"<div>{status_chip(status)}</div>"
-            f"<div style='line-height:1.25'>{date_cell}</div>"
-            f"<div style='min-width:0;line-height:1.25'>{people}</div>"
+            f"<div style='white-space:nowrap'>{date_cell}</div>"
+            f"<div style='min-width:0'>{people}</div>"
             f"</div>")
 
 
@@ -357,14 +393,14 @@ def deliverable_head_html(d: dict, d_tasks: list, user_map: dict, threshold: int
     people = f"owner {esc(owner)}" + (f" · sup {esc(sup)}" if sup else "")
 
     return (
-        "<div class='maic-deliv-head' style='padding:6px 8px'>"
+        "<div class='maic-deliv-head' style='padding:4px 8px 3px 8px'>"
         "<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>"
         "<span style='font-size:10px;color:#2E8B6E;font-weight:700;letter-spacing:0.05em'>"
         "DELIVERABLE</span>"
         f"<span style='font-size:15px;font-weight:700;color:#0F4D3B'>{esc(d.get('name', ''))}</span>"
         f"{type_chip}"
         f"{status_chip(status)}{signoff}{archived}{dl_html}</div>"
-        "<div style='display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:4px'>"
+        "<div style='display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:2px'>"
         f"{progress_bar(done, len(counted))}"
         f"<span style='font-size:12px;color:#3C4043'>{people}</span></div>"
         "</div>"

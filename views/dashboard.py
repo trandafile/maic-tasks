@@ -118,7 +118,7 @@ def _render_row(item: dict, *, kind: str, ctx: dict, key_prefix: str,
     with c_row:
         st.html(row_html(item, kind=kind, user_map=ctx["user_map"],
                          threshold=ctx["threshold"], project_label=label,
-                         path=path, meta=meta, show_people=show_people))
+                         path=path, meta=meta, show_people=show_people, flat=True))
     with c_act:
         if st.button("✏️", key=f"{key_prefix}_{kind}_{item['id']}", type="tertiary",
                      help="Details and edit"):

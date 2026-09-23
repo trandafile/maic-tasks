@@ -580,6 +580,7 @@ div[class*="st-key-rvgrp_"] div[data-testid='stHorizontalBlock']:has(.maic-row) 
     padding-top: 0 !important; padding-bottom: 0 !important;
 }
 /* reopen: a bigger, unmistakable icon */
+div[class*="st-key-rv_reopen_"] button { height: 26px !important; }
 div[class*="st-key-rv_reopen_"] button, div[class*="st-key-rv_reopen_"] button * {
     font-size: 1.45rem !important; line-height: 1 !important;
 }
@@ -708,7 +709,7 @@ def _render_review(queue: dict, user_email: str, is_admin: bool, users: list) ->
                     with c_row:
                         st.html(row_html(
                             it, kind=it["_kind"], user_map=names, path=it.get("_path") or None,
-                            strike_done=False,
+                            strike_done=False, flat=True,
                             date_html=(f"<span style='font-size:12px;color:#5F6368'>"
                                        f"{fmt(it.get('_closed'))}</span>"),
                         ))
