@@ -536,18 +536,31 @@ def _apply_projects_filters(
             or any(s.get("task_id") == t.get("id") for s in subtasks if s.get("id") in visible_subtask_ids)
         )
     }
+    # A deliverable shows when it holds a visible task or matches the filters
+    # itself; a project when it holds a visible task or deliverable. With no
+    # filter active nothing is dropped, so empty projects and deliverables stay
+    # in the tree (they are where new tasks get added).
     visible_deliv_ids = {
         d["id"]
         for d in deliverables
-        if d.get("id") is not None and any(t.get("deliverable_id") == d.get("id") for t in tasks if t.get("id") in visible_task_ids)
+        if d.get("id") is not None and (
+            any(t.get("deliverable_id") == d.get("id") for t in tasks if t.get("id") in visible_task_ids)
+            or (_matches_people(d, owner_filter, supervisor_filter) and _matches_deadline(d, deadline_days))
+        )
     }
     visible_project_ids = {
         t.get("project_id")
         for t in tasks
         if t.get("id") in visible_task_ids and t.get("project_id") is not None
     }
+    visible_project_ids.update(
+        d.get("project_id") for d in deliverables
+        if d.get("id") in visible_deliv_ids and d.get("project_id") is not None
+    )
+    filters_active = bool(owner_filter or supervisor_filter or deadline_days is not None)
 
-    filtered_projects = [p for p in projects if p.get("id") in visible_project_ids]
+    filtered_projects = [p for p in projects
+                         if not filters_active or p.get("id") in visible_project_ids]
     filtered_deliverables = [d for d in deliverables if d.get("id") in visible_deliv_ids]
     filtered_tasks = [t for t in tasks if t.get("id") in visible_task_ids]
     filtered_subtasks = [s for s in subtasks if s.get("task_id") in visible_task_ids]
