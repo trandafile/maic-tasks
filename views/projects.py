@@ -408,6 +408,122 @@ def add_subtask_modal(task_id, users):
                 st.error(f"Error: {e}")
 
 
+@st.dialog("Import deliverables and tasks", width="large")
+def import_tasks_modal(project: dict, users: list[dict]):
+    """Paste a YAML/JSON payload (maic-tasks-import/v1) → validate → preview →
+    import into THIS project. Guide, schema and LLM prompt at the bottom."""
+    from utils import task_import as TI
+
+    if st.session_state.get("user_role") != "admin":
+        st.error("Only admins can import.")
+        return
+    pid = project["id"]
+    me = st.session_state.get("user_email")
+    letter = project.get("code_letter") or ""
+    title = f"{project.get('acronym') or ''} · {project.get('name') or ''}".strip(" ·")
+    st.caption(f"Into project **{letter} · {title}** only. Validate first: nothing is written "
+               f"until you press Import.")
+
+    cfg = get_settings()
+    types = [s["name"].strip() for s in parse_deliverable_tag_styles(cfg.get("deliverable_tag_styles"))
+             if str(s.get("name", "")).strip()]
+    state_key = f"_imp_plan_{pid}"
+    done_key = f"_imp_done_{pid}"
+
+    def _show_result(ok: bool, lines: list[str]) -> None:
+        (st.success if ok else st.error)(
+            f"Import {'completed' if ok else 'stopped'}: {len(lines)} line(s) below.")
+        st.markdown("\n".join(f"- {esc(l)}" for l in lines) or "_nothing written_")
+        if st.button("Close", type="primary", key=f"imp_close_{pid}"):
+            st.session_state.pop(done_key, None)
+            st.rerun()
+
+    if st.session_state.get(done_key):
+        _show_result(*st.session_state[done_key])
+        return
+
+    text = st.text_area("Payload (YAML or JSON)", height=280, key=f"imp_text_{pid}",
+                        placeholder="schema: maic-tasks-import/v1\nproject: {code: "
+                                    f"{letter or 'E'}, name: {project.get('acronym') or 'ACRONYM'}}}\n"
+                                    "deliverables:\n  - action: create\n    title: …")
+    c_dup, c_mail = st.columns(2)
+    with c_dup:
+        allow_dup = st.checkbox("Create anyway when the title already exists", value=False,
+                                key=f"imp_dup_{pid}",
+                                help="Off: a create whose title already exists under the same "
+                                     "parent makes the file invalid (protects against importing "
+                                     "the same file twice).")
+    with c_mail:
+        notify = st.checkbox("E-mail the assignees of new tasks", value=False, key=f"imp_mail_{pid}",
+                             help="One message per created task or subtask, as the Add dialogs do.")
+    signature = (text, allow_dup)
+
+    if st.button("🔍 Validate", key=f"imp_validate_{pid}"):
+        data, err = TI.parse_payload(text)
+        if err:
+            st.session_state[state_key] = (signature, None, err)
+        else:
+            snap = TI.load_snapshot(pid)
+            plan = TI.validate(data, project, snap, users, me, types, allow_duplicates=allow_dup)
+            st.session_state[state_key] = (signature, plan, None)
+
+    stored = st.session_state.get(state_key)
+    if stored and stored[0] != signature:
+        st.info("The payload or the options changed: validate again.")
+    elif stored:
+        _, plan, perr = stored
+        if perr:
+            st.error(f"**The file is not valid.** {perr}")
+        else:
+            if plan.errors:
+                st.error("**The file is not valid** — nothing can be imported until these are fixed:\n\n"
+                         + "\n".join(f"- {esc(e)}" for e in plan.errors))
+            if plan.warnings:
+                st.warning("\n".join(f"- {esc(w)}" for w in plan.warnings))
+            if plan.notes:
+                st.caption("Names read as: " + " · ".join(plan.notes))
+            rows = TI.preview_rows(plan, letter, TI.People(users, me))
+            if rows:
+                st.dataframe(rows, hide_index=True, width="stretch",
+                             column_config={
+                                 "Code": st.column_config.TextColumn(width="small"),
+                                 "Action": st.column_config.TextColumn(width="small"),
+                                 "Item": st.column_config.TextColumn(width="large"),
+                                 "Changes": st.column_config.TextColumn(width="large"),
+                             })
+            n = len(plan.changes())
+            if plan.ok and n:
+                by_action: dict = {}
+                for (kind, action), v in plan.counts().items():
+                    by_action.setdefault(action, []).append(f"{v} {kind}{'s' if v != 1 else ''}")
+                order = ["create", "update", "move", "complete", "cancel", "keep"]
+                summary = " · ".join(f"{a}: {', '.join(by_action[a])}" for a in order if a in by_action)
+                st.caption(f"Ready — {summary}.")
+                if st.button(f"⬆️ Import {n} change{'s' if n != 1 else ''}", type="primary",
+                             key=f"imp_go_{pid}"):
+                    ok, lines = TI.apply_plan(
+                        plan, project, me, notify=notify,
+                        assigner=st.session_state.get("user_name") or me or "")
+                    st.session_state.pop(state_key, None)
+                    if ok:
+                        st.session_state.pop(f"imp_text_{pid}", None)
+                    st.session_state[done_key] = (ok, lines)
+                    st.divider()
+                    _show_result(ok, lines)
+                    return
+
+    st.divider()
+    st.markdown("##### 📘 Guide, schema and LLM prompt")
+    st.markdown(TI.GUIDE_MD)
+    try:
+        prompt = TI.build_prompt(project, TI.load_snapshot(pid), users, types)
+    except Exception as exc:
+        prompt = f"(could not read the project state: {exc})"
+    st.caption("Copy this prompt (icon at the top right of the box), add your request at the "
+               "end and paste the answer above.")
+    st.code(prompt, language="yaml", height=360)
+
+
 @st.dialog("Create New Project")
 def add_project_modal():
     with st.form("new_proj_form"):
@@ -1188,6 +1304,11 @@ def show_projects():
                                      key=f"add_generic_t_{proj_id}", type="tertiary"):
                             add_task_modal(proj_id, deliverables, users,
                                            prefill_deliverable_id=None)
+                        if is_admin and st.button("📥 Import", key=f"imp_open_{proj_id}",
+                                                  type="tertiary",
+                                                  help="Paste deliverables, tasks and subtasks "
+                                                       "(YAML/JSON) into this project"):
+                            import_tasks_modal(proj, users)
             if not is_open:
                 continue
 
