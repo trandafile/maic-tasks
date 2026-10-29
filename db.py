@@ -1761,42 +1761,6 @@ def get_activity_stats(user_email: str | None = None, weeks: int = 8) -> dict:
     return out
 
 
-def get_engagement_by_person(weeks: int = 4) -> list[dict]:
-    """Updates per person over the period — the measure of whether any of the
-    engagement work is actually landing. Sorted by activity, least active last."""
-    since = (_dt_date.today() - _dt_mod.timedelta(weeks=weeks)).isoformat()
-    try:
-        rows = supabase.table("status_history").select(
-            "changed_by_email, new_status, changed_at"
-        ).gte("changed_at", since).execute().data or []
-        users = supabase.table("users").select("email, name").eq(
-            "is_approved", True
-        ).execute().data or []
-    except Exception as exc:
-        print(f"[db.get_engagement_by_person] {exc}")
-        return []
-
-    per: dict[str, dict] = {
-        u["email"]: {"email": u["email"], "name": u.get("name", u["email"]),
-                     "updates": 0, "completed": 0, "last": None}
-        for u in users
-    }
-    for r in rows:
-        e = r.get("changed_by_email")
-        if e not in per:
-            continue
-        per[e]["updates"] += 1
-        if r.get("new_status") == "Completed":
-            per[e]["completed"] += 1
-        ts = parse_ts(r.get("changed_at"))
-        if ts and (per[e]["last"] is None or ts > per[e]["last"]):
-            per[e]["last"] = ts
-
-    out = list(per.values())
-    out.sort(key=lambda x: (-x["updates"], x["name"]))
-    return out
-
-
 def get_user_engagement(since: _dt_date, until: _dt_date | None = None) -> dict:
     """Who is actually using the platform, over an arbitrary window.
 
@@ -2370,26 +2334,33 @@ def set_task_label(task_id: int, name: str, on: bool) -> bool:
 
 # ── My Status deck (personal portfolio for 1:1s and PhD reviews) ──────────────
 
-def get_my_status_pack(email: str, since: _dt_date) -> dict:
+def get_my_status_pack(email: str, since: _dt_date,
+                       include_supervised: bool = False) -> dict:
     """Everything one person shows at a review: tasks, papers, targets, PhD.
 
     Scopus publications are fetched by the VIEW (network + API key) and added
     to the pack afterwards; everything here is database-only and degrades to
     empty sections.
+
+    include_supervised (admins): the tasks I supervise join the ones I own,
+    and the tables list every open subtask of them, not only mine.
     """
     threshold = stale_threshold()
     today = _dt_date.today()
     pack = {"user": {}, "since": since, "until": today,
-            "task_rows": [], "completed": [], "counts": {},
+            "task_rows": [], "completed": [], "task_cards": [], "counts": {},
             "paper_drafts": [], "conf_papers": [], "conferences": [],
-            "publications": None}
+            "publications": None, "include_supervised": include_supervised}
 
     try:
         urows = supabase.table("users").select("*").eq("email", email).execute().data or []
         pack["user"] = urows[0] if urows else {"email": email, "name": email}
-        projects = supabase.table("projects").select("id, name, acronym, identifier").eq(
+        # "*" so a missing code_letter column degrades to uncoded names.
+        projects = supabase.table("projects").select("*").eq(
             "is_archived", False).execute().data or []
-        tasks = supabase.table("tasks").select("*").eq("owner_email", email).execute().data or []
+        tq = supabase.table("tasks").select("*")
+        tq = tq.or_(rbac_or_filter(email)) if include_supervised else tq.eq("owner_email", email)
+        tasks = tq.execute().data or []
         subs = supabase.table("subtasks").select("*").eq("owner_email", email).eq(
             "is_archived", False).execute().data or []
         all_tasks = supabase.table("tasks").select("id, name, project_id").execute().data or []
@@ -2420,6 +2391,30 @@ def get_my_status_pack(email: str, since: _dt_date) -> dict:
                    and (cd := _norm_conf_date(t.get("completion_date")))
                    and cd >= since.isoformat()]
 
+    # The deliverables my tasks feed: the deck reads deliverable first, task second.
+    letters = {p["id"]: p.get("code_letter") for p in projects}
+    dmap: dict[int, dict] = {}
+    deliv_ids = sorted({t["deliverable_id"] for t in active + done_period
+                        if t.get("deliverable_id")})
+    if deliv_ids:
+        try:
+            dmap = {d["id"]: d for d in supabase.table("deliverables").select("*").in_(
+                "id", deliv_ids).execute().data or []}
+        except Exception as exc:
+            print(f"[db.get_my_status_pack] deliverables: {exc}")
+
+    # Every open subtask of my active tasks, whoever owns it — the task slide
+    # shows the whole task; the table keeps listing only my own subtasks.
+    all_subs: list[dict] = []
+    if active:
+        try:
+            all_subs = supabase.table("subtasks").select("*").in_(
+                "task_id", [t["id"] for t in active]).eq(
+                "is_archived", False).execute().data or []
+        except Exception as exc:
+            print(f"[db.get_my_status_pack] subtasks: {exc}")
+    is_open = lambda s: (s.get("status") or "") not in ("Completed", "Cancelled")
+
     def _row(item, level, kind, pid):
         fresh, sev = _fresh_label(item, threshold)
         return {"level": level, "kind": kind, "name": item.get("name") or "—",
@@ -2428,28 +2423,92 @@ def get_my_status_pack(email: str, since: _dt_date) -> dict:
                 "deadline": item.get("deadline"),
                 "people": _people_label(item, umap), "fresh": fresh, "sev": sev}
 
-    # Task tree grouped by project
-    by_proj: dict[int, list] = {}
-    for t in active:
-        by_proj.setdefault(t.get("project_id"), []).append(t)
-    for pid in sorted(by_proj, key=lambda p: plabel(p)):
-        pack["task_rows"].append({"level": 0, "kind": "group",
-                                  "name": f"{plabel(pid)} — {pmap.get(pid, {}).get('name', '')}",
-                                  "status": "", "deadline": None, "people": "",
-                                  "fresh": "", "sev": "none"})
-        for t in sorted(by_proj[pid], key=lambda x: x.get("deadline") or "9999-12-31"):
-            pack["task_rows"].append(_row(t, 1, "task", pid))
-            for s in [s for s in subs if s.get("task_id") == t["id"]
-                      and (s.get("status") or "") not in ("Completed", "Cancelled")]:
-                pack["task_rows"].append(_row(s, 2, "subtask", pid))
+    def _done_row(t, level):
+        return {"level": level, "kind": "task", "code": _code_of(t, "task"),
+                "name": t.get("name") or "—",
+                "status": "Completed", "deadline": t.get("completion_date"),
+                "people": "", "fresh": "", "sev": "ok"}
 
-    pack["completed"] = [
-        {"level": 1, "kind": "task", "code": _code_of(t, "task"),
-         "name": f"[{plabel(t.get('project_id'))}] {t.get('name','')}",
-         "status": "Completed", "deadline": t.get("completion_date"),
-         "people": "", "fresh": "", "sev": "ok"}
-        for t in sorted(done_period, key=lambda x: x.get("completion_date") or "")
-    ]
+    def _tree(items, task_rows, task_key):
+        """Project → deliverable → task rows, plus the tasks in that order.
+
+        Under each project the deliverables come first (by code, then
+        deadline), each followed by its tasks; tasks with no deliverable close
+        the project's block, one level up.
+        """
+        rows, ordered = [], []
+        by_proj: dict[int, list] = {}
+        for t in items:
+            by_proj.setdefault(t.get("project_id"), []).append(t)
+        for pid in sorted(by_proj, key=lambda p: plabel(p)):
+            rows.append({"level": 0, "kind": "group",
+                         "name": f"{plabel(pid)} — {pmap.get(pid, {}).get('name', '')}",
+                         "status": "", "deadline": None, "people": "",
+                         "fresh": "", "sev": "none"})
+            by_deliv: dict[int | None, list] = {}
+            for t in by_proj[pid]:
+                did = t.get("deliverable_id")
+                by_deliv.setdefault(did if did in dmap else None, []).append(t)
+            keyed = sorted((k for k in by_deliv if k is not None),
+                           key=lambda k: (dmap[k].get("code_no") is None,
+                                          dmap[k].get("code_no") or 0,
+                                          dmap[k].get("deadline") or "9999-12-31",
+                                          dmap[k].get("name") or ""))
+            for did in keyed + ([None] if None in by_deliv else []):
+                level = 1
+                if did is not None:
+                    d = dmap[did]
+                    rows.append({"level": 1, "kind": "deliverable",
+                                 "name": d.get("name") or "—",
+                                 "code": _code_of(d, "deliverable", letters),
+                                 "status": d.get("status") or "Not started",
+                                 "deadline": d.get("deadline"), "people": "",
+                                 "fresh": "", "sev": "none"})
+                    level = 2
+                for t in sorted(by_deliv[did], key=task_key):
+                    rows.extend(task_rows(t, level))
+                    ordered.append(t)
+        return rows, ordered
+
+    def _active_rows(t, level):
+        out = [_row(t, level, "task", t.get("project_id"))]
+        out += [_row(s, level + 1, "subtask", t.get("project_id"))
+                for s in (all_subs if include_supervised else subs)
+                if s.get("task_id") == t["id"] and is_open(s)]
+        return out
+
+    pack["task_rows"], ordered_active = _tree(
+        active, _active_rows, lambda x: x.get("deadline") or "9999-12-31")
+    pack["completed"], _ = _tree(
+        done_period, lambda t, level: [_done_row(t, level)],
+        lambda x: x.get("completion_date") or "")
+
+    # One card per active task, in the table's order — a slide each.
+    uname = lambda e: (umap.get(e, {}).get("name") or e or "") if e else ""
+    for t in ordered_active:
+        pid = t.get("project_id")
+        d = dmap.get(t.get("deliverable_id"))
+        fresh, sev = _fresh_label(t, threshold)
+        pack["task_cards"].append({
+            "name": t.get("name") or "—", "code": _code_of(t, "task"),
+            "project": f"{plabel(pid)} — {pmap.get(pid, {}).get('name', '')}",
+            "deliverable": ({"name": d.get("name") or "—",
+                             "code": _code_of(d, "deliverable", letters),
+                             "deadline": d.get("deadline")} if d else None),
+            "status": t.get("status") or "Not started",
+            "deadline": t.get("deadline"), "fresh": fresh, "sev": sev,
+            # Only the other person is named: my own name on my slide is noise.
+            "owner": (uname(t.get("owner_email"))
+                      if t.get("owner_email") != email else ""),
+            "supervisor": (uname(t.get("supervisor_email"))
+                           if t.get("supervisor_email") != email else ""),
+            "subtasks": [{"name": s.get("name") or "—", "code": _code_of(s, "subtask"),
+                          "status": s.get("status") or "Not started",
+                          "deadline": s.get("deadline"),
+                          "owner": (uname(s.get("owner_email"))
+                                    if s.get("owner_email") != email else "")}
+                         for s in all_subs if s.get("task_id") == t["id"] and is_open(s)],
+        })
 
     # Paper deliverables (journal drafts etc.) where I am owner or supervisor
     try:

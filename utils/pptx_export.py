@@ -6,7 +6,8 @@ Three decks, one discipline: **use the template, add nothing to it.**
 * Structure (titles, section breaks, captions, footers) goes into the
   layouts' own PLACEHOLDERS — *Sectio plena I–IV* for the numbered sections,
   *Tabella risultati* for every list (its native TABLE placeholder),
-  *Due contenuti* for the per-person pages, *Messaggio chiave* for the PhD
+  *Due contenuti* for the per-person pages, *Sottotitolo* for the per-task
+  pages (the subtitle names the deliverable), *Messaggio chiave* for the PhD
   clock. No hand-drawn header bars, tiles or footer boxes: formatting comes
   from the template, so when the template evolves the decks follow.
 * The ONE exception is the two timeline figures (conference submissions and
@@ -32,6 +33,7 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
+from pptx.oxml.ns import qn
 from pptx.util import Emu, Inches, Pt
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "assets" / "maic_template_2026.pptx"
@@ -151,12 +153,14 @@ def _set_ph(slide, idx: int, text, *, size=None, color=None, bold=None):
     return ph
 
 
-def _ph_paragraphs(slide, idx: int, blocks: list[dict]):
+def _ph_paragraphs(slide, idx: int, blocks: list[dict], *, bullets: bool = True):
     """Rich multi-paragraph content inside one placeholder.
 
     blocks: [{"text", "size", "color", "bold", "space_after"}] — used for the
     per-person pages, where the two *Due contenuti* placeholders hold the four
     labelled lists as styled text instead of hand-drawn boxes.
+    bullets=False drops the layout's bullet and hanging indent, for content
+    that carries its own markers.
     """
     ph = _ph(slide, idx)
     if ph is None or not ph.has_text_frame:
@@ -167,6 +171,11 @@ def _ph_paragraphs(slide, idx: int, blocks: list[dict]):
     for b in blocks:
         p = tf.paragraphs[0] if first else tf.add_paragraph()
         first = False
+        if not bullets:
+            pPr = p._p.get_or_add_pPr()
+            pPr.set("marL", "0")
+            pPr.set("indent", "0")
+            pPr.insert(0, pPr.makeelement(qn("a:buNone"), {}))
         p.space_after = Pt(b.get("space_after", 2))
         run = p.add_run()
         run.text = b["text"]
@@ -472,6 +481,62 @@ def _person_slide(prs, person, period):
                            lambda it: f"{it.get('_project', '')} · idle {it.get('_stale', '?')}d"))
     _ph_paragraphs(s, 12, left)
     _ph_paragraphs(s, 13, right)
+    _tidy(s)
+    return s
+
+
+# ── Per-task page (Sottotitolo) ───────────────────────────────────────────────
+
+_MAX_SUBTASKS = 10
+
+
+def _task_slide(prs, card):
+    """One active task: title = the task, subtitle = the deliverable it feeds.
+
+    The subtitle is the deliverable label and nothing else — a task with no
+    deliverable simply has no subtitle (_tidy drops the empty placeholder).
+    """
+    s = _add(prs, "Sottotitolo")
+    _set_ph(s, 0, _named(card))
+    d = card.get("deliverable")
+    if d:
+        due = f" · due {_fmt(d['deadline'])}" if d.get("deadline") else ""
+        _set_ph(s, 12, f"Deliverable {_named(d)}{due}")
+
+    status = card.get("status") or "Not started"
+    due = f"due {_fmt(card['deadline'])}" if card.get("deadline") else "no deadline"
+    blocks = [
+        {"text": card.get("project", ""), "size": 11, "color": MUTED, "space_after": 10},
+        {"text": f"{status} · {due}", "size": 16, "bold": True,
+         "color": _STATUS_COLOUR.get(status, INK), "space_after": 4},
+    ]
+    for role in ("owner", "supervisor"):
+        if card.get(role):
+            blocks.append({"text": f"{role.capitalize()}: {card[role]}", "size": 12,
+                           "color": INK, "space_after": 2})
+    blocks.append({"text": f"Last update: {card.get('fresh') or '—'}", "size": 12,
+                   "color": _SEV_COLOUR.get(card.get("sev", "none"), MUTED),
+                   "space_after": 14})
+
+    subs = card.get("subtasks", [])
+    if subs:
+        blocks.append({"text": f"Open subtasks · {len(subs)}", "size": 13,
+                       "bold": True, "color": BLUE, "space_after": 4})
+        for st in subs[:_MAX_SUBTASKS]:
+            bits = [st.get("status") or "Not started"]
+            if st.get("deadline"):
+                bits.append(f"due {_fmt(st['deadline'])}")
+            if st.get("owner"):
+                bits.append(st["owner"])
+            blocks.append({"text": f"›  {_named(st)}  —  {' · '.join(bits)}",
+                           "size": 12, "color": INK, "space_after": 2})
+        if len(subs) > _MAX_SUBTASKS:
+            blocks.append({"text": f"… and {len(subs) - _MAX_SUBTASKS} more",
+                           "size": 10, "color": MUTED})
+    else:
+        blocks.append({"text": "No open subtasks.", "size": 12, "color": MUTED})
+
+    _ph_paragraphs(s, 13, blocks, bullets=False)
     _tidy(s)
     return s
 
@@ -874,7 +939,7 @@ def build_my_status_deck(pack: dict) -> BytesIO:
                         "targets (tentative included).")
 
     _tree_rows(prs, "Completed in the period", period, pack.get("completed", []),
-               footer="Completion dates from the task records.")
+               footer="DEADLINE = completion date for tasks, due date for deliverables.")
 
     _publication_timeline(prs, pack)
 
@@ -896,10 +961,14 @@ def build_my_status_deck(pack: dict) -> BytesIO:
     _tree_rows(prs, "Papers", "Journal drafts and conference targets", rows,
                footer="TENT. = tentative topic, not yet approved by the supervisor.")
 
+    scope = "owned or supervised, " if pack.get("include_supervised") else ""
     _tree_rows(prs, "Active tasks",
-               f"{c.get('active', 0)} open items by project",
+               f"{c.get('active', 0)} open items {scope}by project and deliverable",
                pack.get("task_rows", []),
                footer="UPDATED = days since anyone last touched the item.")
+
+    for card in pack.get("task_cards", []):
+        _task_slide(prs, card)
 
     if user.get("is_phd_student"):
         _phd_slide(prs, user)

@@ -173,6 +173,9 @@ def show_my_week():
 
     if not items:
         st.success("✅ Nothing assigned to you right now. Have a good week!")
+        # Admins still present the work they supervise.
+        if st.session_state.get("user_role") == "admin":
+            _render_my_status_deck(email)
         return
 
     ctx = {
@@ -253,11 +256,16 @@ def _render_my_status_deck(email: str) -> None:
     from db import get_my_status_pack
     from utils.pptx_export import build_my_status_deck
 
+    # Admins also present the tasks they supervise; everyone else, their own.
+    supervised = st.session_state.get("user_role") == "admin"
+
     st.divider()
     st.markdown("**📊 My status deck**")
     st.caption(
         "Your slides for the lab meeting, a 1:1 or the PhD review: results in the "
-        "period, publication pipeline (published → drafts → targets), open tasks. "
+        "period, publication pipeline (published → drafts → targets), open tasks "
+        + ("you own or supervise " if supervised else "")
+        + "grouped by deliverable, then one slide per task. "
         "Generated from your data — keeping tasks updated is what makes it good."
     )
 
@@ -271,7 +279,7 @@ def _render_my_status_deck(email: str) -> None:
     since = datetime.date.today() - datetime.timedelta(days=int(30.44 * months))
 
     try:
-        pack = get_my_status_pack(email, since)
+        pack = get_my_status_pack(email, since, include_supervised=supervised)
     except Exception as e:
         st.error(f"Could not collect your data: {e}")
         return

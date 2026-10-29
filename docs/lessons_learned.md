@@ -27,3 +27,16 @@ plain `st.button` save.
 - After an `update(...)`, check `res.data`: Supabase/PostgREST returns an
   empty list (no exception) when zero rows are updated, so success messages
   must not be shown unconditionally.
+
+## 2026-10-29 — Body placeholders of the 2026 template carry bullets
+
+**What went wrong.** The per-task slides (layout *Sottotitolo*) were filled
+with `_ph_paragraphs` like the per-person pages, and every line — project
+name, status, supervisor — rendered with the layout's `▪` bullet and hanging
+indent, because the body placeholder inherits a bulleted list style from the
+master.
+
+**Rule.** When a template placeholder holds styled lines rather than a list,
+call `_ph_paragraphs(..., bullets=False)` (it writes `<a:buNone/>` and zeroes
+`marL`/`indent`). Always render a new layout to PNG and look at it before
+calling a deck change done.
