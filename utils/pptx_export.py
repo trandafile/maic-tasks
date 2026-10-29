@@ -235,11 +235,13 @@ _TREE_COLS = [("ITEM", 6.1), ("STATUS", 1.5), ("DEADLINE", 1.3),
 
 def _cell(cell, text, *, size=10, bold=False, color=None, indent=0.0,
           align=PP_ALIGN.LEFT):
+    # Indent on the CELL (tcPr marL): PowerPoint ignores a text frame's own
+    # insets inside a table, which silently flattened the tree. 0.1" is the
+    # cell default, so level 0 looks exactly as before; the other margins
+    # keep their defaults too.
+    cell.margin_left = Inches(0.1 + indent)
     tf = cell.text_frame
     tf.word_wrap = False
-    tf.margin_left = Inches(0.06 + indent)
-    tf.margin_right = Inches(0.04)
-    tf.margin_top = tf.margin_bottom = Emu(9525)
     p = tf.paragraphs[0]
     p.alignment = align
     r = p.add_run()

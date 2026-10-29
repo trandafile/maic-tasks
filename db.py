@@ -2415,6 +2415,12 @@ def get_my_status_pack(email: str, since: _dt_date,
             print(f"[db.get_my_status_pack] subtasks: {exc}")
     is_open = lambda s: (s.get("status") or "") not in ("Completed", "Cancelled")
 
+    def _sub_order(s):
+        """E.7.3.1 before E.7.3.2 (numerically); uncoded ones by sort_order, last."""
+        code = _code_of(s, "subtask")
+        nums = tuple(int(n) for n in code.split(".")[1:]) if code else (10**9,)
+        return (nums, s.get("sort_order") or 0, s.get("id") or 0)
+
     def _row(item, level, kind, pid):
         fresh, sev = _fresh_label(item, threshold)
         return {"level": level, "kind": kind, "name": item.get("name") or "—",
@@ -2473,7 +2479,7 @@ def get_my_status_pack(email: str, since: _dt_date,
     def _active_rows(t, level):
         out = [_row(t, level, "task", t.get("project_id"))]
         out += [_row(s, level + 1, "subtask", t.get("project_id"))
-                for s in (all_subs if include_supervised else subs)
+                for s in sorted((all_subs if include_supervised else subs), key=_sub_order)
                 if s.get("task_id") == t["id"] and is_open(s)]
         return out
 
@@ -2507,7 +2513,8 @@ def get_my_status_pack(email: str, since: _dt_date,
                           "deadline": s.get("deadline"),
                           "owner": (uname(s.get("owner_email"))
                                     if s.get("owner_email") != email else "")}
-                         for s in all_subs if s.get("task_id") == t["id"] and is_open(s)],
+                         for s in sorted(all_subs, key=_sub_order)
+                         if s.get("task_id") == t["id"] and is_open(s)],
         })
 
     # Paper deliverables (journal drafts etc.) where I am owner or supervisor

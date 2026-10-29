@@ -40,3 +40,14 @@ master.
 call `_ph_paragraphs(..., bullets=False)` (it writes `<a:buNone/>` and zeroes
 `marL`/`indent`). Always render a new layout to PNG and look at it before
 calling a deck change done.
+
+## 2026-10-29 — Table indentation in the decks never rendered
+
+**What went wrong.** `_cell` indented tree rows (deliverable → task → subtask)
+by setting `cell.text_frame.margin_left`. Inside a table PowerPoint ignores the
+text frame's insets and reads only the cell's own `tcPr marL/marR/marT/marB`,
+so every level started at the same x and the tree read as a flat list.
+
+**Rule.** In python-pptx tables set margins on the cell (`cell.margin_left`
+etc.), never on `cell.text_frame`. Change only the margin you mean to: setting
+all four on the cell replaces PowerPoint's defaults and shifts the whole table.
